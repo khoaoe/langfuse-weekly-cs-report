@@ -1,0 +1,1153 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from dataclasses import asdict
+import json
+from pathlib import Path
+import re
+import threading
+
+import pytest
+from fastapi.testclient import TestClient
+from starlette.requests import Request as StarletteRequest
+
+from weekly_cs_report.cli import (
+    ConfigurationError,
+    EnvironmentSettings,
+    PROJECT_ROOT,
+    TARGET_BASE_URL,
+)
+from weekly_cs_report.dashboard_cache import ProtectedSnapshotStore, SnapshotManager
+from weekly_cs_report.dashboard_schema import DashboardSnapshot, TicketRow
+from weekly_cs_report.web import (
+    WebSettings,
+    _parse_ticket_query,
+    _validated_runtime_directory,
+    create_app,
+    main,
+)
+
+
+NOW = datetime(2026, 7, 29, 5, tzinfo=timezone.utc)
+IDENTITY_HEADER = "X-Forwarded-User"
+REFRESH_ACTION_HEADERS = {"X-Dashboard-Action": "refresh"}
+
+
+def _empty_transfer_reasons() -> dict[str, object]:
+    return {
+        "observed_transfer_denominator": 0,
+        "tpe": [],
+        "guardrail": [],
+        "escalation_guard_blocked": {"count": 0, "denominator": 0},
+    }
+
+
+def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
+    generated_at_text = generated_at.astimezone(timezone.utc).isoformat().replace(
+        "+00:00", "Z"
+    )
+    return {
+        "generated_at": generated_at_text,
+        "source": {"traces_fetched": eligible, "traces_deduplicated": eligible, "observations_fetched": 0},
+        "enrichment_status": "partial",
+        "data_range": {"first_week_with_data": None, "weeks_without_data": []},
+        "views": {
+            view: {
+                "totals": {"eligible_ticket_count": 0, "transfer_total": 0, "gt4_turn_total": 0, "weekend_start_count": 0},
+                "outcomes": {"ai_end_to_end": 0, "ai_then_cs": 0, "direct_cs": 0, "unclassified": 0},
+                "ai_first": {"count": 0, "rate": 0.0},
+                "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
+                "weekly": [],
+                "segments": {name: {"Không xác định": {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
+                "transfer_reasons": _empty_transfer_reasons(),
+                "by_week": {},
+                "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
+            }
+            for view in ("mon_sun", "mon_fri")
+        },
+        "coverage": {"issue_category": 0.0, "app": 0.0, "tpe": 0.0, "intent": 0.0, "skill": 0.0},
+        "unmapped_tpe_codes": [],
+        "gate_status": {"allowed": True, "structural_invalid_rate": 0.0, "reasons": []},
+        "data_quality": {"counts": {}, "weekend_start_count": 0, "left_censored_count": 0, "pre_window_start_count": 0, "invalid_keyed_session_count": 0, "unkeyed_trace_count": 0},
+    }
+
+
+def _ticket(ticket_id: str, outcome: str) -> TicketRow:
+    return TicketRow(
+        ticket_id=ticket_id,
+        cohort_week="2026-07-20",
+        cohort_status="complete",
+        is_weekend_start=False,
+        outcome=outcome,
+        ai_first=outcome != "direct_cs",
+        transferred=outcome != "ai_end_to_end",
+        reopen_lifetime=0,
+        reopen_within_7d=0,
+        ai_reply_count=0 if outcome == "direct_cs" else 1,
+        turn_count=1,
+        gt4_turn=False,
+        issue_category="Thanh toán-IBFT",
+        app="241 - Chuyển Tiền ATM",
+        product_code="TF007 - IBFT",
+        skill=None,
+        intent=None,
+        tpe_code="-217",
+        tpe_status="Thất bại",
+        guardrail_rule=None,
+        escalation_guard_blocked=False,
+        data_quality="valid",
+    )
+
+
+def _snapshot(
+    generated_at: datetime = NOW,
+    *,
+    ticket_ids: tuple[str, ...] = ("300", "100", "200"),
+) -> DashboardSnapshot:
+    outcomes = ("direct_cs", "ai_end_to_end", "ai_then_cs")
+    return DashboardSnapshot(
+        generated_at=generated_at,
+        dashboard=_dashboard(generated_at, len(ticket_ids)),
+        tickets=tuple(
+            _ticket(ticket_id, outcomes[index % len(outcomes)])
+            for index, ticket_id in enumerate(ticket_ids)
+        ),
+    )
+
+
+@pytest.fixture
+def manager_factory(tmp_path: Path):
+    managers: list[SnapshotManager] = []
+
+    def make(
+        *,
+        initial: DashboardSnapshot | None = None,
+        loader=None,
+        clock=None,
+    ) -> SnapshotManager:
+        store = ProtectedSnapshotStore(tmp_path / f"runtime-{len(managers)}")
+        if initial is not None:
+            store.save(initial)
+        manager = SnapshotManager(
+            loader or (lambda: _snapshot()),
+            store,
+            clock=clock or (lambda: NOW),
+        )
+        managers.append(manager)
+        return manager
+
+    yield make
+
+    for manager in managers:
+        manager.close()
+
+
+def _state(snapshot: DashboardSnapshot, *, status: str = "ready", refreshing=False):
+    return {
+        "status": status,
+        "refreshing": refreshing,
+        "last_error_code": None,
+        "last_error_at": None,
+        "snapshot": snapshot.dashboard_dict(),
+    }
+
+
+def test_dashboard_returns_ready_snapshot_with_exact_state_envelope(manager_factory):
+    """Dropping cache state or serving storage-only fields breaks the browser contract."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/dashboard")
+
+    assert response.status_code == 200
+    assert response.json() == _state(snapshot)
+    assert set(response.json()) == {
+        "status",
+        "refreshing",
+        "last_error_code",
+        "last_error_at",
+        "snapshot",
+    }
+
+
+def test_dashboard_first_load_returns_fixed_202_state(manager_factory):
+    """Returning 200 or a partial snapshot before the first load misstates readiness."""
+    manager = manager_factory()
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/dashboard")
+
+    assert response.status_code == 202
+    assert response.json() == {
+        "status": "loading",
+        "refreshing": True,
+        "last_error_code": None,
+        "last_error_at": None,
+        "snapshot": None,
+    }
+
+
+def test_v2_snapshot_starts_not_ready_then_becomes_ready_after_refresh(tmp_path):
+    """P2 must ignore, never convert, a persisted metric-v2 snapshot."""
+    runtime = tmp_path / "runtime"
+    store = ProtectedSnapshotStore(runtime)
+    legacy = _snapshot().storage_dict()
+    legacy["schema_version"] = 2
+    runtime.mkdir(mode=0o700)
+    (runtime / "dashboard_snapshot.json").write_text(json.dumps(legacy), encoding="utf-8")
+    manager = SnapshotManager(lambda: _snapshot(), store, clock=lambda: NOW)
+
+    with TestClient(create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))) as client:
+        assert client.get("/readyz").status_code == 503
+        assert client.get("/api/dashboard").status_code == 202
+        assert manager.wait_for_idle(2)
+        assert client.get("/readyz").status_code == 200
+
+
+def test_proxy_auth_rejects_missing_identity_and_never_echoes_identity(manager_factory):
+    """Trusting an absent header or serializing its value exposes a protected dashboard."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+
+    with TestClient(app) as client:
+        missing = client.get("/api/dashboard")
+        authorized = client.get(
+            "/api/dashboard",
+            headers={IDENTITY_HEADER: "person-secret@example.test"},
+        )
+
+    assert missing.status_code == 401
+    assert missing.json() == {"detail": {"code": "authentication_required"}}
+    assert authorized.status_code == 200
+    assert "person-secret@example.test" not in authorized.text
+
+
+def test_ticket_endpoint_uses_last_good_snapshot_and_paginates(manager_factory):
+    """Ignoring server-side pagination can return the complete ticket population."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets?page=2&page_size=2")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [asdict(next(row for row in snapshot.tickets if row.ticket_id == "300"))],
+        "page": 2,
+        "page_size": 2,
+        "total": 3,
+    }
+
+
+def test_browser_json_boundaries_recursively_exclude_pii_patterns_and_deny_keys(
+    manager_factory,
+):
+    manager = manager_factory(initial=_snapshot())
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        responses = (
+            client.get("/api/dashboard"),
+            client.get("/api/tickets?page=1&page_size=100&week_definition=mon_sun"),
+        )
+
+    deny_keys = {
+        "UserID", "App user", "Số điện thoại người dùng", "TransID",
+        "AppTransId", "Mã giao dịch", "Zalopay chat keys", "System Info",
+        "UserAgent", "Ghi chú", "Ghi chú bên thứ ba", "Mô tả", "Vấn đề",
+        "Thông tin thêm", "title", "user_input", "comments",
+        "Số tài khoản ngân hàng", "SĐT đăng ký NH", "Thời gian giao dịch",
+        "Thời điểm giao dịch", "trace_id", "observation_id", "score_id",
+    }
+    phone = re.compile(r"(?<!\d)(?:0|84|\+84)[0-9]{8,10}(?!\d)")
+    uuid = re.compile(
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+        r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"
+    )
+
+    def inspect(value):
+        if isinstance(value, dict):
+            assert not (set(value) & deny_keys)
+            for child in value.values():
+                inspect(child)
+        elif isinstance(value, list):
+            for child in value:
+                inspect(child)
+
+    for response in responses:
+        assert response.status_code == 200
+        assert phone.search(response.text) is None
+        assert uuid.search(response.text) is None
+        inspect(response.json())
+
+
+def test_ticket_endpoint_is_fixed_503_before_first_snapshot(manager_factory):
+    """Passing a missing snapshot into the paginator leaks an internal exception."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def loader() -> DashboardSnapshot:
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release loader")
+        return _snapshot()
+
+    manager = manager_factory(loader=loader)
+    try:
+        with TestClient(
+            create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+        ) as client:
+            response = client.get("/api/tickets")
+            assert started.wait(2)
+    finally:
+        release.set()
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "dashboard_not_ready"}}
+
+
+@pytest.mark.parametrize(
+    ("query", "parameter"),
+    [
+        ("page_size=101", "page_size"),
+        ("cohort_week=sk-secret-value", "cohort_week"),
+        ("outcome=sk-secret-value", "outcome"),
+        ("ticket_id=0901234567%21", "ticket_id"),
+        ("page=1&page=0901234567", "page"),
+        ("sk-secret-value=0901234567", "unknown"),
+    ],
+)
+def test_ticket_query_errors_are_fixed_sanitized_422(
+    manager_factory, query: str, parameter: str
+):
+    """Echoing invalid names or values can disclose credentials and customer data."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(f"/api/tickets?{query}")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "invalid_query", "parameter": parameter}
+    }
+    assert "sk-secret-value" not in response.text
+    assert "0901234567" not in response.text
+
+
+@pytest.mark.parametrize(
+    ("query", "parameter"),
+    [
+        ("issue_category=not-in-snapshot", "issue_category"),
+        ("app=not-in-snapshot", "app"),
+        ("product_code=not-in-snapshot", "product_code"),
+        ("skill=not-in-snapshot", "skill"),
+        ("intent=not-in-snapshot", "intent"),
+        ("tpe_code=not-in-snapshot", "tpe_code"),
+        ("gt4_turn=TRUE", "gt4_turn"),
+        ("transferred=TRUE", "transferred"),
+        ("is_weekend_start=yes", "is_weekend_start"),
+        ("week_definition=weekend", "week_definition"),
+        ("skill=" + ("x" * 129), "skill"),
+        ("intent=a&intent=b", "intent"),
+    ],
+)
+def test_p5_ticket_filters_fail_closed_without_echoing_values(
+    manager_factory, query: str, parameter: str
+):
+    manager = manager_factory(initial=_snapshot())
+    with TestClient(create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))) as client:
+        response = client.get(f"/api/tickets?{query}")
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "invalid_query", "parameter": parameter}}
+    assert "not-in-snapshot" not in response.text
+
+
+def test_p5_ticket_filters_accept_strict_booleans_and_week_definition(manager_factory):
+    manager = manager_factory(initial=_snapshot())
+    with TestClient(create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))) as client:
+        response = client.get("/api/tickets?gt4_turn=false&transferred=true&week_definition=mon_fri")
+    assert response.status_code == 200
+    assert all(item["gt4_turn"] is False and item["transferred"] is True for item in response.json()["items"])
+
+
+def test_p5_accepts_the_full_15_unique_query_pair_contract(manager_factory):
+    snapshot = _snapshot()
+    selected = snapshot.tickets[0]
+    params = [
+        ("cohort_week", selected.cohort_week),
+        ("outcome", selected.outcome),
+        ("ticket_id", selected.ticket_id),
+        ("issue_category", selected.issue_category),
+        ("app", selected.app),
+        ("product_code", selected.product_code),
+        ("skill", selected.skill or "Không xác định"),
+        ("intent", selected.intent or "Không xác định"),
+        ("tpe_code", selected.tpe_code or "Không xác định"),
+        ("gt4_turn", str(selected.gt4_turn).lower()),
+        ("transferred", str(selected.transferred).lower()),
+        ("is_weekend_start", str(selected.is_weekend_start).lower()),
+        ("week_definition", "mon_sun"),
+        ("page", "1"),
+        ("page_size", "100"),
+    ]
+    manager = manager_factory(initial=snapshot)
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets", params=params)
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+
+
+@pytest.mark.parametrize(
+    ("query", "parameter"),
+    [
+        ("page=" + ("9" * 5000), "page"),
+        ("page=1234567890", "page"),
+        ("&".join(["page=1"] * 16), "unknown"),
+    ],
+    ids=("five-thousand-digit-value", "ten-digit-number", "nine-pairs"),
+)
+def test_ticket_query_resource_bounds_fail_fast_with_sanitized_422(
+    manager_factory, query: str, parameter: str
+):
+    """Unbounded pairs or values permit disproportionate parsing work per request."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(f"/api/tickets?{query}")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "invalid_query", "parameter": parameter}
+    }
+    assert "99999999999999999999" not in response.text
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        ("x" * 20000) + "=1",
+        "&".join(f"x{index}=1" for index in range(1000)),
+        "page=" + ("9" * 20000),
+    ],
+    ids=("extreme-name", "many-pairs", "oversize-raw-value"),
+)
+def test_raw_query_bounds_reject_before_query_params_materialization(
+    manager_factory, monkeypatch, query: str
+):
+    """Parsing an unbounded raw query defeats limits applied to parsed values."""
+    query_param_accesses: list[str] = []
+
+    def reject_materialization(_request):
+        query_param_accesses.append("accessed")
+        raise AssertionError("query_params must not be materialized")
+
+    request = StarletteRequest(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/tickets",
+            "query_string": query.encode("ascii"),
+            "headers": [],
+        }
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            StarletteRequest,
+            "query_params",
+            property(reject_materialization),
+        )
+        parsed, invalid_parameter = _parse_ticket_query(request)
+
+    assert parsed == {}
+    assert invalid_parameter == "unknown"
+    assert query_param_accesses == []
+
+    manager = manager_factory(initial=_snapshot())
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(f"/api/tickets?{query}")
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "invalid_query", "parameter": "unknown"}
+    }
+    assert "99999999999999999999" not in response.text
+
+
+def test_refresh_returns_202_and_real_manager_joins_active_refresh(manager_factory):
+    """Starting a second forced loader violates the manager's single-flight guarantee."""
+    started = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+    initial = _snapshot()
+    refreshed = _snapshot(ticket_ids=("400",))
+
+    def loader() -> DashboardSnapshot:
+        calls.append("refresh")
+        started.set()
+        if not release.wait(5):
+            raise TimeoutError("test did not release loader")
+        return refreshed
+
+    manager = manager_factory(initial=initial, loader=loader)
+    try:
+        with TestClient(
+            create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+        ) as client:
+            first = client.post("/api/refresh", headers=REFRESH_ACTION_HEADERS)
+            second = client.post("/api/refresh", headers=REFRESH_ACTION_HEADERS)
+            assert started.wait(2)
+            assert calls == ["refresh"]
+            assert first.status_code == second.status_code == 202
+            assert first.json() == _state(
+                initial, status="refreshing", refreshing=True
+            )
+            release.set()
+            assert manager.wait_for_idle(2) is True
+            assert manager.get().snapshot == refreshed
+    finally:
+        release.set()
+
+
+@pytest.mark.parametrize("action_value", (None, "", "Refresh", "refresh "))
+def test_refresh_requires_exact_custom_action_header_without_starting_loader(
+    manager_factory,
+    action_value: str | None,
+):
+    """Accepting a missing or approximate action header leaves the mutation CSRF-able."""
+    calls: list[str] = []
+
+    def loader() -> DashboardSnapshot:
+        calls.append("refresh")
+        return _snapshot(ticket_ids=("400",))
+
+    manager = manager_factory(initial=_snapshot(), loader=loader)
+    headers = (
+        {}
+        if action_value is None
+        else {"X-Dashboard-Action": action_value}
+    )
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.post("/api/refresh", headers=headers)
+        assert manager.wait_for_idle(2) is True
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": {"code": "refresh_action_required"}}
+    assert calls == []
+
+
+def test_cross_origin_simple_form_post_cannot_start_refresh(manager_factory):
+    """A browser form can submit cross-site unless the endpoint requires a custom header."""
+    calls: list[str] = []
+
+    def loader() -> DashboardSnapshot:
+        calls.append("refresh")
+        return _snapshot(ticket_ids=("400",))
+
+    manager = manager_factory(initial=_snapshot(), loader=loader)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.post(
+            "/api/refresh",
+            headers={
+                "Origin": "https://attacker.invalid",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            content="refresh=1",
+        )
+        assert manager.wait_for_idle(2) is True
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": {"code": "refresh_action_required"}}
+    assert "access-control-allow-origin" not in response.headers
+    assert calls == []
+
+
+def test_health_is_unprotected_liveness_only(manager_factory):
+    """Coupling liveness to snapshot state can restart a healthy refreshing process."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/healthz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_health_and_readiness_without_snapshot_do_not_start_loader(manager_factory):
+    """Reporting ready or refreshing from a probe can route traffic too early."""
+    calls: list[str] = []
+
+    def loader() -> DashboardSnapshot:
+        calls.append("load")
+        return _snapshot()
+
+    manager = manager_factory(loader=loader)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+    ) as client:
+        health = client.get("/healthz")
+        readiness = client.get("/readyz")
+        assert manager.wait_for_idle(2) is True
+
+    assert health.status_code == 200
+    assert health.json() == {"status": "ok"}
+    assert readiness.status_code == 503
+    assert readiness.json() == {"status": "not_ready"}
+    assert calls == []
+
+
+def test_readiness_is_unprotected_when_last_good_snapshot_exists(manager_factory):
+    """Protecting the probe or requiring a fresh refresh breaks ingress readiness."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ready"}
+
+
+def test_fastapi_interactive_docs_and_schema_are_not_exposed(manager_factory):
+    """Default FastAPI routes disclose the internal endpoint contract without auth."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        responses = [
+            client.get("/docs"),
+            client.get("/redoc"),
+            client.get("/openapi.json"),
+        ]
+
+    assert [response.status_code for response in responses] == [404, 404, 404]
+
+
+def test_favicon_is_an_empty_local_response(manager_factory):
+    """A browser favicon lookup must not create a noisy failed-resource error."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/favicon.ico")
+
+    assert response.status_code == 204
+    assert response.content == b""
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/api/dashboard"),
+        ("get", "/api/tickets"),
+        ("post", "/api/refresh"),
+        ("get", "/api/tickets?page_size=101"),
+    ],
+)
+def test_every_api_response_disables_caching_and_content_sniffing(
+    manager_factory, method: str, path: str
+):
+    """Missing security headers allows sensitive responses to be cached or sniffed."""
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = getattr(client, method)(path)
+
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_unexpected_api_error_is_fixed_sanitized_and_has_security_headers(
+    manager_factory,
+):
+    """Letting framework errors escape can expose exception text and omit safe headers."""
+    secret = "upstream sk-secret-value for 0901234567"
+
+    def broken_clock():
+        raise RuntimeError(secret)
+
+    manager = manager_factory(initial=_snapshot(), clock=broken_clock)
+    app = create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/dashboard")
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": {"code": "internal_error"}}
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert secret not in response.text
+    assert "sk-secret-value" not in response.text
+    assert "0901234567" not in response.text
+
+
+def test_root_is_authenticated_and_serves_live_page_without_echoing_identity(
+    manager_factory,
+):
+    """Serving the shell without proxy identity or reflecting it weakens deployment."""
+    manager = manager_factory(initial=_snapshot())
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+
+    with TestClient(app) as client:
+        missing = client.get("/")
+        authorized = client.get("/", headers={IDENTITY_HEADER: "private-user"})
+
+    assert missing.status_code == 401
+    assert missing.json() == {"detail": {"code": "authentication_required"}}
+    assert authorized.status_code == 200
+    assert authorized.headers["content-type"].startswith("text/html")
+    assert "Hiệu quả CS Agent" in authorized.text
+    assert "private-user" not in authorized.text
+    assert "sk-secret-value" not in authorized.text
+
+
+@pytest.mark.parametrize(
+    ("auth_mode", "identity_header"),
+    [
+        ("none", IDENTITY_HEADER),
+        ("proxy", ""),
+        ("proxy", "bad header"),
+        ("proxy", "bad\nheader"),
+    ],
+)
+def test_web_settings_reject_unsupported_auth_or_invalid_header_names(
+    auth_mode: str, identity_header: str
+):
+    """Accepting ambiguous authentication configuration can bypass the proxy boundary."""
+    with pytest.raises(ValueError):
+        WebSettings(auth_mode, identity_header)
+
+
+@pytest.mark.parametrize(
+    "identity_header",
+    (
+        "Host",
+        "host",
+        "Cookie",
+        "Authorization",
+        "User-Agent",
+        "X-Dashboard-Action",
+        "Accept",
+        "Content-Type",
+        "Connection",
+        "Origin",
+        "Referer",
+        "X-Forwarded-For",
+    ),
+)
+def test_web_settings_reject_headers_with_ambient_or_conflicting_values(
+    identity_header: str,
+):
+    """Using an ambient request header as identity makes ordinary clients authenticated."""
+    with pytest.raises(ValueError, match="identity_header"):
+        WebSettings("proxy", identity_header)
+
+
+def test_help_exits_before_loading_environment(monkeypatch, capsys):
+    """Loading dotenv for help can make an offline introspection command fail."""
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: pytest.fail("help must not load environment"),
+    )
+
+    with pytest.raises(SystemExit) as error:
+        main(["--help"])
+
+    assert error.value.code == 0
+    assert "--local" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("argv", "environment", "message"),
+    [
+        (
+            ["--local", "--host", "0.0.0.0"],
+            {},
+            "local mode requires a loopback host",
+        ),
+        (
+            [],
+            {"DASHBOARD_AUTH_MODE": "off"},
+            "production requires DASHBOARD_AUTH_MODE=proxy",
+        ),
+    ],
+)
+def test_main_rejects_unsafe_binding_before_langfuse_environment(
+    monkeypatch, capsys, argv, environment, message
+):
+    for name in (
+        "DASHBOARD_AUTH_MODE",
+        "DASHBOARD_IDENTITY_HEADER",
+        "DASHBOARD_RUNTIME_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: pytest.fail("unsafe configuration must fail before Langfuse setup"),
+    )
+
+    exit_code = main(argv)
+
+    assert exit_code == 2
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert output.err == message + "\n"
+
+
+def test_runtime_directory_rejects_sensitive_and_relative_paths_without_echo():
+    """A broad or relative cache target can overwrite unrelated application data."""
+    static_directory = Path(__file__).parents[1] / "src" / "weekly_cs_report" / "static"
+    unsafe_paths = (
+        Path("/"),
+        Path.home(),
+        PROJECT_ROOT.parent,
+        PROJECT_ROOT,
+        static_directory,
+        static_directory / "nested",
+        Path("relative-runtime"),
+    )
+
+    for unsafe in unsafe_paths:
+        with pytest.raises(ConfigurationError) as error:
+            _validated_runtime_directory(unsafe)
+
+        assert str(error.value) == "dashboard runtime directory is unsafe"
+        assert str(unsafe) not in str(error.value)
+
+
+def test_runtime_directory_rejects_symlinks_files_modes_and_unrelated_contents(
+    tmp_path: Path,
+):
+    """Following links or reusing a permissive/non-dedicated target exposes other files."""
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir(mode=0o700)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    target_link = tmp_path / "target-link"
+    target_link.symlink_to(real_parent, target_is_directory=True)
+    regular_file = tmp_path / "regular-file"
+    regular_file.write_text("not a directory", encoding="utf-8")
+    permissive = tmp_path / "permissive"
+    permissive.mkdir(mode=0o755)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir(mode=0o700)
+    (unrelated / "customer-export.csv").write_text("secret", encoding="utf-8")
+
+    for unsafe in (
+        linked_parent / "runtime",
+        target_link,
+        regular_file,
+        permissive,
+        unrelated,
+    ):
+        with pytest.raises(ConfigurationError) as error:
+            _validated_runtime_directory(unsafe)
+
+        assert str(error.value) == "dashboard runtime directory is unsafe"
+        assert str(unsafe) not in str(error.value)
+
+
+def test_runtime_directory_rejects_attacker_swappable_parent(
+    tmp_path: Path,
+):
+    """A mode-700 target is still replaceable when its parent is attacker-writable."""
+    shared_parent = tmp_path / "shared"
+    shared_parent.mkdir(mode=0o777)
+    shared_parent.chmod(0o777)
+    runtime = shared_parent / "runtime"
+    runtime.mkdir(mode=0o700)
+
+    with pytest.raises(ConfigurationError) as error:
+        _validated_runtime_directory(runtime)
+
+    assert str(error.value) == "dashboard runtime directory is unsafe"
+    assert str(runtime) not in str(error.value)
+
+
+def test_runtime_directory_allows_absent_default_and_dedicated_private_cache(
+    tmp_path: Path, monkeypatch
+):
+    """Validation must create a private default and permit known cache files."""
+    fake_project = tmp_path / "project"
+    fake_project.mkdir(mode=0o755)
+    monkeypatch.setattr("weekly_cs_report.web.PROJECT_ROOT", fake_project)
+    default_runtime = fake_project / "runtime"
+    dedicated = tmp_path / "dedicated"
+    dedicated.mkdir(mode=0o700)
+    (dedicated / "dashboard_snapshot.json").write_text("{}", encoding="utf-8")
+    (dedicated / ".dashboard_snapshot.recovery.tmp").write_text(
+        "{}", encoding="utf-8"
+    )
+    (dedicated / "dashboard_snapshot.json").chmod(0o600)
+    (dedicated / ".dashboard_snapshot.recovery.tmp").chmod(0o600)
+
+    assert _validated_runtime_directory(default_runtime) == default_runtime
+    assert default_runtime.is_dir()
+    assert default_runtime.stat().st_mode & 0o777 == 0o700
+    assert _validated_runtime_directory(dedicated) == dedicated
+
+
+def test_runtime_directory_allows_only_private_dimension_backfill_filename(
+    tmp_path: Path,
+):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    backfill = runtime / "dimension_backfill.json"
+    backfill.write_text("{}", encoding="utf-8")
+    backfill.chmod(0o600)
+
+    assert _validated_runtime_directory(runtime) == runtime
+
+    wrong_name = runtime / "dimension_backfill.json.bak"
+    wrong_name.write_text("{}", encoding="utf-8")
+    wrong_name.chmod(0o600)
+    with pytest.raises(ConfigurationError) as error:
+        _validated_runtime_directory(runtime)
+    assert str(error.value) == "dashboard runtime directory is unsafe"
+
+    wrong_name.unlink()
+    backfill.chmod(0o640)
+    with pytest.raises(ConfigurationError) as error:
+        _validated_runtime_directory(runtime)
+    assert str(error.value) == "dashboard runtime directory is unsafe"
+
+
+def test_runtime_directory_rejects_permissive_existing_snapshot(
+    tmp_path: Path,
+):
+    """Accepting a readable persisted snapshot exposes browser-approved ticket data."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    snapshot = runtime / "dashboard_snapshot.json"
+    snapshot.write_text("{}", encoding="utf-8")
+    snapshot.chmod(0o640)
+
+    with pytest.raises(ConfigurationError) as error:
+        _validated_runtime_directory(runtime)
+
+    assert str(error.value) == "dashboard runtime directory is unsafe"
+    assert str(snapshot) not in str(error.value)
+
+
+def test_main_closes_client_when_snapshot_manager_construction_fails(
+    tmp_path: Path, monkeypatch
+):
+    """A cache-construction failure after client creation must not leak the HTTP client."""
+    clients: list[FakeClient] = []
+
+    class FakeClient:
+        def __init__(self, *_args):
+            self.close_calls = 0
+            clients.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    def fail_manager(*_args, **_kwargs):
+        raise RuntimeError("manager construction failed")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: EnvironmentSettings("pk-test", "sk-test", TARGET_BASE_URL),
+    )
+    monkeypatch.setattr("weekly_cs_report.web.LangfuseClient", FakeClient)
+    monkeypatch.setattr("weekly_cs_report.web.SnapshotManager", fail_manager)
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    with pytest.raises(RuntimeError, match="manager construction failed"):
+        main([])
+
+    assert len(clients) == 1
+    assert clients[0].close_calls == 1
+
+
+def test_main_closes_client_when_timezone_construction_fails(
+    tmp_path: Path, monkeypatch
+):
+    """Timezone setup is fallible and must be inside client cleanup ownership."""
+    clients: list[FakeClient] = []
+
+    class FakeClient:
+        def __init__(self, *_args):
+            self.close_calls = 0
+            clients.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    def fail_timezone(_name):
+        raise RuntimeError("timezone database unavailable")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: EnvironmentSettings("pk-test", "sk-test", TARGET_BASE_URL),
+    )
+    monkeypatch.setattr("weekly_cs_report.web.LangfuseClient", FakeClient)
+    monkeypatch.setattr("weekly_cs_report.web.ZoneInfo", fail_timezone)
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    with pytest.raises(RuntimeError, match="timezone database unavailable"):
+        main([])
+
+    assert len(clients) == 1
+    assert clients[0].close_calls == 1
+
+
+def test_main_closes_manager_and_client_when_app_construction_fails(
+    tmp_path: Path, monkeypatch
+):
+    """An app-construction failure must release both resources created before it."""
+    clients: list[FakeClient] = []
+    managers: list[FakeManager] = []
+
+    class FakeClient:
+        def __init__(self, *_args):
+            self.close_calls = 0
+            clients.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    class FakeManager:
+        def __init__(self, *_args, **_kwargs):
+            self.close_calls = 0
+            managers.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    def fail_app(*_args, **_kwargs):
+        raise RuntimeError("app construction failed")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: EnvironmentSettings("pk-test", "sk-test", TARGET_BASE_URL),
+    )
+    monkeypatch.setattr("weekly_cs_report.web.LangfuseClient", FakeClient)
+    monkeypatch.setattr("weekly_cs_report.web.SnapshotManager", FakeManager)
+    monkeypatch.setattr("weekly_cs_report.web.create_app", fail_app)
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    with pytest.raises(RuntimeError, match="app construction failed"):
+        main([])
+
+    assert len(clients) == len(managers) == 1
+    assert clients[0].close_calls == 1
+    assert managers[0].close_calls == 1
+
+
+def test_main_composes_fresh_vietnam_time_loader_and_one_worker(
+    tmp_path, monkeypatch
+):
+    clients: list[FakeLangfuseClient] = []
+    report_calls: list[dict[str, object]] = []
+    uvicorn_calls: list[dict[str, object]] = []
+
+    class FakeLangfuseClient:
+        def __init__(self, base_url, public_key, secret_key):
+            self.arguments = (base_url, public_key, secret_key)
+            self.close_calls = 0
+            clients.append(self)
+
+        def close(self):
+            self.close_calls += 1
+
+    def fake_compute_report(client, **kwargs):
+        report_calls.append({"client": client, **kwargs})
+        return object()
+
+    def fake_uvicorn_run(app, **kwargs):
+        uvicorn_calls.append({"app": app, **kwargs})
+        with TestClient(app) as browser:
+            first = browser.get(
+                "/api/dashboard", headers={IDENTITY_HEADER: "authorized-user"}
+            )
+            assert first.status_code == 202
+            assert app.state.snapshot_manager.wait_for_idle(2)
+            second = browser.post(
+                "/api/refresh",
+                headers={
+                    IDENTITY_HEADER: "authorized-user",
+                    **REFRESH_ACTION_HEADERS,
+                },
+            )
+            assert second.status_code == 202
+            assert app.state.snapshot_manager.wait_for_idle(2)
+
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: EnvironmentSettings("pk-test", "sk-test", TARGET_BASE_URL),
+    )
+    monkeypatch.setattr(
+        "weekly_cs_report.web.LangfuseClient", FakeLangfuseClient
+    )
+    monkeypatch.setattr(
+        "weekly_cs_report.web.compute_report", fake_compute_report
+    )
+    monkeypatch.setattr(
+        "weekly_cs_report.web.project_dashboard", lambda _run: _snapshot()
+    )
+    monkeypatch.setattr("weekly_cs_report.web.uvicorn.run", fake_uvicorn_run)
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_IDENTITY_HEADER", IDENTITY_HEADER)
+    monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
+
+    exit_code = main([])
+
+    assert exit_code == 0
+    assert len(clients) == 1
+    assert clients[0].arguments == (TARGET_BASE_URL, "pk-test", "sk-test")
+    assert clients[0].close_calls == 1
+    assert len(report_calls) == 1
+    assert all(call["client"] is clients[0] for call in report_calls)
+    assert all(call["weeks"] == 12 for call in report_calls)
+    assert all(call["include_current_wtd"] is True for call in report_calls)
+    assert all(
+        str(call["taxonomy_path"]).endswith("config/taxonomy.v2.json")
+        for call in report_calls
+    )
+    assert all(
+        call["as_of"].tzinfo is not None
+        and getattr(call["as_of"].tzinfo, "key", None) == "Asia/Ho_Chi_Minh"
+        for call in report_calls
+    )
+    assert len(uvicorn_calls) == 1
+    assert uvicorn_calls[0]["host"] == "0.0.0.0"
+    assert uvicorn_calls[0]["port"] == 8080
+    assert uvicorn_calls[0]["workers"] == 1
+    assert uvicorn_calls[0]["access_log"] is False

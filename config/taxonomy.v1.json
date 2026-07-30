@@ -1,0 +1,63 @@
+{
+  "version": "v1",
+  "transfer": {
+    "semantic_text": "Xin lỗi vì sự bất tiện. Yêu cầu của Quý Khách đã được chuyển đến bộ phận Chăm sóc Khách hàng.Vui lòng chờ trong giây lát, nhân viên sẽ sớm liên hệ hỗ trợ."
+  },
+  "business": {
+    "precedence": ["ibft", "topup", "withdraw", "oao"],
+    "meta_keys": ["category", "type", "usecase", "domain", "intent", "loai", "loại", "phan_loai", "phân loại", "nghiep_vu", "nghiệp vụ"],
+    "max_meta_depth": 3,
+    "patterns": {
+      "ibft": ["ibft", "interbank", "inter-bank", "chuyen tien lien ngan hang", "lien ngan hang"],
+      "topup": ["topup", "top up", "nap tien", "nap dt"],
+      "withdraw": ["withdraw", "rut tien", "cashout", "cash out"],
+      "oao": ["oao", "open account", "mo tai khoan"]
+    },
+    "fallback": "other"
+  },
+  "tpe": {
+    "tool_names": ["get_transaction_processing_engine_data", "tool:get_transaction_processing_engine_data"],
+    "mappings": [
+      {"code": "1", "step": "1", "case": 1, "status": "SUCCESSFUL"},
+      {"code": "-383", "step": null, "case": 2, "status": "PENDING"},
+      {"code": "-375", "step": null, "case": 6, "status": "FAILED_REFUNDED"},
+      {"code": "-365", "step": "-1006", "case": 7, "status": "FAILED_NFC"},
+      {"code": "-374", "step": null, "case": 8, "status": "REFUNDING"},
+      {"code": "-376", "step": null, "case": 8, "status": "REFUNDING"},
+      {"code": "-356", "step": null, "case": 9, "status": "SECURITY_BLOCK"},
+      {"code": "-365", "step": "-1013", "case": 10, "status": "FAILED_FACE_AUTH"},
+      {"code": "-365", "step": "-1015", "case": 11, "status": "FAILED_FACE_AUTH"},
+      {"code": "-365", "step": "-1012", "case": 12, "status": "FAILED_KYC"},
+      {"code": "-365", "step": "-1021", "case": 13, "status": "FAILED_OTP"},
+      {"code": "-365", "step": "-1023", "case": 14, "status": "FAILED_SMART_OTP"},
+      {"code": "-365", "step": "-1020", "case": 15, "status": "WAITING_NFC_REVIEW"},
+      {"code": "-365", "step": "-1003 / -1000", "case": 16, "status": "SYSTEM_ERROR"},
+      {"code": "-365", "step": "-1011", "case": 17, "status": "WAITING_KYC_REVIEW"},
+      {"code": "-365", "step": "-1009", "case": 18, "status": "FAILED_KYC"},
+      {"code": "-365", "step": "-1005", "case": 19, "status": "FAILED_NFC"},
+      {"code": "-365", "step": "-1002", "case": 20, "status": "FAILED_NFC"},
+      {"code": "-365", "step": "-1024", "case": 21, "status": "SYSTEM_ERROR"},
+      {"code": "-348", "step": "210800", "case": 22, "status": "INVESTIGATING"},
+      {"code": "-348", "step": "212025/210001/...", "case": 23, "status": "SECURITY_BLOCK"},
+      {"code": "-348", "step": "210002/210099", "case": 24, "status": "SUSPICIOUS_DEVICE"},
+      {"code": "-244", "step": "212010", "case": 25, "status": "POLICY_BLOCK"},
+      {"code": "-244", "step": "700212", "case": 26, "status": "LIMIT_EXCEEDED"},
+      {"code": "-244", "step": "210808", "case": 27, "status": "SECURITY_BLOCK"},
+      {"code": "-6038", "step": null, "case": 28, "status": "FAILED_OTP"},
+      {"code": "-344", "step": null, "case": 29, "status": "BANK_LIMIT_EXCEEDED"},
+      {"code": "-357", "step": null, "case": 30, "status": "RISK_BLOCK"}
+    ]
+  },
+  "guardrail": {
+    "blocked_fields": ["blocked", "violation"],
+    "passed_field": "passed",
+    "value_fields": ["guardrail", "rule"],
+    "allowed_values": [
+      "cs_escalation",
+      "empty_message_marker",
+      "max_replies_exceeded",
+      "missing_transaction_id",
+      "prompt_injection_llm"
+    ]
+  }
+}
