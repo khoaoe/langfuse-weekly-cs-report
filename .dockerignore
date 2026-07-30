@@ -1,0 +1,26 @@
+# Default-deny the build context; only the four explicit Dockerfile inputs
+# and the Docker metadata below are re-included.
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!README.md
+!src/
+!src/**
+!config/
+!config/**
+
+.env
+.env.*
+.venv/
+artifacts/
+runtime/
+.superpowers/
+.pytest_cache/
+**/__pycache__/
+build/
+dist/
+*.egg-info/
+.git/
+.hg/
+.svn/
