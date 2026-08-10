@@ -41,7 +41,7 @@ from .report import compute_report
 from .runtime_logging import configure_json_logging, emit_event
 
 
-_AUTH_MODES = frozenset({"off", "proxy"})
+_AUTH_MODES = frozenset({"off", "proxy", "basic"})
 _HEADER_NAME = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+\Z")
 _ALLOWED_IDENTITY_HEADERS = frozenset(
     {
@@ -137,7 +137,7 @@ class WebSettings:
 
     def __post_init__(self) -> None:
         if self.auth_mode not in _AUTH_MODES:
-            raise ValueError("auth_mode must be off or proxy")
+            raise ValueError("auth_mode must be off, proxy, or basic")
         if self.frontend_mode not in _FRONTEND_MODES:
             raise ValueError("frontend_mode must be spa or legacy")
         if not isinstance(self.identity_header, str) or not _HEADER_NAME.fullmatch(
@@ -181,6 +181,9 @@ def create_app(manager: SnapshotManager, *, settings: WebSettings) -> FastAPI:
         is_asset = request.url.path.startswith(f"/{_SPA_ASSET_DIRECTORY}/")
         protected = request.url.path == "/" or is_api or is_asset
         try:
+            # "basic" mode trusts the platform's own HTTP Basic Auth at the
+            # edge (e.g. Coolify/Traefik) as the real gate; that edge never
+            # forwards an SSO identity header, so this app must not demand one.
             if (
                 protected
                 and settings.auth_mode == "proxy"
@@ -462,9 +465,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         auth_mode = "off"
     else:
         auth_mode = os.environ.get("DASHBOARD_AUTH_MODE", "")
-        if auth_mode != "proxy":
+        if auth_mode not in ("proxy", "basic"):
             print(
-                "production requires DASHBOARD_AUTH_MODE=proxy",
+                "production requires DASHBOARD_AUTH_MODE=proxy or basic",
                 file=sys.stderr,
             )
             return 2

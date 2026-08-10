@@ -282,6 +282,13 @@ Production contract tối thiểu:
 - `/healthz` là **liveness**, `/readyz` là **readiness**; `/readyz` trả `503`
   cho tới khi có snapshot hợp lệ.
 
+`DASHBOARD_AUTH_MODE=basic` là lối thoát riêng cho môi trường không có proxy
+SSO chèn identity header (ví dụ PaaS demo như Zalopay Agent Base) — app bỏ
+qua kiểm tra identity header, tin platform đã HTTP Basic Auth ở edge (Traefik)
+trước khi request tới container. **Bắt buộc bật Basic Auth ở platform** khi
+dùng mode này, nếu không dashboard mở public trần cho mọi người. Không dùng
+cho hạ tầng production thật đã có proxy SSO — `proxy` vẫn là chuẩn ở đó.
+
 Service giữ **last-good** snapshot khi refresh Langfuse lỗi hoặc enrichment
 chưa hoàn chỉnh. Snapshot `partial` không được publish/serve; nhãn
 `Chưa xác định được từ trace` chỉ dùng sau khi toàn bộ enrichment đã hoàn tất.
