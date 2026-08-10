@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import socket
 import threading
 from zoneinfo import ZoneInfo
 
@@ -389,3 +390,46 @@ def test_read_api_errors_remain_redacted():
     assert str(captured.value) == "GET /api/public/observations status=401"
     assert PUBLIC_KEY not in str(captured.value)
     assert SECRET_KEY not in str(captured.value)
+
+
+def test_dns_override_resolves_only_the_configured_host(monkeypatch):
+    """A blanket getaddrinfo swap would also redirect unrelated hosts like Freshdesk."""
+    from weekly_cs_report import langfuse_client as module
+
+    calls: list[str] = []
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        calls.append(host)
+        return []
+
+    monkeypatch.setattr(module, "_real_getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(module, "_dns_override_applied", None)
+    monkeypatch.setenv("LANGFUSE_DNS_OVERRIDE", "langfuse.zalopay.vn:10.30.94.60")
+
+    module._apply_dns_override()
+    socket.getaddrinfo("langfuse.zalopay.vn", 443)
+    socket.getaddrinfo("vngzalopay.freshdesk.com", 443)
+
+    assert calls == ["10.30.94.60", "vngzalopay.freshdesk.com"]
+
+
+def test_dns_override_is_a_noop_when_unset(monkeypatch):
+    from weekly_cs_report import langfuse_client as module
+
+    monkeypatch.delenv("LANGFUSE_DNS_OVERRIDE", raising=False)
+    monkeypatch.setattr(module, "_dns_override_applied", None)
+    before = socket.getaddrinfo
+
+    module._apply_dns_override()
+
+    assert socket.getaddrinfo is before
+
+
+def test_dns_override_rejects_a_malformed_value(monkeypatch):
+    from weekly_cs_report import langfuse_client as module
+
+    monkeypatch.setattr(module, "_dns_override_applied", None)
+    monkeypatch.setenv("LANGFUSE_DNS_OVERRIDE", "not-a-host-ip-pair")
+
+    with pytest.raises(ValueError, match="LANGFUSE_DNS_OVERRIDE"):
+        module._apply_dns_override()
