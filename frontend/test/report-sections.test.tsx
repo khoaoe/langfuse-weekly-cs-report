@@ -774,44 +774,53 @@ describe("Below-fold analysis", () => {
   });
 
   it("shows raw bot-only ticket counts without percentages below twenty tickets", () => {
-    const snapshot = snapshotWithCsat({
-      "2026-07-13": csatWeek({
-        response_count: 12,
-        ticket_count: 12,
-        positive: 7,
-        neutral: 3,
-        negative: 2,
-      }),
-      "2026-07-20": csatWeek(),
-    });
-
-    renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-13" }));
-
-    const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
-    });
-    const rows = within(section).getAllByRole("row");
-    expect(rows).toHaveLength(3);
-    const totalRow = within(section).getByRole("row", { name: /Tổng/ });
-    expect(within(totalRow).getAllByRole("cell").map(
-      (cell) => cell.textContent,
-    )).toEqual(["12 phản hồi12 ticket", "7", "3", "2"]);
-    const outcomeRow = within(section).getByRole("row", { name: /AI xử lý trọn/ });
-    expect(within(outcomeRow).getAllByRole("cell").map(
-      (cell) => cell.textContent,
-    )).toEqual(["12Mẫu nhỏ", "7", "3", "2"]);
-    expect(section).not.toHaveTextContent("%");
-    const source = document.getElementById("csat-source");
-    expect(source).toHaveTextContent(
-      /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+ · Dữ liệu khác: Langfuse\.$/,
+    // The stale-CSAT check compares fetched_at against real Date.now(); an
+    // unpinned clock makes this test flip right after Vietnam midnight.
+    vi.spyOn(Date, "now").mockReturnValue(
+      new Date("2026-08-10T10:00:00+07:00").getTime(),
     );
-    expect(source?.tagName).toBe("P");
-    expect(document.getElementById("csat-attribution")).toBeNull();
-    expect(section).not.toHaveTextContent(
-      "không tính phản hồi không xác định được agent hoặc thuộc CS người",
-    );
-    expect(source?.querySelector("time")).not.toBeNull();
-    expect(within(section).queryByRole("row", { name: /human|CS người/i })).toBeNull();
+    try {
+      const snapshot = snapshotWithCsat({
+        "2026-07-13": csatWeek({
+          response_count: 12,
+          ticket_count: 12,
+          positive: 7,
+          neutral: 3,
+          negative: 2,
+        }),
+        "2026-07-20": csatWeek(),
+      });
+
+      renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-13" }));
+
+      const section = screen.getByRole("region", {
+        name: "Khách hài lòng tới đâu",
+      });
+      const rows = within(section).getAllByRole("row");
+      expect(rows).toHaveLength(3);
+      const totalRow = within(section).getByRole("row", { name: /Tổng/ });
+      expect(within(totalRow).getAllByRole("cell").map(
+        (cell) => cell.textContent,
+      )).toEqual(["12 phản hồi12 ticket", "7", "3", "2"]);
+      const outcomeRow = within(section).getByRole("row", { name: /AI xử lý trọn/ });
+      expect(within(outcomeRow).getAllByRole("cell").map(
+        (cell) => cell.textContent,
+      )).toEqual(["12Mẫu nhỏ", "7", "3", "2"]);
+      expect(section).not.toHaveTextContent("%");
+      const source = document.getElementById("csat-source");
+      expect(source).toHaveTextContent(
+        /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+ · Dữ liệu khác: Langfuse\.$/,
+      );
+      expect(source?.tagName).toBe("P");
+      expect(document.getElementById("csat-attribution")).toBeNull();
+      expect(section).not.toHaveTextContent(
+        "không tính phản hồi không xác định được agent hoặc thuộc CS người",
+      );
+      expect(source?.querySelector("time")).not.toBeNull();
+      expect(within(section).queryByRole("row", { name: /human|CS người/i })).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("inherits the global report scope without exposing a duplicate CSAT week control", () => {
@@ -870,6 +879,11 @@ describe("Below-fold analysis", () => {
   });
 
   it("shows all three count-percentages at twenty responses and aggregates the whole period", async () => {
+    // The stale-CSAT check compares fetched_at against real Date.now(); an
+    // unpinned clock makes this test flip right after Vietnam midnight.
+    vi.spyOn(Date, "now").mockReturnValue(
+      new Date("2026-08-10T10:00:00+07:00").getTime(),
+    );
     const user = userEvent.setup();
     const snapshot = snapshotWithCsat({
       "2026-07-13": csatWeek({
@@ -980,6 +994,7 @@ describe("Below-fold analysis", () => {
     expect(
       within(allPeriodSection).queryByText("Phản hồi tuần mới nhất"),
     ).toBeNull();
+    vi.restoreAllMocks();
   });
 
   it("keeps feedback closed and warns when Freshdesk is not updated today", async () => {
