@@ -289,6 +289,12 @@ trước khi request tới container. **Bắt buộc bật Basic Auth ở platfo
 dùng mode này, nếu không dashboard mở public trần cho mọi người. Không dùng
 cho hạ tầng production thật đã có proxy SSO — `proxy` vẫn là chuẩn ở đó.
 
+`LANGFUSE_DNS_OVERRIDE=host:ip` (tuỳ chọn, xem `.env.example`) sửa đúng 1
+tình huống hẹp: platform route/TCP tới `LANGFUSE_BASE_URL` được nhưng không
+resolve DNS ra (route nội bộ, không phải bị chặn — kiểm bằng connect thẳng
+IP trước khi dùng biến này). Chỉ thay bước resolve DNS, TLS SNI/cert vẫn
+kiểm đúng hostname thật. Không set trên hạ tầng có DNS nội bộ đúng.
+
 Service giữ **last-good** snapshot khi refresh Langfuse lỗi hoặc enrichment
 chưa hoàn chỉnh. Snapshot `partial` không được publish/serve; nhãn
 `Chưa xác định được từ trace` chỉ dùng sau khi toàn bộ enrichment đã hoàn tất.

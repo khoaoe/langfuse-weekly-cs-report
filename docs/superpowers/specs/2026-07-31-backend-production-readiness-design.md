@@ -16,6 +16,16 @@ platform đó **bắt buộc bật Basic Auth**. `proxy` vẫn nguyên vẹn, v�
 cho hạ tầng production thật có SSO. Đây là mở rộng phạm vi hẹp cho môi trường
 demo, không phải huỷ ràng buộc bảo mật của dòng 34 cho production.
 
+Cùng ngày, phát hiện thêm: Agent Base route/TCP được tới IP thật của
+`langfuse.zalopay.vn` nhưng container không resolve được DNS nội bộ đó (đã
+verify bằng TCP connect thẳng IP trước khi kết luận) — Coolify cũng không
+cho set `--add-host` qua `custom_docker_run_options` (nhận PATCH 200 nhưng
+âm thầm không áp dụng vào `docker run` thật, đã verify bằng cách gọi lại API
+Langfuse thật từ trong container sau khi set). Thêm `LANGFUSE_DNS_OVERRIDE`
+(`langfuse_client.py`): override đúng 1 bước resolve DNS cho 1 hostname, giữ
+nguyên TLS SNI/cert theo hostname thật. Đây là workaround tầng app cho giới
+hạn hạ tầng cụ thể của Agent Base, không phải thay đổi cho production thật.
+
 ## Verdict
 
 The existing backend is a strong protected-dashboard foundation, but it is not

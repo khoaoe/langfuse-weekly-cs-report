@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import socket
 import time
 import threading
 from collections.abc import Callable, Iterator, Sequence
@@ -9,6 +11,36 @@ from types import TracebackType
 from typing import Any
 
 import httpx
+
+
+_DNS_OVERRIDE_ENV = "LANGFUSE_DNS_OVERRIDE"
+_real_getaddrinfo = socket.getaddrinfo
+_dns_override_applied: str | None = None
+
+
+def _apply_dns_override() -> None:
+    """Resolve one hostname to a fixed IP when the platform has no route to it.
+
+    Some deploy platforms (e.g. a shared PaaS) reach the target host fine over
+    TCP but have no DNS path to an internal-only name. This substitutes the
+    DNS answer only, so TLS SNI/cert validation still runs against the real
+    hostname. Real production leaves LANGFUSE_DNS_OVERRIDE unset.
+    """
+    global _dns_override_applied
+    raw = os.environ.get(_DNS_OVERRIDE_ENV, "")
+    if not raw or raw == _dns_override_applied:
+        return
+    host, sep, ip = raw.partition(":")
+    if not sep or not host or not ip:
+        raise ValueError(f"{_DNS_OVERRIDE_ENV} must be host:ip")
+
+    def _patched(getaddr_host: str, *args: Any, **kwargs: Any) -> Any:
+        return _real_getaddrinfo(
+            ip if getaddr_host == host else getaddr_host, *args, **kwargs
+        )
+
+    socket.getaddrinfo = _patched
+    _dns_override_applied = raw
 
 
 @dataclass(frozen=True)
@@ -75,6 +107,7 @@ class LangfuseClient:
         if poll_interval_s <= 0:
             raise ValueError("poll_interval_s must be positive")
 
+        _apply_dns_override()
         self._client = httpx.Client(
             base_url=base_url.rstrip("/"),
             auth=(public_key, secret_key),
