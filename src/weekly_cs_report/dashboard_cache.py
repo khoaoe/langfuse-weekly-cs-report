@@ -5,21 +5,22 @@ from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as Futur
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
-import logging
 import os
 from pathlib import Path
 import tempfile
 import threading
+import time
 
-from .dashboard_schema import DashboardSnapshot
-from .langfuse_client import LangfuseAPIError
+from .dashboard_schema import _STORAGE_VERSION, DashboardSnapshot
+from .langfuse_client import LangfuseAPIError, LangfuseRequestCancelled
 from .models import InvariantError
+from .runtime_logging import emit_event
 
 
 _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _AUTOMATIC_RETRY_DELAY = timedelta(seconds=60)
 _MANUAL_REFRESH_COOLDOWN = timedelta(seconds=60)
-_LOG = logging.getLogger(__name__)
+_KEEP_SNAPSHOT = object()
 
 
 def utc_now() -> datetime:
@@ -36,9 +37,15 @@ class CacheView:
 
 
 class ProtectedSnapshotStore:
-    def __init__(self, directory: Path) -> None:
+    def __init__(
+        self,
+        directory: Path,
+        *,
+        require_complete_enrichment: bool = False,
+    ) -> None:
         self._directory = Path(directory)
         self._snapshot_path = self._directory / _SNAPSHOT_FILENAME
+        self._require_complete_enrichment = require_complete_enrichment
 
     def load(self) -> DashboardSnapshot | None:
         if not self._snapshot_path.exists():
@@ -46,11 +53,20 @@ class ProtectedSnapshotStore:
         try:
             with self._snapshot_path.open("r", encoding="utf-8") as stream:
                 value = json.load(stream)
-            return DashboardSnapshot.from_storage_dict(value)
+            snapshot = DashboardSnapshot.from_storage_dict(value)
+            if self._require_complete_enrichment and not _has_complete_enrichment(
+                snapshot
+            ):
+                emit_event(
+                    "snapshot_load_ignored",
+                    code="incomplete_enrichment",
+                )
+                return None
+            return snapshot
         except (json.JSONDecodeError, ValueError):
             # Older schemas lack the current weekly privacy/metric contract.
             # Do not attempt a lossy conversion; bootstrap with a fresh run.
-            _LOG.warning("dashboard snapshot ignored: incompatible or invalid schema")
+            emit_event("snapshot_load_ignored", code="invalid_snapshot")
             return None
 
     def snapshot_mtime(self) -> datetime | None:
@@ -61,6 +77,10 @@ class ProtectedSnapshotStore:
         return datetime.fromtimestamp(modified_at, tz=timezone.utc)
 
     def save(self, snapshot: DashboardSnapshot) -> None:
+        if self._require_complete_enrichment and not _has_complete_enrichment(
+            snapshot
+        ):
+            raise InvariantError("enrichment is incomplete")
         value = snapshot.storage_dict()
         self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._directory, 0o700)
@@ -90,13 +110,54 @@ class ProtectedSnapshotStore:
             temporary_path = None
         except Exception:
             if descriptor is not None:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
             if temporary_path is not None:
                 try:
                     temporary_path.unlink()
-                except FileNotFoundError:
+                except OSError:
                     pass
+            if self._matches_snapshot(snapshot):
+                return
             raise
+
+    def restore(self, snapshot: DashboardSnapshot | None) -> None:
+        """Restore the last acknowledged snapshot after a terminal log failure."""
+
+        if snapshot is not None:
+            self.save(snapshot)
+            return
+        try:
+            self._snapshot_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            readable, persisted = self._read_snapshot_without_event()
+            if readable and persisted is None:
+                return
+            raise
+
+    def _matches_snapshot(self, snapshot: DashboardSnapshot) -> bool:
+        readable, persisted = self._read_snapshot_without_event()
+        return readable and persisted == snapshot
+
+    def _read_snapshot_without_event(
+        self,
+    ) -> tuple[bool, DashboardSnapshot | None]:
+        try:
+            with self._snapshot_path.open("r", encoding="utf-8") as stream:
+                value = json.load(stream)
+            return True, DashboardSnapshot.from_storage_dict(value)
+        except FileNotFoundError:
+            return True, None
+        except (OSError, TypeError, ValueError):
+            return False, None
+
+
+def _has_complete_enrichment(snapshot: DashboardSnapshot) -> bool:
+    return snapshot.dashboard.get("enrichment_status") == "complete"
 
 
 class SnapshotManager:
@@ -107,11 +168,15 @@ class SnapshotManager:
         *,
         ttl: timedelta = timedelta(seconds=300),
         clock: Callable[[], datetime] = utc_now,
+        cancel_event: threading.Event | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._loader = loader
         self._store = store
         self._ttl = ttl
         self._clock = clock
+        self._cancel_event = cancel_event or threading.Event()
+        self._monotonic = monotonic
         initial_snapshot = store.load()
         initial_success_at: datetime | None = None
         persisted_mtime: datetime | None = None
@@ -174,7 +239,12 @@ class SnapshotManager:
             if self._closed:
                 return
             self._closed = True
+            self._cancel_event.set()
         self._executor.shutdown(wait=True)
+
+    @property
+    def cancel_event(self) -> threading.Event:
+        return self._cancel_event
 
     def _should_refresh_automatically(self, now: datetime) -> bool:
         if self._closed or self._future is not None:
@@ -204,24 +274,79 @@ class SnapshotManager:
         self._future = self._executor.submit(self._refresh)
 
     def _refresh(self) -> None:
+        started_at = self._monotonic()
+        with self._lock:
+            has_snapshot = self._snapshot is not None
+            previous_snapshot = self._snapshot
+        refreshed_snapshot: DashboardSnapshot | None = None
+        candidate_snapshot: DashboardSnapshot | None = None
+        success_at: datetime | None = None
+        error_code = "refresh_failed"
+        failure_snapshot: object | DashboardSnapshot | None = _KEEP_SNAPSHOT
+        persistence_attempted = False
         try:
+            emit_event("refresh_start", has_snapshot=has_snapshot)
             snapshot = self._loader()
+            if self._cancel_event.is_set():
+                raise LangfuseRequestCancelled("GET", "/api/public/traces")
             if not isinstance(snapshot, DashboardSnapshot):
                 raise ValueError("loader did not return DashboardSnapshot")
             snapshot.storage_dict()
+            candidate_snapshot = snapshot
+            persistence_attempted = True
             self._store.save(snapshot)
             success_at = self._utc_clock()
+        except LangfuseRequestCancelled:
+            error_code = "langfuse_unavailable"
+            if not _emit_event_safely("refresh_cancelled", code="cancelled"):
+                error_code = "refresh_failed"
         except Exception as error:
             error_code = _error_code(error)
-            error_at = self._utc_clock()
-            with self._lock:
-                self._last_error_code = error_code
-                self._last_error_at = error_at
-                self._next_automatic_retry_at = error_at + _AUTOMATIC_RETRY_DELAY
-                self._next_manual_refresh_at = error_at + _MANUAL_REFRESH_COOLDOWN
-                self._future = None
-            return
+            if persistence_attempted and candidate_snapshot is not None:
+                failure_snapshot, restored = self._rollback_or_align_persisted_snapshot(
+                    previous_snapshot
+                )
+                if not restored:
+                    error_code = "refresh_failed"
+            if not _emit_event_safely("refresh_failure", code=error_code):
+                error_code = "refresh_failed"
+        else:
+            try:
+                success_fields = _refresh_success_fields(
+                    snapshot,
+                    duration_ms=max(0, int((self._monotonic() - started_at) * 1000)),
+                )
+            except Exception:
+                error_code = "refresh_failed"
+            else:
+                if _emit_event_safely("refresh_success", **success_fields):
+                    refreshed_snapshot = snapshot
+                else:
+                    error_code = "refresh_failed"
+            if refreshed_snapshot is None:
+                (
+                    failure_snapshot,
+                    restored,
+                ) = self._rollback_or_align_persisted_snapshot(
+                    previous_snapshot
+                )
+                if not restored:
+                    error_code = "refresh_failed"
+        finally:
+            if refreshed_snapshot is not None and success_at is not None:
+                self._finish_successful_refresh(refreshed_snapshot, success_at)
+            else:
+                self._finish_failed_refresh(
+                    error_code,
+                    self._safe_error_time(),
+                    snapshot=failure_snapshot,
+                )
 
+    def _finish_successful_refresh(
+        self,
+        snapshot: DashboardSnapshot,
+        success_at: datetime,
+    ) -> None:
         with self._lock:
             self._snapshot = snapshot
             self._last_success_at = success_at
@@ -231,6 +356,41 @@ class SnapshotManager:
             self._next_automatic_retry_at = None
             self._next_manual_refresh_at = success_at + _MANUAL_REFRESH_COOLDOWN
             self._future = None
+
+    def _finish_failed_refresh(
+        self,
+        error_code: str,
+        error_at: datetime,
+        *,
+        snapshot: object | DashboardSnapshot | None = _KEEP_SNAPSHOT,
+    ) -> None:
+        with self._lock:
+            if snapshot is not _KEEP_SNAPSHOT:
+                self._snapshot = snapshot
+            self._last_error_code = error_code
+            self._last_error_at = error_at
+            self._next_automatic_retry_at = error_at + _AUTOMATIC_RETRY_DELAY
+            self._next_manual_refresh_at = error_at + _MANUAL_REFRESH_COOLDOWN
+            self._future = None
+
+    def _rollback_or_align_persisted_snapshot(
+        self,
+        previous_snapshot: DashboardSnapshot | None,
+    ) -> tuple[object | DashboardSnapshot | None, bool]:
+        try:
+            self._store.restore(previous_snapshot)
+        except Exception:
+            readable, persisted = self._store._read_snapshot_without_event()
+            # An unreadable file is not a usable snapshot. Serving no in-memory
+            # snapshot is the conservative state until storage is repaired.
+            return (persisted if readable else None), False
+        return _KEEP_SNAPSHOT, True
+
+    def _safe_error_time(self) -> datetime:
+        try:
+            return self._utc_clock()
+        except Exception:
+            return utc_now()
 
     def _view(self) -> CacheView:
         refreshing = self._future is not None
@@ -269,3 +429,53 @@ def _error_code(error: Exception) -> str:
     if isinstance(error, (ValueError, InvariantError)):
         return "data_validation_failed"
     return "refresh_failed"
+
+
+def _emit_event_safely(event: str, **fields: object) -> bool:
+    """Return whether a log event was emitted without exposing its failure."""
+
+    try:
+        emit_event(event, **fields)
+    except Exception:
+        return False
+    return True
+
+
+def _refresh_success_fields(
+    snapshot: DashboardSnapshot,
+    *,
+    duration_ms: int,
+) -> dict[str, int | float]:
+    """Select scalar aggregates without inspecting or serializing ticket rows."""
+
+    fields: dict[str, int | float] = {
+        "duration_ms": duration_ms,
+        "schema_version": _STORAGE_VERSION,
+        "ticket_count": len(snapshot.tickets),
+    }
+    source = snapshot.dashboard.get("source")
+    if isinstance(source, dict):
+        for dashboard_name, event_name in (
+            ("traces_fetched", "trace_count"),
+            ("observations_fetched", "observation_count"),
+        ):
+            value = source.get(dashboard_name)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                fields[event_name] = value
+    coverage = snapshot.dashboard.get("coverage")
+    if isinstance(coverage, dict):
+        for dashboard_name, event_name in (
+            ("issue_category", "coverage_issue_category"),
+            ("app", "coverage_app"),
+            ("tpe", "coverage_tpe"),
+            ("intent", "coverage_intent"),
+            ("skill", "coverage_skill"),
+        ):
+            value = coverage.get(dashboard_name)
+            if (
+                isinstance(value, (int, float))
+                and not isinstance(value, bool)
+                and value >= 0
+            ):
+                fields[event_name] = value
+    return fields

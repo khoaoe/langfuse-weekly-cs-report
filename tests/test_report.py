@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo
 import pytest
 from tests.fixtures.traces import TRANSFER_HTML, trace
 from weekly_cs_report.dashboard_schema import project_dashboard
+from weekly_cs_report.langfuse_client import (
+    LangfuseDeadlineExceeded,
+    LangfuseRequestCancelled,
+)
 from weekly_cs_report.report import compute_report
 
 
@@ -49,7 +53,15 @@ class FakeClient:
         self.enrichment_calls: list[str] = []
         self.fail_enrichment_name: str | None = None
 
-    def iter_traces(self, from_timestamp: datetime, to_timestamp: datetime):
+    def iter_traces(
+        self,
+        from_timestamp: datetime,
+        to_timestamp: datetime,
+        *,
+        deadline: float | None = None,
+        cancel_event: threading.Event | None = None,
+        max_pages: int = 500,
+    ):
         self.bounds.append((from_timestamp, to_timestamp))
         yield from self.traces
 
@@ -92,7 +104,13 @@ def test_compute_report_reads_and_analyzes_without_writing_artifacts(tmp_path):
     ]
     assert client.observation_trace_ids == []
     assert set(client.enrichment_calls) == {
-        "route", "execute", "input_guardrail", "skill_guardrail_checked", "escalation_history_guard"
+        "route",
+        "execute",
+        "input_guardrail",
+        "skill_guardrail_checked",
+        "output_guardrail",
+        "escalation_history_guard",
+        "tool:get_transaction_processing_engine_data",
     }
     assert run.enrichment_status == "complete"
     assert run.observations_fetched == 0
@@ -188,6 +206,17 @@ def test_compute_report_applies_complete_bulk_enrichment_without_per_ticket_obse
         "input_guardrail": [{"traceId": "ai-0", "output": {"rule": "missing_transaction_id"}}],
         "skill_guardrail_checked": [],
         "escalation_history_guard": [{"traceId": "ai-0", "output": {"blocked": True}}],
+        "tool:get_transaction_processing_engine_data": [
+            {
+                "traceId": "transfer-0",
+                "output": {
+                    "result": {
+                        "transstatus": "-365",
+                        "stepresult": "-1013",
+                    }
+                },
+            }
+        ],
     }
 
     run = compute_report(client, as_of=AS_OF, weeks=2, include_current_wtd=True, taxonomy_path=TAXONOMY_PATH)
@@ -195,14 +224,141 @@ def test_compute_report_applies_complete_bulk_enrichment_without_per_ticket_obse
 
     assert client.observation_trace_ids == []
     assert run.enrichment_status == "complete"
-    assert run.observations_fetched == 4
+    assert run.observations_fetched == 5
     assert session.dimensions.intent == "refund_request"
     assert session.dimensions.skill == "topup"
     assert session.dimensions.guardrail_rule == "missing_transaction_id"
     assert session.dimensions.escalation_guard_blocked is True
+    transfer_session = next(
+        item
+        for item in run.result.sessions
+        if item.session_id == "ticket-transfer"
+    )
+    assert transfer_session.dimensions.tpe_signals == (("-365", "-1013"),)
     snapshot = project_dashboard(run).dashboard_dict()
     assert snapshot["enrichment_status"] == "complete"
-    assert snapshot["source"]["observations_fetched"] == 4
+    assert snapshot["source"]["observations_fetched"] == 5
+    assert snapshot["views"]["mon_sun"]["transfer_reasons"]["tpe"] == [
+        {
+            "transstatus": "-365",
+            "step_result": "-1013",
+            "count": 1,
+        }
+    ]
+
+
+def test_transfer_trigger_uses_only_the_first_transfer_trace_and_keeps_two_cs_escalation_paths_distinct():
+    """A later guardrail, or a global output guardrail, must not overwrite a skill trigger."""
+    client = FakeClient()
+    client.traces.extend(
+        [
+            trace(
+                "ai-transfer",
+                "ticket-ai",
+                1,
+                "2026-07-20T03:00:00Z",
+                TRANSFER_HTML,
+            ),
+            trace(
+                "ai-later",
+                "ticket-ai",
+                2,
+                "2026-07-20T04:00:00Z",
+                TRANSFER_HTML,
+            ),
+        ]
+    )
+    client.enrichment = {
+        "skill_guardrail_checked": [
+            {
+                "traceId": "ai-transfer",
+                "input": {
+                    "stage": "output",
+                    "skill": "customer-service/interbank-fund-transfer",
+                },
+                "output": {"passed": False, "rule": "cs_escalation"},
+            }
+        ],
+        "output_guardrail": [
+            {
+                "traceId": "transfer-0",
+                "output": {"blocked": True, "rule": "cs_escalation"},
+            }
+        ],
+        "input_guardrail": [
+            {
+                "traceId": "ai-later",
+                "output": {
+                    "blocked": True,
+                    "rule": "missing_transaction_id",
+                },
+            }
+        ],
+    }
+
+    run = compute_report(
+        client,
+        as_of=AS_OF,
+        weeks=2,
+        include_current_wtd=True,
+        taxonomy_path=TAXONOMY_PATH,
+    )
+    skill_session = next(
+        item for item in run.result.sessions if item.session_id == "ticket-ai"
+    )
+    response_session = next(
+        item
+        for item in run.result.sessions
+        if item.session_id == "ticket-transfer"
+    )
+
+    assert (
+        skill_session.transfer_trigger.reason,
+        skill_session.transfer_trigger.rule,
+        skill_session.transfer_trigger.source,
+        skill_session.transfer_trigger.stage,
+        skill_session.transfer_trigger.skill,
+    ) == (
+        "skill_suggested_transfer",
+        "cs_escalation",
+        "skill_guardrail_checked",
+        "output",
+        "interbank-fund-transfer",
+    )
+    assert (
+        response_session.transfer_trigger.reason,
+        response_session.transfer_trigger.rule,
+        response_session.transfer_trigger.source,
+        response_session.transfer_trigger.stage,
+        response_session.transfer_trigger.skill,
+    ) == (
+        "ai_response_requires_transfer",
+        "cs_escalation",
+        "output_guardrail",
+        None,
+        None,
+    )
+    trigger_rows = project_dashboard(run).dashboard_dict()["views"]["mon_sun"][
+        "transfer_reasons"
+    ]["triggers"]
+    assert trigger_rows == [
+        {
+            "reason": "ai_response_requires_transfer",
+            "rule": "cs_escalation",
+            "source": "output_guardrail",
+            "stage": None,
+            "skill": None,
+            "count": 1,
+        },
+        {
+            "reason": "skill_suggested_transfer",
+            "rule": "cs_escalation",
+            "source": "skill_guardrail_checked",
+            "stage": "output",
+            "skill": "interbank-fund-transfer",
+            "count": 1,
+        },
+    ]
 
 
 def test_one_enrichment_class_failure_discards_all_partial_signals_but_keeps_core_report():
@@ -216,6 +372,7 @@ def test_one_enrichment_class_failure_discards_all_partial_signals_but_keeps_cor
     session = next(item for item in run.result.sessions if item.session_id == "ticket-ai")
 
     assert run.enrichment_status == "partial"
+    assert run.failed_enrichment_lanes == ("execute",)
     assert run.observations_fetched == 1
     assert session.dimensions.intent is None
     assert session.dimensions.skill is None
@@ -257,9 +414,9 @@ def test_observation_lanes_start_before_trace_pagination():
             super().__init__()
             self.observation_started = threading.Event()
 
-        def iter_traces(self, from_timestamp: datetime, to_timestamp: datetime):
+        def iter_traces(self, from_timestamp: datetime, to_timestamp: datetime, **kwargs):
             assert self.observation_started.wait(timeout=1)
-            yield from super().iter_traces(from_timestamp, to_timestamp)
+            yield from super().iter_traces(from_timestamp, to_timestamp, **kwargs)
 
         def iter_observations_by_name(self, *args, **kwargs):
             self.observation_started.set()
@@ -280,7 +437,7 @@ def test_trace_failure_cancels_and_drains_observation_workers_before_reraising()
             self.observation_started = threading.Event()
             self.observation_stopped = threading.Event()
 
-        def iter_traces(self, _from_timestamp: datetime, _to_timestamp: datetime):
+        def iter_traces(self, _from_timestamp: datetime, _to_timestamp: datetime, **_kwargs):
             assert self.observation_started.wait(timeout=1)
             raise RuntimeError("synthetic trace failure")
             yield  # pragma: no cover - makes this a generator for the protocol
@@ -304,3 +461,98 @@ def test_trace_failure_cancels_and_drains_observation_workers_before_reraising()
         )
 
     assert client.observation_stopped.is_set()
+
+
+def test_compute_report_forwards_one_refresh_deadline_and_cancellation_to_traces():
+    """Core pagination must share the process refresh controls, not start anew."""
+    cancel_event = threading.Event()
+
+    class ControlledClient(FakeClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.trace_controls: list[tuple[float, threading.Event, int]] = []
+
+        def iter_traces(
+            self,
+            from_timestamp: datetime,
+            to_timestamp: datetime,
+            *,
+            deadline: float,
+            cancel_event: threading.Event,
+            max_pages: int,
+        ):
+            self.bounds.append((from_timestamp, to_timestamp))
+            self.trace_controls.append((deadline, cancel_event, max_pages))
+            yield from self.traces
+
+    client = ControlledClient()
+
+    compute_report(
+        client,
+        as_of=AS_OF,
+        weeks=2,
+        include_current_wtd=True,
+        taxonomy_path=TAXONOMY_PATH,
+        refresh_timeout_seconds=30.0,
+        max_trace_pages=7,
+        cancel_event=cancel_event,
+        monotonic=lambda: 100.0,
+    )
+
+    assert client.trace_controls == [(130.0, cancel_event, 7)]
+
+
+def test_compute_report_raises_sanitized_cancellation_after_trace_phase():
+    """A shutdown signal after core pagination must stop the remaining phases."""
+    cancel_event = threading.Event()
+
+    class CancellingClient(FakeClient):
+        def iter_traces(self, *args, **kwargs):
+            yield from super().iter_traces(*args, **kwargs)
+            cancel_event.set()
+
+    with pytest.raises(LangfuseRequestCancelled) as captured:
+        compute_report(
+            CancellingClient(),
+            as_of=AS_OF,
+            weeks=2,
+            include_current_wtd=True,
+            taxonomy_path=TAXONOMY_PATH,
+            cancel_event=cancel_event,
+            monotonic=lambda: 100.0,
+        )
+
+    assert captured.value.method == "GET"
+    assert captured.value.path == "/api/public/traces"
+    assert captured.value.status_code == "cancelled"
+
+
+def test_compute_report_raises_sanitized_deadline_after_trace_phase():
+    """A full-refresh deadline elapsed during pagination must fail the report."""
+    clock = {"deadline_on_next_read": False}
+
+    def monotonic() -> float:
+        if clock["deadline_on_next_read"]:
+            clock["deadline_on_next_read"] = False
+            return 130.0
+        return 100.0
+
+    class DeadlineClient(FakeClient):
+        def iter_traces(self, *args, **kwargs):
+            yield from super().iter_traces(*args, **kwargs)
+            clock["deadline_on_next_read"] = True
+
+    with pytest.raises(LangfuseDeadlineExceeded) as captured:
+        compute_report(
+            DeadlineClient(),
+            as_of=AS_OF,
+            weeks=2,
+            include_current_wtd=True,
+            taxonomy_path=TAXONOMY_PATH,
+            refresh_timeout_seconds=30.0,
+            monotonic=monotonic,
+        )
+
+    assert captured.value.method == "GET"
+    assert captured.value.path == "/api/public/traces"
+    assert captured.value.status_code == "deadline_exceeded"

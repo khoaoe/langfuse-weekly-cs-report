@@ -85,6 +85,26 @@ class TicketDimensions:
     intent: str | None
     guardrail_rule: str | None
     escalation_guard_blocked: bool
+    # Exact-source TPE observations. The legacy meta fields above are retained
+    # only when they were already present in the raw Langfuse trace.
+    tpe_signals: tuple[tuple[str, str | None], ...] = ()
+    # `skill` collapses to None whenever more than one distinct skill ran, so a
+    # triple-skill ticket and a ticket with zero `execute` observations were
+    # indistinguishable downstream. These two carry the count and the sorted
+    # combination through instead of discarding them.
+    skill_count: int = 0
+    skill_set: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class TransferTrigger:
+    """Privacy-safe trigger observed on the first canonical transfer trace."""
+
+    reason: str
+    rule: str
+    source: str
+    stage: str | None = None
+    skill: str | None = None
 
 
 def _empty_ticket_dimensions() -> TicketDimensions:
@@ -105,6 +125,9 @@ def _empty_ticket_dimensions() -> TicketDimensions:
         intent=None,
         guardrail_rule=None,
         escalation_guard_blocked=False,
+        tpe_signals=(),
+        skill_count=0,
+        skill_set=(),
     )
 
 
@@ -132,6 +155,9 @@ class SessionMetrics:
     dimensions: TicketDimensions = field(default_factory=_empty_ticket_dimensions)
     # Internal-only allowlisted guardrail values. Never project this to tickets.
     guardrail_rules: tuple[str, ...] = ()
+    # Internal trace-grain trigger. Its allowlisted reason is projected per
+    # ticket; rule/source/stage/skill remain aggregate-only.
+    transfer_trigger: TransferTrigger | None = None
     # Internal-only direct-CS comparison cohort.  It must not enter the
     # published AI-first reopen metrics.
     control_reopen_within_7d: int | None = None

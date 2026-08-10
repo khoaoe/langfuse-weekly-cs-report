@@ -6,12 +6,12 @@ import json
 import os
 import sys
 from collections import Counter
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, field
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 
 from .artifacts import ProtectedArtifactRun, ProtectedArtifactStore
 from .categories import Taxonomy
@@ -21,16 +21,6 @@ from .dimension_verifier import (
     is_ticket_trace,
     validate_dimension_report_privacy,
     verify_raw_ticket_dimensions,
-)
-from .dimension_backfill import (
-    FRESHDESK_BASE_URL,
-    DimensionBackfillStore,
-    DimensionBackfillStoreError,
-    FreshdeskDimensionAPIError,
-    FreshdeskDimensionClient,
-    FreshdeskDimensionResponseError,
-    FreshdeskFieldContractError,
-    backfill_ticket_dimensions,
 )
 from .content_labeler import LabelConfigError, LabelSet, load_label_set
 from .langfuse_client import IngestionReceipt, LangfuseAPIError, LangfuseClient
@@ -49,7 +39,13 @@ from .reopen_eval import (
     evaluation_payload,
     load_golden_evaluation,
 )
-from .reopen_pii_review import PIIReviewError, write_pii_review_csv
+from .reopen_pii_review import (
+    PII_REVIEW_LIMIT,
+    PIIReviewError,
+    PIIReviewRow,
+    build_pii_review_rows,
+    write_pii_review_csv,
+)
 from .reopen_population import build_reopen_population
 from .reopen_sampling import sample_reopen, write_reopen_discovery_csv
 from .report import compute_report
@@ -65,11 +61,21 @@ TARGET_BASE_URL = "https://langfuse.zalopay.vn"
 TARGET_PROJECT_ID = "cmqubjzur000hz507ptubh2l9"
 ANALYTICS_VERSION = "v1"
 VERIFIER_TAXONOMY_PATH = PROJECT_ROOT / "config" / "taxonomy.v2.json"
-DIMENSION_BACKFILL_TAXONOMY_PATH = PROJECT_ROOT / "config" / "taxonomy.v2.json"
 REOPEN_LABELS_PATH = PROJECT_ROOT / "config" / "reopen_labels.v1.json"
 REOPEN_DISCOVERY_PATH = (
     PROJECT_ROOT / "artifacts" / "reopen_discovery" / "reasons.csv"
 )
+FRESHDESK_AGENT_CONFIG_PATH = PROJECT_ROOT / "config" / "freshdesk_agents.v1.json"
+FRESHDESK_RECONCILIATION_CONFIG_PATH = (
+    PROJECT_ROOT / "config" / "freshdesk_reconciliation_agents.v1.json"
+)
+FRESHDESK_RECONCILIATION_SOURCE_PATH = (
+    PROJECT_ROOT
+    / "artifacts"
+    / "freshdesk_discovery"
+    / "human_agent_candidates.v1.json"
+)
+CSAT_RUNTIME_PATH = PROJECT_ROOT / "runtime"
 READBACK_SAMPLE_LIMIT = 25
 READBACK_TIMEOUT_SECONDS = 30.0
 _ENVIRONMENT_NAMES = (
@@ -119,6 +125,17 @@ class RunConfig:
 
 
 @dataclass(frozen=True)
+class ApprovedReopenRunConfig(RunConfig):
+    """Process-private approval material for the controlled reopen runner."""
+
+    approved_pii_review_rows: tuple[PIIReviewRow, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
+
+
+@dataclass(frozen=True)
 class ReconciliationResult:
     analysis: AnalysisResult
     requested_event_ids: tuple[str, ...]
@@ -145,6 +162,16 @@ def _parse_as_of(value: str) -> datetime:
         raise argparse.ArgumentTypeError("as-of must be an ISO timestamp") from error
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise argparse.ArgumentTypeError("as-of must include a timezone offset")
+    return parsed
+
+
+def _parse_cohort_week(value: str) -> date:
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("week must be YYYY-MM-DD") from error
+    if parsed.weekday() != 0:
+        raise argparse.ArgumentTypeError("week must start on Monday")
     return parsed
 
 
@@ -209,9 +236,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_dimensions = subparsers.add_parser("verify-dimensions")
     _add_window_options(verify_dimensions, suppress_defaults=True)
-
-    backfill_dimensions = subparsers.add_parser("backfill-dimensions")
-    _add_window_options(backfill_dimensions, suppress_defaults=True)
+    verify_dimensions.add_argument("--require-p0", action="store_true")
 
     sample_reopen = subparsers.add_parser("sample-reopen")
     sample_reopen.add_argument("--weeks", type=int, required=True)
@@ -224,6 +249,38 @@ def build_parser() -> argparse.ArgumentParser:
     eval_labels_parser = subparsers.add_parser("eval-labels")
     eval_labels_parser.add_argument("--golden", type=Path, required=True)
     eval_labels_parser.add_argument("--labels", type=Path, required=True)
+
+    discover_agents = subparsers.add_parser("discover-agents")
+    discover_agents.add_argument("--weeks", type=int, default=13)
+    discover_agents.add_argument("--max-workers", type=int, default=2)
+    discover_agents.add_argument("--max-duration", type=int, default=30 * 60)
+    discover_agents.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
+
+    fetch_csat = subparsers.add_parser("fetch-csat")
+    fetch_csat.add_argument("--weeks", type=int, default=13)
+    fetch_csat.add_argument("--since-week", type=_parse_cohort_week)
+    fetch_csat.add_argument("--max-workers", type=int, default=2)
+    fetch_csat.add_argument("--max-duration", type=int, default=30 * 60)
+    fetch_csat.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
+
+    reconcile_freshdesk = subparsers.add_parser(
+        "reconcile-freshdesk-outcomes"
+    )
+    reconcile_freshdesk.add_argument("--weeks", type=int, default=13)
+    reconcile_freshdesk.add_argument("--max-workers", type=int, default=2)
+    reconcile_freshdesk.add_argument(
+        "--max-duration", type=int, default=30 * 60
+    )
+    reconcile_freshdesk.add_argument(
+        "--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH
+    )
+    entry_coverage = subparsers.add_parser("fetch-freshdesk-entry-coverage")
+    entry_coverage.add_argument("--weeks", type=int, default=13)
+    entry_coverage.add_argument("--max-workers", type=int, default=1)
+    entry_coverage.add_argument("--max-duration", type=int, default=30 * 60)
+    entry_coverage.add_argument(
+        "--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH
+    )
     parser.set_defaults(command="dry-run")
     return parser
 
@@ -657,7 +714,11 @@ def run_sample_reopen(
     fails closed unless its caller explicitly carries the manual PII approval
     decision.  The command-line entrypoint does not expose that route today.
     """
-    if pii_approved is not True:
+    if (
+        pii_approved is not True
+        or not isinstance(config, ApprovedReopenRunConfig)
+        or not config.approved_pii_review_rows
+    ):
         raise PIIApprovalRequiredError()
     report_run = compute_report(
         client,
@@ -670,6 +731,13 @@ def run_sample_reopen(
         report_run.result.sessions,
         report_run.result.selection.eligible,
     )
+    expected_review_rows = build_pii_review_rows(population)
+    if (
+        len(expected_review_rows) != PII_REVIEW_LIMIT
+        or config.approved_pii_review_rows[:PII_REVIEW_LIMIT]
+        != expected_review_rows
+    ):
+        raise PIIApprovalRequiredError()
     discovery = sample_reopen(population.sessions, llm_client)
     return write_reopen_discovery_csv(output_directory, discovery.rows)
 
@@ -755,55 +823,13 @@ def run_dimension_verification(
         )
         if is_ticket_trace(raw)
     ]
-    dimension_backfill = _load_dimension_backfill_if_present()
     report = verify_raw_ticket_dimensions(
         raw_ticket_traces,
         load_taxonomy(VERIFIER_TAXONOMY_PATH),
-        dimension_backfill=dimension_backfill,
     )
     validate_dimension_report_privacy(report)
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
     return report
-
-
-def _load_dimension_backfill_if_present() -> Mapping[str, object] | None:
-    """Load the fixed private overlay only when it already exists."""
-    store = DimensionBackfillStore(PROJECT_ROOT / "runtime")
-    try:
-        os.lstat(store.path)
-    except FileNotFoundError:
-        return None
-    return store.load()
-
-
-def _freshdesk_api_key_from_environment() -> str:
-    # Deliberately read before ``load_environment()`` calls ``load_dotenv``:
-    # Freshdesk credentials are environment-only, never sourced from .env.
-    api_key = os.environ.get("FRESHDESK_API_KEY")
-    if not api_key:
-        raise ConfigurationError("FRESHDESK_API_KEY is missing")
-    return api_key
-
-
-def run_dimension_backfill(
-    *,
-    as_of: datetime,
-    weeks: int,
-    include_current_wtd: bool,
-    client: LangfuseClient,
-    freshdesk_client: FreshdeskDimensionClient,
-) -> dict[str, int]:
-    window = build_cohort_window(as_of, weeks, include_current_wtd)
-    result = backfill_ticket_dimensions(
-        list(client.iter_traces(window.query_from_utc, window.query_to_utc)),
-        load_taxonomy(DIMENSION_BACKFILL_TAXONOMY_PATH),
-        freshdesk_client,
-        DimensionBackfillStore(PROJECT_ROOT / "runtime"),
-        generated_at=datetime.now(timezone.utc),
-    )
-    print(json.dumps(result, sort_keys=True))
-    return result
-
 
 def _score_matches(score: Mapping[str, object], spec: ScoreSpec) -> bool:
     actual_value = (
@@ -1001,10 +1027,744 @@ def _config_from_args(args: argparse.Namespace) -> RunConfig:
     )
 
 
+def _freshdesk_settings():
+    from .freshdesk_csat import FreshdeskCSATError, FreshdeskSettings
+
+    file_values = dotenv_values(PROJECT_ROOT / ".env")
+    selected = {
+        name: os.environ.get(name, file_values.get(name) or "")
+        for name in ("FRESHDESK_BASE_URL", "FRESHDESK_API_KEY")
+    }
+    if not selected["FRESHDESK_BASE_URL"] or not selected["FRESHDESK_API_KEY"]:
+        raise FreshdeskCSATError(
+            "Missing environment variables: FRESHDESK_BASE_URL, FRESHDESK_API_KEY"
+        )
+    return FreshdeskSettings(
+        base_url=str(selected["FRESHDESK_BASE_URL"]),
+        api_key=str(selected["FRESHDESK_API_KEY"]),
+    )
+
+
+def _csat_population(runtime_directory: Path, weeks: int):
+    from .dashboard_cache import ProtectedSnapshotStore
+    from .freshdesk_csat import FreshdeskCSATError
+
+    runtime_directory = Path(runtime_directory)
+    if not runtime_directory.is_absolute() or not 1 <= weeks <= 52:
+        raise FreshdeskCSATError("CSAT population options are invalid")
+    snapshot = ProtectedSnapshotStore(runtime_directory).load()
+    if snapshot is None:
+        raise FreshdeskCSATError("Dashboard snapshot is unavailable for CSAT fetch")
+    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    selected_weeks = tuple(
+        row["cohort_week"] for row in weekly_rows[-weeks:]
+    )
+    selected = frozenset(selected_weeks)
+    grouped = {
+        week: tuple(
+            sorted(
+                ticket.ticket_id
+                for ticket in snapshot.tickets
+                if ticket.cohort_week == week
+            )
+        )
+        for week in selected_weeks
+        if week in selected
+    }
+    return grouped
+
+
+def _reconciliation_population(runtime_directory: Path, weeks: int):
+    """Select only safe Ticket IDs with the unchanged Langfuse AI-only outcome."""
+
+    from .dashboard_cache import ProtectedSnapshotStore
+    from .outcome_reconciliation import OutcomeReconciliationError
+
+    runtime_directory = Path(runtime_directory)
+    if not runtime_directory.is_absolute() or not 1 <= weeks <= 52:
+        raise OutcomeReconciliationError(
+            "Outcome reconciliation population options are invalid"
+        )
+    snapshot = ProtectedSnapshotStore(runtime_directory).load()
+    if snapshot is None:
+        raise OutcomeReconciliationError(
+            "Dashboard snapshot is unavailable for outcome reconciliation"
+        )
+    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    selected_weeks = tuple(row["cohort_week"] for row in weekly_rows[-weeks:])
+    return {
+        week: tuple(
+            sorted(
+                (
+                    ticket.ticket_id
+                    for ticket in snapshot.tickets
+                    if ticket.cohort_week == week
+                    and ticket.outcome == "ai_end_to_end"
+                ),
+                key=int,
+            )
+        )
+        for week in selected_weeks
+    }
+
+
+def _entry_coverage_population(runtime_directory: Path, weeks: int):
+    from .entry_coverage_cache import ENTRY_COVERAGE_START_WEEK
+    from .freshdesk_entry_coverage import FreshdeskEntryCoverageError, _cohort_week
+    from .dashboard_cache import ProtectedSnapshotStore
+
+    runtime_directory = Path(runtime_directory)
+    if not runtime_directory.is_absolute() or not 1 <= weeks <= 52:
+        raise FreshdeskEntryCoverageError("Entry coverage population options are invalid")
+    snapshot = ProtectedSnapshotStore(runtime_directory).load()
+    if snapshot is None:
+        raise FreshdeskEntryCoverageError(
+            "Dashboard snapshot is unavailable for entry coverage"
+        )
+    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    selected_weeks = tuple(
+        row["cohort_week"]
+        for row in weekly_rows[-weeks:]
+        if row["cohort_week"] >= ENTRY_COVERAGE_START_WEEK
+    )
+    selected = frozenset(selected_weeks)
+    langfuse_tickets = {
+        ticket.ticket_id: ticket
+        for ticket in snapshot.tickets
+        if ticket.cohort_week in selected
+    }
+    return selected_weeks, langfuse_tickets
+
+
+def _run_fetch_freshdesk_entry_coverage_command(
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    from .cohort import VIETNAM_TIMEZONE
+    from .dashboard_cache import ProtectedSnapshotStore
+    from .entry_coverage_cache import (
+        ENTRY_COVERAGE_START_WEEK,
+        EntryCoverageCacheError,
+        EntryCoverageCache,
+        load_entry_coverage_cache,
+        write_entry_coverage_cache,
+    )
+    from .entry_coverage_checkpoint import (
+        CoverageCheckpoint,
+        EntryCoverageCheckpointError,
+        InventoryCheckpoint,
+        inventory_fingerprint,
+        load_coverage_checkpoint,
+        load_inventory_checkpoint,
+        write_coverage_checkpoint,
+        write_inventory_checkpoint,
+    )
+    from .freshdesk_entry_coverage import (
+        FreshdeskEntryCoverageError,
+        IncrementalEntryCoverageResult,
+        fetch_entry_coverage_population,
+        _cohort_week,
+    )
+    from .freshdesk_csat import (
+        FreshdeskClient,
+        FreshdeskFetchDeadline,
+        FreshdeskRateLimitExhausted,
+    )
+    from .outcome_reconciliation import load_reconciliation_agent_config
+    import time as monotonic_time
+
+    runtime_directory = Path(args.runtime_dir)
+    selected_weeks, langfuse_tickets = _entry_coverage_population(
+        runtime_directory, args.weeks
+    )
+    if not selected_weeks:
+        raise FreshdeskEntryCoverageError("Entry coverage has no report weeks")
+    checkpoint_path = (
+        runtime_directory.parent
+        / "artifacts"
+        / "freshdesk_entry_coverage"
+        / "coverage_checkpoint.json"
+    )
+    inventory_checkpoint_path = checkpoint_path.parent / "inventory_checkpoint.json"
+    try:
+        config = load_reconciliation_agent_config(
+            FRESHDESK_RECONCILIATION_CONFIG_PATH,
+            source_path=FRESHDESK_RECONCILIATION_SOURCE_PATH,
+        )
+        try:
+            published = load_entry_coverage_cache(
+                runtime_directory / "entry_coverage_cache.json"
+            )
+        except EntryCoverageCacheError:
+            # A cache from the pre-06/07 scope is not reusable, but it must not
+            # block rebuilding a fresh private cache.
+            published = None
+        coverage_checkpoint = load_coverage_checkpoint(checkpoint_path)
+        inventory_checkpoint = load_inventory_checkpoint(inventory_checkpoint_path)
+    except (EntryCoverageCacheError, EntryCoverageCheckpointError, OSError) as error:
+        raise FreshdeskEntryCoverageError(
+            "Freshdesk entry coverage private state is invalid"
+        ) from error
+
+    if published is not None and any(
+        item.cohort_week < ENTRY_COVERAGE_START_WEEK for item in published.records
+    ):
+        published = None
+
+    started = monotonic_time.monotonic()
+    deadline = started + args.max_duration
+    updated_since = datetime.combine(
+        date.fromisoformat(ENTRY_COVERAGE_START_WEEK),
+        time.min,
+        tzinfo=VIETNAM_TIMEZONE,
+    )
+    updated_since_utc = updated_since.astimezone(timezone.utc)
+    source_start_week = ENTRY_COVERAGE_START_WEEK
+    inventory_tickets: tuple[object, ...] = ()
+    inventory_complete = False
+
+    def should_stop() -> bool:
+        return monotonic_time.monotonic() >= deadline
+
+    def write_inventory_page(tickets, next_page: int, complete: bool) -> None:
+        nonlocal inventory_tickets, inventory_complete
+        inventory_tickets = tuple(tickets)
+        inventory_complete = complete
+        try:
+            write_inventory_checkpoint(
+                inventory_checkpoint_path,
+                InventoryCheckpoint(
+                    source_start_week=source_start_week,
+                    updated_since=_utc_iso(updated_since_utc),
+                    page_size=50,
+                    next_page=next_page,
+                    complete=complete,
+                    tickets=inventory_tickets,
+                    fingerprint=inventory_fingerprint(inventory_tickets),
+                ),
+            )
+        except EntryCoverageCheckpointError as error:
+            raise FreshdeskEntryCoverageError(
+                "Freshdesk inventory checkpoint could not be written"
+            ) from error
+
+    if inventory_checkpoint is not None and (
+        inventory_checkpoint.source_start_week == source_start_week
+        and inventory_checkpoint.updated_since == _utc_iso(updated_since_utc)
+        and inventory_checkpoint.complete
+    ):
+        inventory_tickets = inventory_checkpoint.tickets
+        inventory_complete = True
+    else:
+        existing_inventory = (
+            inventory_checkpoint.tickets
+            if inventory_checkpoint is not None
+            and inventory_checkpoint.source_start_week == source_start_week
+            and inventory_checkpoint.updated_since == _utc_iso(updated_since_utc)
+            and not inventory_checkpoint.complete
+            else ()
+        )
+        start_page = (
+            inventory_checkpoint.next_page
+            if existing_inventory and inventory_checkpoint is not None
+            else 1
+        )
+        try:
+            with FreshdeskClient(_freshdesk_settings()) as client:
+                client.list_ticket_metadata(
+                    updated_since=updated_since,
+                    start_page=start_page,
+                    existing=existing_inventory,
+                    on_page=write_inventory_page,
+                    should_stop=should_stop,
+                )
+        except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+            pass
+        if not inventory_complete:
+            selected_records = tuple(
+                item
+                for item in (published.records if published is not None else ())
+                if item.cohort_week in selected_weeks
+            )
+            return _entry_coverage_command_result(
+                "duration_limit_reached",
+                selected_weeks,
+                selected_records,
+            )
+
+    if should_stop():
+        selected_records = tuple(
+            item
+            for item in (published.records if published is not None else ())
+            if item.cohort_week in selected_weeks
+        )
+        return _entry_coverage_command_result(
+            "duration_limit_reached",
+            selected_weeks,
+            selected_records,
+        )
+
+    from .freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    filtered_inventory = tuple(
+        item
+        for item in inventory_tickets
+        if isinstance(item, FreshdeskTicketMetadata)
+        and item.created_at >= _utc_iso(updated_since_utc)
+        and _cohort_week(item.created_at) in selected_weeks
+    )
+    fingerprint = inventory_fingerprint(tuple(inventory_tickets))
+    resume_is_usable = coverage_checkpoint is not None and (
+        coverage_checkpoint.source_start_week == source_start_week
+        and coverage_checkpoint.inventory_fingerprint == fingerprint
+        and coverage_checkpoint.target_weeks == tuple(selected_weeks)
+    )
+    resume_records = coverage_checkpoint.records if resume_is_usable else ()
+    resume_week = coverage_checkpoint.active_week if resume_is_usable else None
+    resume_index = coverage_checkpoint.next_ticket_index if resume_is_usable else 0
+    completed_from_checkpoint = (
+        coverage_checkpoint.completed_weeks if resume_is_usable else ()
+    )
+    checkpoint_as_of = _utc_iso(datetime.now(timezone.utc))
+    checkpoint_fetched_weeks = {
+        week: checkpoint_as_of for week in completed_from_checkpoint
+    }
+    checkpoint_records = tuple(resume_records)
+    existing_candidates = tuple(
+        cache
+        for cache in (
+            published,
+            EntryCoverageCache(
+                fetched_weeks=checkpoint_fetched_weeks,
+                records=checkpoint_records,
+            ),
+        )
+        if cache is not None
+    )
+    existing = max(
+        existing_candidates,
+        key=lambda cache: (cache.fetched_at or "", len(cache.fetched_weeks), len(cache.records)),
+        default=None,
+    )
+    progress_state = {
+        "week": resume_week or (selected_weeks[0] if selected_weeks else None),
+        "index": resume_index,
+    }
+    last_checkpoint_write = monotonic_time.monotonic()
+
+    def write_coverage_state(cache, week: str | None, index: int, *, force: bool = False) -> None:
+        nonlocal last_checkpoint_write
+        now = monotonic_time.monotonic()
+        if not force and index % 25 != 0 and now - last_checkpoint_write < 30:
+            return
+        completed = tuple(sorted(set(cache.fetched_weeks).intersection(selected_weeks)))
+        active = None if week in completed else week
+        progress_state["week"] = active
+        progress_state["index"] = 0 if active is None else index
+        try:
+            write_coverage_checkpoint(
+                checkpoint_path,
+                CoverageCheckpoint(
+                    source_start_week=source_start_week,
+                    inventory_fingerprint=fingerprint,
+                    target_weeks=tuple(selected_weeks),
+                    active_week=progress_state["week"],
+                    next_ticket_index=progress_state["index"],
+                    completed_weeks=completed,
+                    records=cache.records,
+                ),
+            )
+        except EntryCoverageCheckpointError as error:
+            raise FreshdeskEntryCoverageError(
+                "Freshdesk coverage checkpoint could not be written"
+            ) from error
+        last_checkpoint_write = now
+
+    try:
+        with FreshdeskClient(_freshdesk_settings()) as client:
+            result = fetch_entry_coverage_population(
+                client,
+                filtered_inventory,
+                langfuse_tickets,
+                selected_weeks,
+                config,
+                existing=existing,
+                as_of=datetime.now(VIETNAM_TIMEZONE),
+                max_workers=args.max_workers,
+                max_duration_seconds=max(0.1, deadline - monotonic_time.monotonic()),
+                on_week_complete=lambda cache: write_coverage_state(
+                    cache,
+                    None,
+                    0,
+                    force=True,
+                ),
+                resume_records=resume_records,
+                resume_week=resume_week,
+                resume_index=resume_index,
+                on_progress=lambda cache, week, index: write_coverage_state(
+                    cache,
+                    week,
+                    index,
+                ),
+            )
+    except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+        try:
+            checkpoint_after_interrupt = load_coverage_checkpoint(checkpoint_path)
+        except EntryCoverageCheckpointError as error:
+            raise FreshdeskEntryCoverageError(
+                "Freshdesk coverage checkpoint is invalid"
+            ) from error
+        if checkpoint_after_interrupt is None:
+            fallback_cache = existing or EntryCoverageCache(
+                fetched_weeks={}, records=()
+            )
+            completed_after_interrupt: tuple[str, ...] = ()
+        else:
+            fallback_cache = EntryCoverageCache(
+                fetched_weeks={
+                    week: checkpoint_as_of
+                    for week in checkpoint_after_interrupt.completed_weeks
+                },
+                records=checkpoint_after_interrupt.records,
+            )
+            completed_after_interrupt = checkpoint_after_interrupt.completed_weeks
+        result = IncrementalEntryCoverageResult(
+            cache=fallback_cache,
+            completed_weeks=completed_after_interrupt,
+            complete=False,
+        )
+    if not result.complete:
+        write_coverage_state(
+            result.cache,
+            progress_state["week"],
+            int(progress_state["index"]),
+            force=True,
+        )
+    if result.complete:
+        try:
+            write_entry_coverage_cache(
+                runtime_directory / "entry_coverage_cache.json",
+                result.cache,
+            )
+            inventory_checkpoint_path.unlink(missing_ok=True)
+            checkpoint_path.unlink(missing_ok=True)
+        except (EntryCoverageCacheError, OSError) as error:
+            raise FreshdeskEntryCoverageError(
+                "Freshdesk entry coverage cache could not be published"
+            ) from error
+
+    selected_records = tuple(
+        item for item in result.cache.records if item.cohort_week in selected_weeks
+    )
+    return _entry_coverage_command_result(
+        "complete" if result.complete else "duration_limit_reached",
+        selected_weeks,
+        selected_records,
+        fetched_weeks=result.cache.fetched_weeks,
+    )
+
+
+def _entry_coverage_command_result(
+    status: str,
+    selected_weeks: Sequence[str],
+    selected_records: Sequence[object],
+    *,
+    fetched_weeks: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    counts = Counter(getattr(item, "status", "") for item in selected_records)
+    return {
+        "status": status,
+        "weeks_fetched": sum(
+            week in (fetched_weeks or {}) for week in selected_weeks
+        ),
+        "freshdesk_ticket_count": len(selected_records),
+        "ai_replied_only_count": counts["ai_replied_only"],
+        "ai_replied_then_transferred_count": counts["ai_replied_then_transferred"],
+        "transferred_without_ai_reply_count": counts["transferred_without_ai_reply"],
+        "invoked_no_result_count": counts["invoked_no_result"],
+        "not_observed_invoked_count": counts["not_observed_invoked"],
+        "not_observed_human_replied_count": sum(
+            getattr(item, "status", None) == "not_observed_invoked"
+            and getattr(item, "human_replied", None) is True
+            for item in selected_records
+        ),
+        "not_observed_no_human_reply_count": sum(
+            getattr(item, "status", None) == "not_observed_invoked"
+            and getattr(item, "human_replied", None) is False
+            for item in selected_records
+        ),
+        "unresolved_count": counts["unresolved"],
+    }
+
+
+def _run_fetch_csat_command(args: argparse.Namespace) -> dict[str, object]:
+    from .cohort import VIETNAM_TIMEZONE
+    from .csat_cache import CSATCacheError, load_csat_cache, write_csat_cache
+    from .freshdesk_csat import (
+        FreshdeskCSATError,
+        FreshdeskClient,
+        fetch_csat_population,
+        load_agent_config,
+    )
+
+    runtime_directory = Path(args.runtime_dir)
+    checkpoint_path = (
+        runtime_directory.parent
+        / "artifacts"
+        / "freshdesk_csat"
+        / "checkpoint.json"
+    )
+    population = _csat_population(runtime_directory, args.weeks)
+    try:
+        config = load_agent_config(FRESHDESK_AGENT_CONFIG_PATH)
+        published = load_csat_cache(runtime_directory / "csat_cache.json")
+        checkpoint = load_csat_cache(checkpoint_path)
+    except (CSATCacheError, OSError) as error:
+        raise FreshdeskCSATError("Freshdesk CSAT private state is invalid") from error
+    candidates = tuple(
+        cache for cache in (published, checkpoint) if cache is not None
+    )
+    existing = max(
+        candidates,
+        key=lambda cache: (
+            cache.fetched_at or "",
+            len(cache.fetched_weeks),
+            len(cache.responses),
+        ),
+        default=None,
+    )
+
+    def write_checkpoint(cache) -> None:
+        try:
+            write_csat_cache(checkpoint_path, cache)
+        except CSATCacheError as error:
+            raise FreshdeskCSATError(
+                "Freshdesk CSAT checkpoint could not be written"
+            ) from error
+
+    as_of = datetime.now(VIETNAM_TIMEZONE)
+    with FreshdeskClient(_freshdesk_settings()) as client:
+        result = fetch_csat_population(
+            client,
+            population,
+            config,
+            existing=existing,
+            as_of=as_of,
+            since_week=args.since_week,
+            max_workers=args.max_workers,
+            max_duration_seconds=args.max_duration,
+            on_week_complete=write_checkpoint,
+        )
+    if result.complete:
+        try:
+            write_csat_cache(runtime_directory / "csat_cache.json", result.cache)
+        except CSATCacheError as error:
+            raise FreshdeskCSATError("Freshdesk CSAT cache could not be published") from error
+        try:
+            checkpoint_path.unlink(missing_ok=True)
+        except OSError as error:
+            raise FreshdeskCSATError(
+                "Freshdesk CSAT checkpoint could not be cleared"
+            ) from error
+    stats = result.cache.fetch_stats
+    return {
+        "status": "complete" if result.complete else "duration_limit_reached",
+        "weeks_fetched": len(result.completed_weeks),
+        "included_bot_response_count": stats.included_bot_response_count,
+        "excluded_other_agent_response_count": (
+            stats.excluded_other_agent_response_count
+        ),
+        "excluded_null_agent_response_count": stats.excluded_null_agent_response_count,
+    }
+
+
+def _run_discover_agents_command(args: argparse.Namespace) -> dict[str, object]:
+    from .cohort import VIETNAM_TIMEZONE
+    from .freshdesk_csat import (
+        FreshdeskAgentConfig,
+        FreshdeskCSATError,
+        FreshdeskClient,
+        fetch_csat_population,
+        resolve_exact_agent_id,
+        write_approved_agent_config,
+    )
+
+    population = _csat_population(Path(args.runtime_dir), args.weeks)
+    settings = _freshdesk_settings()
+    with FreshdeskClient(settings) as client:
+        bot_agent_id = resolve_exact_agent_id(
+            client.get_ticket_fields(),
+            "Admin CS ZaloPay",
+        )
+        survey_scales = {
+            "43000076179": {
+                "positive": (103,),
+                "neutral": (100,),
+                "negative": (-103,),
+            }
+        }
+        candidate = FreshdeskAgentConfig(
+            bot_agent_ids=frozenset({bot_agent_id}),
+            survey_scales=survey_scales,
+        )
+        result = fetch_csat_population(
+            client,
+            population,
+            candidate,
+            existing=None,
+            as_of=datetime.now(VIETNAM_TIMEZONE),
+            max_workers=args.max_workers,
+            max_duration_seconds=args.max_duration,
+        )
+    if not result.complete:
+        raise FreshdeskCSATError("Freshdesk agent discovery reached its duration limit")
+    write_approved_agent_config(
+        FRESHDESK_AGENT_CONFIG_PATH,
+        bot_agent_id=bot_agent_id,
+        approved_at=date.today(),
+        survey_scales=survey_scales,
+    )
+    stats = result.cache.fetch_stats
+    return {
+        "status": "approved_config_written",
+        "exact_name_match_count": 1,
+        "ticket_count": sum(len(items) for items in population.values()),
+        "all_response_count": stats.all_response_count,
+        "known_bot_response_count": stats.included_bot_response_count,
+        "other_agent_response_count": stats.excluded_other_agent_response_count,
+        "null_agent_response_count": stats.excluded_null_agent_response_count,
+    }
+
+
+def _run_reconcile_freshdesk_outcomes_command(
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    from .cohort import VIETNAM_TIMEZONE
+    from .freshdesk_csat import FreshdeskClient
+    from .outcome_reconciliation import (
+        OutcomeReconciliationError,
+        fetch_reconciliation_population,
+        load_reconciliation_agent_config,
+    )
+    from .reconciliation_cache import (
+        ReconciliationCacheError,
+        load_reconciliation_cache,
+        write_reconciliation_cache,
+    )
+
+    runtime_directory = Path(args.runtime_dir)
+    checkpoint_path = (
+        runtime_directory.parent
+        / "artifacts"
+        / "freshdesk_reconciliation"
+        / "checkpoint.json"
+    )
+    population = _reconciliation_population(runtime_directory, args.weeks)
+    try:
+        config = load_reconciliation_agent_config(
+            FRESHDESK_RECONCILIATION_CONFIG_PATH,
+            source_path=FRESHDESK_RECONCILIATION_SOURCE_PATH,
+        )
+        published = load_reconciliation_cache(
+            runtime_directory / "outcome_reconciliation_cache.json"
+        )
+        checkpoint = load_reconciliation_cache(checkpoint_path)
+    except (ReconciliationCacheError, OSError) as error:
+        raise OutcomeReconciliationError(
+            "Freshdesk reconciliation private state is invalid"
+        ) from error
+    candidates = tuple(
+        cache for cache in (published, checkpoint) if cache is not None
+    )
+    existing = max(
+        candidates,
+        key=lambda cache: (
+            cache.fetched_at or "",
+            len(cache.fetched_weeks),
+            len(cache.records),
+        ),
+        default=None,
+    )
+
+    def write_checkpoint(cache) -> None:
+        try:
+            write_reconciliation_cache(checkpoint_path, cache)
+        except ReconciliationCacheError as error:
+            raise OutcomeReconciliationError(
+                "Freshdesk reconciliation checkpoint could not be written"
+            ) from error
+
+    with FreshdeskClient(_freshdesk_settings()) as client:
+        result = fetch_reconciliation_population(
+            client,
+            population,
+            config,
+            existing=existing,
+            as_of=datetime.now(VIETNAM_TIMEZONE),
+            max_workers=args.max_workers,
+            max_duration_seconds=args.max_duration,
+            on_week_complete=write_checkpoint,
+        )
+    if result.complete:
+        try:
+            write_reconciliation_cache(
+                runtime_directory / "outcome_reconciliation_cache.json",
+                result.cache,
+            )
+        except ReconciliationCacheError as error:
+            raise OutcomeReconciliationError(
+                "Freshdesk reconciliation cache could not be published"
+            ) from error
+        try:
+            checkpoint_path.unlink(missing_ok=True)
+        except OSError as error:
+            raise OutcomeReconciliationError(
+                "Freshdesk reconciliation checkpoint could not be cleared"
+            ) from error
+    records = result.cache.records
+    checked = sum(item.human_replied_after_ai is not None for item in records)
+    human_replied = sum(item.human_replied_after_ai is True for item in records)
+    unresolved = sum(item.human_replied_after_ai is None for item in records)
+    return {
+        "status": "complete" if result.complete else "duration_limit_reached",
+        "weeks_fetched": len(result.completed_weeks),
+        "checked_ticket_count": checked,
+        "human_replied_after_ai": human_replied,
+        "unresolved_ticket_count": unresolved,
+    }
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     try:
+        if args.command in {
+            "discover-agents",
+            "fetch-csat",
+            "reconcile-freshdesk-outcomes",
+            "fetch-freshdesk-entry-coverage",
+        }:
+            from .freshdesk_csat import FreshdeskCSATError
+            from .freshdesk_entry_coverage import FreshdeskEntryCoverageError
+            from .outcome_reconciliation import OutcomeReconciliationError
+
+            try:
+                if args.command == "discover-agents":
+                    result = _run_discover_agents_command(args)
+                elif args.command == "fetch-csat":
+                    result = _run_fetch_csat_command(args)
+                elif args.command == "reconcile-freshdesk-outcomes":
+                    result = _run_reconcile_freshdesk_outcomes_command(args)
+                else:
+                    result = _run_fetch_freshdesk_entry_coverage_command(args)
+            except (
+                FreshdeskCSATError,
+                FreshdeskEntryCoverageError,
+                OutcomeReconciliationError,
+            ) as error:
+                print(str(error), file=sys.stderr)
+                return 2
+            print(json.dumps(result, sort_keys=True))
+            return 0
         eval_label_set = (
             load_label_set(args.labels)
             if args.command == "eval-labels"
@@ -1027,11 +1787,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         discovery_session_ids = (
             load_discovery_session_ids(REOPEN_DISCOVERY_PATH)
             if args.command == "sample-golden"
-            else None
-        )
-        freshdesk_api_key = (
-            _freshdesk_api_key_from_environment()
-            if args.command == "backfill-dimensions"
             else None
         )
         settings = load_environment()
@@ -1057,25 +1812,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     discovery_session_ids=discovery_session_ids,
                 )
             elif args.command == "verify-dimensions":
-                run_dimension_verification(
+                report = run_dimension_verification(
                     as_of=args.as_of or datetime.now(timezone.utc),
                     weeks=args.weeks,
                     include_current_wtd=args.include_current_wtd,
                     client=client,
                 )
-            elif args.command == "backfill-dimensions":
-                assert freshdesk_api_key is not None
-                with FreshdeskDimensionClient(
-                    FRESHDESK_BASE_URL,
-                    freshdesk_api_key,
-                ) as freshdesk_client:
-                    run_dimension_backfill(
-                        as_of=args.as_of or datetime.now(timezone.utc),
-                        weeks=args.weeks,
-                        include_current_wtd=args.include_current_wtd,
-                        client=client,
-                        freshdesk_client=freshdesk_client,
-                    )
+                if args.require_p0 and report.get("p0_pass") is not True:
+                    return 1
             else:
                 config = _config_from_args(args)
                 if args.command == "inspect-session":
@@ -1095,10 +1839,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         GoldenEvaluationError,
         GoldenSampleError,
         LabelConfigError,
-        DimensionBackfillStoreError,
-        FreshdeskDimensionAPIError,
-        FreshdeskDimensionResponseError,
-        FreshdeskFieldContractError,
         LangfuseAPIError,
         PIIApprovalRequiredError,
         PIIReviewError,

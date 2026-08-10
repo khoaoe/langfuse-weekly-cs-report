@@ -1,7 +1,10 @@
 {
   "version": "v2",
   "transfer": {
-    "semantic_text": "Xin lỗi vì sự bất tiện. Yêu cầu của Quý Khách đã được chuyển đến bộ phận Chăm sóc Khách hàng.Vui lòng chờ trong giây lát, nhân viên sẽ sớm liên hệ hỗ trợ."
+    "semantic_texts": [
+      "Xin lỗi vì sự bất tiện. Yêu cầu của Quý Khách đã được chuyển đến bộ phận Chăm sóc Khách hàng.Vui lòng chờ trong giây lát, nhân viên sẽ sớm liên hệ hỗ trợ.",
+      "Xin lỗi vì sự bất tiện. Yêu cầu của bạn đã được chuyển đến bộ phận phụ trách để kiểm tra và xử lý. Vui lòng chờ trong giây lát, Zalopay sẽ phản hồi bạn trong thời gian sớm nhất."
+    ]
   },
   "dimensions": {
     "issue_category": {
@@ -67,11 +70,16 @@
     "value_fields": ["guardrail", "rule"],
     "violation_rules": [
       "cs_escalation",
+      "empty_input",
       "empty_message_marker",
       "max_replies_exceeded",
       "missing_transaction_id",
+      "off_topic_llm",
+      "prompt_injection",
       "prompt_injection_llm",
-      "off_topic"
+      "off_topic",
+      "system_prompt_leak",
+      "tone_check_error"
     ],
     "compliant_rules": ["input_compliant", "output_compliant"]
   },

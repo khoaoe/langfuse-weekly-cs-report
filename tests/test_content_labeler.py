@@ -85,9 +85,40 @@ def _session(session_id: str = "session-1") -> ReopenSession:
     )
 
 
-def test_empty_production_label_file_fails_before_any_client_or_network():
+def test_empty_label_file_fails_before_any_client_or_network(tmp_path):
+    label_path = tmp_path / "reopen_labels.v1.json"
+    label_path.write_text(
+        json.dumps(
+            {
+                "version": "v1",
+                "created_at": "2026-07-31",
+                "labels": [],
+                "abstain_label": "other",
+                "requires_quote": ["other"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     with pytest.raises(LabelConfigError, match="reopen label list is empty"):
-        load_label_set(PROJECT_ROOT / "config" / "reopen_labels.v1.json")
+        load_label_set(label_path)
+
+
+def test_production_label_file_loads_the_po_approved_v1_taxonomy():
+    labels = load_label_set(PROJECT_ROOT / "config" / "reopen_labels.v1.json")
+
+    assert labels.version == "v1"
+    assert tuple(label.key for label in labels.labels) == (
+        "fraud_or_unauthorized",
+        "wrong_transfer_recovery",
+        "account_or_verification_blocked",
+        "refund_or_reversal_pending",
+        "recipient_not_credited",
+        "transaction_failed_or_debited",
+        "status_or_next_step_unclear",
+    )
+    assert labels.abstain_label == "other"
+    assert labels.requires_quote == ("other",)
 
 
 def test_labeler_uses_exact_label_enum_only_three_masked_segments_and_drops_quote_for_non_other(

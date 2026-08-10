@@ -12,10 +12,13 @@ from weekly_cs_report.web import WebSettings, create_app
 
 
 PAGE = resources.files("weekly_cs_report").joinpath("static/index.html")
+LEGACY_PAGE = resources.files("weekly_cs_report").joinpath("static/legacy/index.html")
 REQUIRED_IDS = {
     "statusChip", "liveStatus", "updatedAt", "refreshButton", "weekDefinitionToggle",
     "sectionNav", "resetFiltersButton", "howToReadButton", "howToReadPanel",
     "dqBadge", "dqScoreValue", "dynamicTitle", "narrativeSummary", "activeFilterChips",
+    "weeklyFlow", "weeklyFlowHeading", "weeklyFlowCaption", "weeklyFlowChart",
+    "weeklyFlowMobileNote", "weeklyFlowLegend",
     "kpiGrid", "weeklyRows", "weeklyCopyButton", "weeklyCsvButton",
     "weeklyDefinitionsToggle", "weeklyDefinitionsPanel", "trendChart",
     "trendEmpty", "trendCaption", "segmentTabs", "segmentList",
@@ -70,13 +73,18 @@ def page_text() -> str:
     return PAGE.read_text(encoding="utf-8")
 
 
+def test_legacy_rollback_entrypoints_are_byte_identical():
+    assert LEGACY_PAGE.is_file()
+    assert PAGE.read_bytes() == LEGACY_PAGE.read_bytes()
+
+
 def run(page: str, scenario: str) -> dict[str, object]:
     script = re.search(r"<script>(.*?)</script>", page, re.S)
     assert script
     source = script.group(1)
     registration = 'document.addEventListener("DOMContentLoaded", initialise);'
     assert registration in source
-    hooks = "globalThis.__test={applyEnvelope,renderDashboard,renderNarrative,renderKpis,renderWeeklyTable,weeklyValues,dateRange,setWeekDefinition,buildWeeklyExport,renderTransferReasons,renderTrend,renderSegments,renderDiagnostic,renderRules,renderQuality,renderReopenReason,postRefresh,setWeekFilter,setSegmentDimension,setSegmentFilter,toggleSegmentExpansion,updateFilters,buildTicketQuery,renderTickets,renderTicketColumnOptions,csvCell,exportTicketsCsv,syncStickyOffset:typeof syncStickyOffset===\"function\"?syncStickyOffset:null,setSnapshot(value){state.snapshot=value},setTicketPage(value){state.ticketPage=value},getTicketPage(){return state.ticketPage},setTicketColumns(value){state.ticketColumns=value},setTicketSort(field,direction){state.ticketSort={field,direction}}};"
+    hooks = "globalThis.__test={applyEnvelope,renderDashboard,renderNarrative,renderKpis,renderWeeklyTable,weeklyValues,dateRange,setWeekDefinition,buildWeeklyExport,renderTransferReasons,renderWeeklyFlow:typeof renderWeeklyFlow===\"function\"?renderWeeklyFlow:null,renderTrend,renderSegments,renderDiagnostic,renderRules,renderQuality,renderReopenReason,postRefresh,setWeekFilter,setSegmentDimension,setSegmentFilter,toggleSegmentExpansion,updateFilters,buildTicketQuery,renderTickets,renderTicketColumnOptions,csvCell,exportTicketsCsv,syncStickyOffset:typeof syncStickyOffset===\"function\"?syncStickyOffset:null,setSnapshot(value){state.snapshot=value},setTicketPage(value){state.ticketPage=value},getTicketPage(){return state.ticketPage},setTicketColumns(value){state.ticketColumns=value},setTicketSort(field,direction){state.ticketSort={field,direction}}};"
     source = source.replace(registration, hooks + registration, 1)
     result = subprocess.run(["node", "-e", HARNESS + source + scenario], capture_output=True, text=True, timeout=10)
     assert result.returncode == 0, result.stderr
@@ -142,6 +150,39 @@ def test_p4_uses_schema_views_transfer_contract_and_responsive_scroller():
     assert "line-reopen" in page and 'setAttribute("tabindex","0")' in page
     assert 'query.set("gt4_turn","true")' in page and 'query.set("transferred","false")' in page
     assert "Xem ${number(rule.gt4_turn_without_cs)} ticket" in page
+
+
+def test_default_cohort_and_internal_dimension_labels_are_source_faithful():
+    page = page_text()
+    cohort = re.search(r'id="weekDefinitionToggle".*?</div>', page)
+    assert cohort
+    assert cohort.group(0).index('data-view="mon_fri"') < cohort.group(0).index(
+        'data-view="mon_sun"'
+    )
+    assert 'data-view="mon_fri" aria-pressed="true">T2–T6</button>' in page
+    assert 'data-view="mon_sun" aria-pressed="false">T2–CN</button>' in page
+    assert 'viewName:"mon_fri"' in page
+    assert "<h2>So sánh theo thuộc tính ticket</h2>" in page
+    assert (
+        "Phân nhóm trực tiếp theo Category, App, Product Code hoặc Intent ghi nhận "
+        "trong dữ liệu nguồn; không tự gộp hoặc diễn giải lại."
+    ) in page
+    assert ">Category</button>" in page
+    assert ">Product Code</button>" in page
+    assert "Nhóm vấn đề" not in page
+    assert "Nghiệp vụ" not in page
+
+
+def test_partial_enrichment_copy_names_only_dimensions_affected_by_enrichment():
+    observed = run(page_text(), r"""
+const view={totals:{eligible_ticket_count:1},ai_first:{count:1,rate:1},reopen:{lifetime:{numerator:0,denominator:1}},rule_gt4:{},weekly:[{cohort_week:"2026-07-20",cohort_status:"complete",has_data:true,total_tickets:1,ai_first_count:1,ai_first_rate:1,reopen_lifetime_rate:0,gt4_turn_without_cs:0}],transfer_reasons:{}};
+globalThis.__test.renderNarrative(view,{enrichment_status:"partial"});
+process.stdout.write(JSON.stringify({text:document.getElementById("narrativeSummary").textContent}));
+""")
+    assert (
+        "Intent, Skill, Guardrail và Step result có thể chưa đầy đủ"
+        in observed["text"]
+    )
 
 
 def test_first_table_column_is_pinned_and_scroll_has_a_visible_hint():
@@ -223,14 +264,14 @@ process.stdout.write(JSON.stringify({focused:document.activeElement===main}));
     assert observed == {"focused": True}
 
 
-def test_p5_explorer_declares_exact_22_fields_filters_sort_columns_and_1000_row_export():
+def test_p5_explorer_declares_exact_21_fields_filters_sort_columns_and_1000_row_export():
     page = page_text()
     expected_fields = (
         "ticket_id", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
         "ai_first", "transferred", "reopen_lifetime", "reopen_within_7d",
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
-        "product_code", "skill", "intent", "tpe_code", "tpe_status",
-        "guardrail_rule", "escalation_guard_blocked", "data_quality",
+        "product_code", "skill", "intent", "tpe_code", "guardrail_rule",
+        "escalation_guard_blocked", "data_quality",
     )
     declaration = re.search(r"const ticketFields=\[(.*?)\];", page, re.S)
     assert declaration
@@ -413,9 +454,9 @@ globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-
  mon_sun:{...base,weekly:[week("pending")]},
  mon_fri:{...base,weekly:[week("unavailable")]}
 }}});
-const monSun=document.getElementById("reopenReasonStatus").textContent;
-globalThis.__test.setWeekDefinition("mon_fri");
 const monFri=document.getElementById("reopenReasonStatus").textContent;
+globalThis.__test.setWeekDefinition("mon_sun");
+const monSun=document.getElementById("reopenReasonStatus").textContent;
 process.stdout.write(JSON.stringify({monSun,monFri}));
 """)
     assert "Đang chờ taxonomy/đánh giá" in observed["monSun"]
@@ -457,8 +498,8 @@ globalThis.__test.setSegmentFilter("issue_category","Thanh toán");
 process.stdout.write(JSON.stringify({title:document.getElementById("dynamicTitle").textContent,chip:document.getElementById("activeFilterChips").textContent}));
 """)
     assert observed == {
-        "title": "Toàn kỳ · cohort T2–CN · 13 tuần · 130 ticket",
-        "chip": "Ticket Explorer · Nhóm vấn đề: Thanh toán×",
+        "title": "Toàn kỳ · cohort T2–T6 · 13 tuần · 130 ticket",
+        "chip": "Ticket Explorer · Category: Thanh toán×",
     }
 
 
@@ -566,7 +607,7 @@ process.stdout.write(JSON.stringify({initial,open,closed}));
         ">4 turn không CS", "Chưa phân loại",
     ]
     assert observed["open"]["definitions"] == [
-        "Tuần cohort, neo thứ Hai; chọn T2–CN hoặc T2–T6.",
+        "Tuần cohort, neo thứ Hai; chọn T2–T6 hoặc T2–CN.",
         "Số ticket đủ điều kiện, không tính direct chat.",
         "AI xử lý trọn cộng AI trả lời rồi chuyển CS.",
         "AI First chia tổng ticket.",
@@ -677,16 +718,35 @@ process.stdout.write(JSON.stringify({text:cell.textContent,title:cell.getAttribu
     assert observed == {"text": "—", "title": "Cần 7 ngày sau tuần cohort"}
 
 
-def test_transfer_reason_contract_uses_rule_tpe_object_and_snapshot_unmapped_codes():
+def test_transfer_reason_contract_uses_exact_source_step_result_and_measured_missing_coverage():
     observed = run(page_text(), r"""
-globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-29T01:00:00Z",coverage:{},data_quality:{},unmapped_tpe_codes:[{code:"-217",count:3}],views:{mon_sun:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{},transfer_reasons:{observed_transfer_denominator:7,tpe:[{code:"-383",status:"Đang xử lý",case:2,count:4}],guardrail:[{rule:"off_topic",count:2}],escalation_guard_blocked:{count:1}}},mon_fri:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{}}}}});
-setImmediate(()=>process.stdout.write(JSON.stringify({tpe:document.getElementById("tpeDistribution").textContent,guardrail:document.getElementById("guardrailDistribution").textContent,escalation:document.getElementById("escalationPanel").textContent,unmapped:document.getElementById("unmappedTpePanel").textContent})));
+globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-29T01:00:00Z",coverage:{},data_quality:{},unmapped_tpe_codes:[{code:"-217",count:3}],views:{mon_sun:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{}},mon_fri:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{},transfer_reasons:{observed_transfer_denominator:7,step_result_missing:{count:1,denominator:7},tpe:[{transstatus:"-365",step_result:"-1013",count:4},{transstatus:"-365",step_result:null,count:1}],guardrail:[{rule:"off_topic",count:2}],escalation_guard_blocked:{count:1}}}}}});
+setImmediate(()=>process.stdout.write(JSON.stringify({tpe:document.getElementById("tpeDistribution").textContent,guardrail:document.getElementById("guardrailDistribution").textContent,escalation:document.getElementById("escalationPanel").textContent,coverage:document.getElementById("unmappedTpePanel").textContent})));
 """)
-    assert "-383 · Đang xử lý · case 2" in observed["tpe"]
+    assert "Transstatus -365 · Step result -1013" in observed["tpe"]
+    assert "Transstatus -365 · Không có Step result" in observed["tpe"]
+    assert "case" not in observed["tpe"].lower()
+    assert "Đang xử lý" not in observed["tpe"]
     assert "off_topic" in observed["guardrail"]
     assert "Mẫu số ticket đã chuyển CS: 7" in observed["guardrail"]
     assert "Ticket đã ở CS" in observed["escalation"]
-    assert "-217" in observed["unmapped"]
+    assert "6/7 ticket chuyển CS" in observed["coverage"]
+    assert "1 ticket (14,3%) không có Step result" in observed["coverage"]
+    assert "-217" not in observed["coverage"]
+    assert "taxonomy" not in observed["coverage"].lower()
+
+
+def test_legacy_tpe_renderer_does_not_read_deprecated_case_mapping_or_status_fields():
+    page = page_text()
+    for forbidden in (
+        "item.case",
+        "item.mapped",
+        "item.status",
+        "unmapped_tpe_codes",
+        "mã chưa có trong taxonomy",
+        "Mã TPE chưa có taxonomy",
+    ):
+        assert forbidden not in page
 
 
 def test_dq_score_uses_spec_weighted_formula_not_a_coverage_average():
@@ -696,6 +756,17 @@ Date.now=()=>1000;globalThis.__test.renderQuality({generated_at:"1970-01-01T00:0
     assert observed["score"] == "55%"
     assert observed["bullet"] == 55
     assert "dq-bad" in observed["badge"]
+
+
+def test_quality_panel_does_not_invent_product_code_coverage_absent_from_backend_schema():
+    observed = run(page_text(), r"""
+Date.now=()=>1000;globalThis.__test.renderQuality({generated_at:"1970-01-01T00:00:01Z",coverage:{issue_category:.8,tpe:.7,skill:.6},gate_status:{structural_invalid_rate:0},data_quality:{}});
+process.stdout.write(JSON.stringify({quality:document.getElementById("gateGrid").textContent}));
+""")
+    assert "Coverage Category" in observed["quality"]
+    assert "Coverage Transstatus" in observed["quality"]
+    assert "Coverage Product Code" not in observed["quality"]
+    assert "Coverage Skill" not in observed["quality"]
 
 
 def test_new_snapshot_generation_resets_ticket_pagination_to_one():
@@ -757,7 +828,7 @@ def test_segment_tab_filter_and_top12_expansion_are_separate_and_show_transfer_r
     observed = run(page_text(), r"""
 const source={};for(let i=0;i<13;i++)source["segment"+i]={total:13-i,ai_first:6,transferred:3};
 globalThis.fetch=async()=>({ok:true,json:async()=>({items:[],page:1,page_size:50,total:0})});
-globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-29T01:00:00Z",coverage:{},data_quality:{},views:{mon_sun:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{issue_category:source,app:{}},rule_gt4:{}},mon_fri:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{}}}}});
+globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-29T01:00:00Z",coverage:{},data_quality:{},views:{mon_sun:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{},rule_gt4:{}},mon_fri:{totals:{},ai_first:{},reopen:{lifetime:{}},weekly:[],segments:{issue_category:source,app:{}},rule_gt4:{}}}}});
 globalThis.__test.setSegmentDimension("issue_category");globalThis.__test.setSegmentFilter("app","segment0");globalThis.__test.toggleSegmentExpansion();
 process.stdout.write(JSON.stringify({list:document.getElementById("segmentList").textContent,chips:document.getElementById("activeFilterChips").textContent}));
 """)
@@ -770,7 +841,7 @@ def test_segment_aggregate_tail_collapses_metrics_and_expands_without_duplicate(
     observed = run(page_text(), r"""
 const source=Object.fromEntries(Array.from({length:14},(_,index)=>[`segment${index}`,{total:100-index,ai_first:10+index,transferred:2+index,reopen:index}]));
 const view={segments:{issue_category:source}};
-globalThis.__test.setSnapshot({views:{mon_sun:view}});
+globalThis.__test.setSnapshot({views:{mon_fri:view}});
 globalThis.__test.setSegmentDimension("issue_category");
 globalThis.__test.renderSegments(view);
 const collapsedRows=document.getElementById("segmentList").children.filter(node=>node.className==="rank-row");
@@ -800,7 +871,7 @@ globalThis.fetch=async()=>({ok:true,json:async()=>({status:"ready",snapshot:null
 document.dispatchEvent({type:"DOMContentLoaded"});
 const source=Object.fromEntries(Array.from({length:14},(_,index)=>[`segment${index}`,{total:100-index,ai_first:10+index,transferred:2+index,reopen:index}]));
 const view={segments:{issue_category:source}};
-globalThis.__test.setSnapshot({views:{mon_sun:view}});
+globalThis.__test.setSnapshot({views:{mon_fri:view}});
 globalThis.__test.setSegmentDimension("issue_category");
 const toggle=document.getElementById("segmentExpansionToggle"),list=document.getElementById("segmentList");
 const initial={hidden:toggle.hidden,expanded:toggle.getAttribute("aria-expanded"),text:toggle.textContent,tail:list.textContent.includes("segment13")};
@@ -825,8 +896,8 @@ globalThis.__test.renderRules(view);
 process.stdout.write(JSON.stringify({transfer:document.getElementById("transferScope").textContent,rule:document.getElementById("ruleScope").textContent}));
 """)
     assert observed == {
-        "transfer": "Phạm vi: Toàn kỳ · cohort T2–CN.",
-        "rule": "Phạm vi: Toàn kỳ · cohort T2–CN.",
+        "transfer": "Phạm vi: Toàn kỳ · cohort T2–T6.",
+        "rule": "Phạm vi: Toàn kỳ · cohort T2–T6.",
     }
 
 
@@ -842,9 +913,9 @@ globalThis.__test.applyEnvelope({status:"ready",snapshot:{generated_at:"2026-07-
 process.stdout.write(JSON.stringify({transfer:document.getElementById("transferScope").textContent,rule:document.getElementById("ruleScope").textContent,query:Object.fromEntries(globalThis.__test.buildTicketQuery())}));
 """)
     assert observed == {
-        "transfer": "Phạm vi: Toàn kỳ · cohort T2–CN.",
-        "rule": "Phạm vi: Toàn kỳ · cohort T2–CN.",
-        "query": {"page": "1", "page_size": "50", "week_definition": "mon_sun"},
+        "transfer": "Phạm vi: Toàn kỳ · cohort T2–T6.",
+        "rule": "Phạm vi: Toàn kỳ · cohort T2–T6.",
+        "query": {"page": "1", "page_size": "50", "week_definition": "mon_fri"},
     }
 
 
@@ -909,7 +980,172 @@ Date.now=()=>1000*60*16;globalThis.__test.renderQuality({generated_at:"1970-01-0
 """)
     assert "dq-warn" in observed["dq"]
     assert "dữ liệu cũ" in observed["quality"]
-    assert "-217" in observed["quality"]
+    assert "-217" not in observed["quality"]
+    assert "taxonomy" not in observed["quality"].lower()
+
+
+def test_weekly_flow_signature_has_safe_markup_and_responsive_fallback():
+    page = page_text()
+    parser = Parser(); parser.feed(page)
+    assert {
+        "weeklyFlow", "weeklyFlowHeading", "weeklyFlowCaption", "weeklyFlowChart",
+        "weeklyFlowMobileNote", "weeklyFlowLegend",
+    } <= parser.ids
+    assert re.search(
+        r'<svg id="weeklyFlowChart"[^>]*viewBox="0 0 1000 148"[^>]*font-size="11"'
+        r'[^>]*role="img"',
+        page,
+    )
+    fallback_rule = re.search(r"\.flow-mobile-note\{[^}]*display:none", page)
+    mobile_query = page.find("@media (max-width:768px)")
+    assert fallback_rule and fallback_rule.start() < mobile_query
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.flow-mobile-note\{[^}]*display:block",
+        page,
+        re.S,
+    )
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.flow-svg \.flow-copy,"
+        r"\.flow-svg \.return-arc[^}]*display:none",
+        page,
+        re.S,
+    )
+    assert page.count(".style.") == 1
+    assert not re.search(r"<[^>]+\sstyle=", page)
+
+
+def test_weekly_flow_encodes_all_four_outcomes_and_reopen_return_arc():
+    observed = run(page_text(), r"""
+const row={cohort_week:"2026-07-20",cohort_status:"complete",has_data:true,total_tickets:100,ai_first_count:80,ai_first_rate:.8,ai_end_to_end_count:47,ai_then_cs_count:33,direct_cs_count:15,unclassified_count:5,reopen_lifetime_numerator:16,reopen_lifetime_rate:.2};
+globalThis.__test.renderWeeklyFlow({weekly:[row]});
+const svg=document.getElementById("weeklyFlowChart");
+const rects=svg.children.filter(node=>node.tagName==="rect");
+const marker=svg.children.find(node=>node.getAttribute("class")==="flow-ai-marker");
+const markerLabel=svg.children.find(node=>node.getAttribute("class")==="flow-ai-label");
+const arc=svg.children.find(node=>node.getAttribute("class")==="return-arc");
+const arcLabel=svg.children.find(node=>node.getAttribute("class")==="return-label");
+process.stdout.write(JSON.stringify({
+  roles:rects.map(node=>node.getAttribute("data-outcome")),
+  widths:rects.map(node=>Number(node.getAttribute("width"))),
+  titles:rects.map(node=>node.textContent),
+  markerX:marker&&marker.getAttribute("x1"),
+  markerAnchor:markerLabel&&markerLabel.getAttribute("text-anchor"),
+  markerText:markerLabel&&markerLabel.textContent,
+  arc:arc&&arc.getAttribute("d"),
+  arcLabel:{x:arcLabel&&arcLabel.getAttribute("x"),y:arcLabel&&arcLabel.getAttribute("y"),text:arcLabel&&arcLabel.textContent},
+  aria:svg.getAttribute("aria-label"),
+  legend:document.getElementById("weeklyFlowLegend").textContent,
+  mobile:document.getElementById("weeklyFlowMobileNote").textContent
+}));
+""")
+    assert observed["roles"] == ["ai_end_to_end", "ai_then_cs", "direct_cs", "unclassified"]
+    assert observed["widths"] == [451.2, 316.8, 144, 48]
+    assert observed["markerX"] == "798"
+    assert observed["markerAnchor"] == "end"
+    assert observed["markerText"] == "AI First 80,0% · 80 ticket"
+    assert observed["arc"] == "M 397 64 C 397 14 150 14 30 34"
+    assert observed["arcLabel"] == {"x": "412", "y": "22", "text": "Reopen 20,0% · 16 ticket"}
+    for copy in (
+        "AI xử lý trọn 47,0% · 47 ticket",
+        "AI trả lời rồi chuyển CS 33,0% · 33 ticket",
+        "Chuyển CS ngay từ đầu 15,0% · 15 ticket",
+        "Chưa phân loại 5,0% · 5 ticket",
+    ):
+        assert copy in observed["titles"]
+        assert copy in observed["legend"]
+        assert copy in observed["aria"]
+    assert "AI First 80,0% · 80 ticket" in observed["mobile"]
+    assert "Reopen 20,0% · 16 ticket" in observed["mobile"]
+    assert "quay lại đầu dòng" in observed["mobile"]
+
+
+def test_weekly_flow_never_serializes_missing_reopen_as_zero():
+    observed = run(page_text(), r"""
+const wtd={cohort_week:"2026-07-20",cohort_status:"wtd",has_data:true,total_tickets:10,ai_first_count:8,ai_first_rate:.8,ai_end_to_end_count:5,ai_then_cs_count:3,direct_cs_count:1,unclassified_count:1,reopen_lifetime_numerator:0,reopen_lifetime_rate:null};
+globalThis.__test.renderWeeklyFlow({weekly:[wtd]});
+const svg=document.getElementById("weeklyFlowChart");
+const first={arc:svg.children.some(node=>node.getAttribute("class")==="return-arc"),aria:svg.getAttribute("aria-label"),legend:document.getElementById("weeklyFlowLegend").textContent,mobile:document.getElementById("weeklyFlowMobileNote").textContent};
+globalThis.__test.renderWeeklyFlow({weekly:[{cohort_week:"2026-07-13",has_data:false,total_tickets:0}]});
+const second={rects:svg.children.filter(node=>node.tagName==="rect").length,aria:svg.getAttribute("aria-label"),legend:document.getElementById("weeklyFlowLegend").textContent,mobile:document.getElementById("weeklyFlowMobileNote").textContent};
+process.stdout.write(JSON.stringify({first,second}));
+""")
+    assert observed["first"]["arc"] is False
+    assert "Reopen cần 7 ngày sau cohort" in observed["first"]["aria"]
+    assert "Reopen cần 7 ngày sau cohort" in observed["first"]["legend"]
+    assert "Reopen cần 7 ngày sau cohort" in observed["first"]["mobile"]
+    assert "Reopen 0" not in json.dumps(observed["first"], ensure_ascii=False)
+    assert observed["second"]["rects"] == 0
+    assert "Không có dữ liệu" in observed["second"]["aria"]
+    assert "Không có dữ liệu" in observed["second"]["legend"]
+    assert "Không có dữ liệu" in observed["second"]["mobile"]
+
+
+def test_weekly_flow_visual_system_uses_validated_palette_and_four_step_type_scale():
+    page = page_text()
+    style = re.search(r"<style>(.*?)</style>", page, re.S)
+    assert style
+    css = style.group(1)
+    for token in (
+        "--accent:#0068FF", "--accent-2:#6894D4", "--warn:#A45F00",
+        "--accent:#3B86E8", "--accent-2:#18A8A8", "--warn:#B07A2E",
+        "--on-accent:#FFF", "--on-accent-2:#111418",
+    ):
+        assert token in css
+    assert set(map(int, re.findall(r"font-size:(\d+)px", css))) == {12, 14, 18, 34}
+    assert "#5675A8" not in css
+    for role_rule in (".seg-e2e", ".seg-then", ".seg-direct", ".seg-unc"):
+        declaration = re.search(rf"{re.escape(role_rule)}\{{([^}}]+)\}}", css)
+        assert declaration and "color-mix" not in declaration.group(1)
+        assert "opacity" not in declaration.group(1)
+    assert ".flow-svg:hover .seg" not in css
+
+    def luminance(value: str) -> float:
+        rgb = [int(value[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+        channels = [item / 12.92 if item <= .04045 else ((item + .055) / 1.055) ** 2.4 for item in rgb]
+        return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2]
+
+    def ratio(first: str, second: str) -> float:
+        values = sorted((luminance(first), luminance(second)), reverse=True)
+        return (values[0] + .05) / (values[1] + .05)
+
+    assert ratio("#111418", "#6894D4") >= 4.5
+    assert ratio("#111418", "#18A8A8") >= 4.5
+
+
+def test_weekly_flow_mobile_layout_keeps_controls_and_data_scrollers_operable():
+    page = page_text()
+    assert re.search(
+        r"\.weekly-table-scroll\{[^}]*overflow-x:auto[^}]*overflow-y:auto"
+        r"[^}]*max-height:min\(70vh,560px\)",
+        page,
+    )
+    assert re.search(
+        r"\.explorer-table\{[^}]*overflow-x:auto[^}]*overflow-y:auto"
+        r"[^}]*max-height:min\(70vh,560px\)",
+        page,
+    )
+    assert re.search(r"\.button,[^{]*\{[^}]*min-height:44px", page)
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.topbar>\.toolbar\{[^}]*flex-direction:column",
+        page,
+        re.S,
+    )
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.topbar \.toolbar-actions\{[^}]*overflow-x:auto",
+        page,
+        re.S,
+    )
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.kpi-row\{[^}]*flex-direction:column",
+        page,
+        re.S,
+    )
+    assert re.search(
+        r"@media \(max-width:768px\)\{.*?\.rank-row\{[^}]*grid-template-areas:"
+        r'"label count" "ai outcomes"',
+        page,
+        re.S,
+    )
 
 
 def test_trend_places_first_data_week_at_the_left_edge_and_scales_to_render_box():

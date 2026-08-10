@@ -1,0 +1,267 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality, browser and package gates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.18.0
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Verify the reviewed npm baseline
+        run: test "$(npm --version)" = "11.16.0"
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Audit frontend dependencies
+        run: |
+          npm audit --audit-level=high
+          npm audit --audit-level=high --omit=dev
+
+      - name: Typecheck frontend
+        run: npm run typecheck
+
+      - name: Test frontend with coverage thresholds
+        run: npm run test:coverage
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.11.15'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            uv.lock
+
+      - name: Install isolated Python dependency tools
+        run: |
+          python -m venv .ci-tools
+          .ci-tools/bin/python -m pip install --disable-pip-version-check \
+            --no-cache-dir 'pip==26.1.2' 'uv==0.11.32' 'pip-audit==2.9.0'
+
+      - name: Create the locked Python test environment
+        run: |
+          UV_PROJECT_ENVIRONMENT="$PWD/.venv" \
+            .ci-tools/bin/uv sync --locked --extra dev \
+              --python "$PWD/.ci-tools/bin/python"
+          .venv/bin/python -c \
+            'import sys; assert sys.version_info[:3] == (3, 11, 15), sys.version'
+
+      - name: Audit the isolated CI dependency tools
+        run: .ci-tools/bin/pip-audit --local
+
+      - name: Audit locked Python runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          runtime_requirements="$RUNNER_TEMP/weekly-cs-runtime-requirements.txt"
+          .ci-tools/bin/uv export --locked --no-dev --no-emit-project \
+            --format requirements.txt --output-file "$runtime_requirements" --quiet
+          .ci-tools/bin/pip-audit --requirement "$runtime_requirements"
+
+      - name: Audit locked Python test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_requirements="$RUNNER_TEMP/weekly-cs-test-requirements.txt"
+          .ci-tools/bin/uv export --locked --extra dev --no-emit-project \
+            --format requirements.txt --output-file "$test_requirements" --quiet
+
+          # The protected lock still carries pytest 8.4.2. PYSEC-2026-1845 /
+          # CVE-2025-71176 is a local predictable-/tmp attack. Assert that it
+          # is the only known test-dependency finding before applying the
+          # narrow exception; the next step runs pytest in a private random
+          # base directory. Remove this exception when the lock reaches 9.0.3.
+          set +e
+          dev_audit_json="$(
+            .ci-tools/bin/pip-audit --requirement "$test_requirements" \
+              --format json 2>/dev/null
+          )"
+          dev_audit_status="$?"
+          set -e
+          test "$dev_audit_status" = "1"
+          dev_vulnerability_ids="$(
+            jq -r '[.dependencies[].vulns[].id] | sort | join(",")' \
+              <<<"$dev_audit_json"
+          )"
+          dev_vulnerable_packages="$(
+            jq -r \
+              '[.dependencies[] | select(.vulns | length > 0) | .name] | unique | join(",")' \
+              <<<"$dev_audit_json"
+          )"
+          test "$dev_vulnerability_ids" = "PYSEC-2026-1845"
+          test "$dev_vulnerable_packages" = "pytest"
+          .ci-tools/bin/pip-audit --requirement "$test_requirements" \
+            --ignore-vuln PYSEC-2026-1845
+
+      - name: Test Python and deployment contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest_basetemp="$(
+            mktemp -d "${RUNNER_TEMP}/weekly-cs-pytest.XXXXXX"
+          )"
+          test "$(stat -c '%a' "$pytest_basetemp")" = "700"
+          .venv/bin/python -m compileall -q src/weekly_cs_report
+          .venv/bin/pytest -q --basetemp "$pytest_basetemp" --cov=src/weekly_cs_report --cov-fail-under=85 --cov-report=json:"$RUNNER_TEMP/weekly-cs-python-coverage.json"
+          .venv/bin/python scripts/check_python_coverage.py "$RUNNER_TEMP/weekly-cs-python-coverage.json" 85 80 \
+            src/weekly_cs_report/langfuse_client.py \
+            src/weekly_cs_report/report.py \
+            src/weekly_cs_report/dashboard_cache.py \
+            src/weekly_cs_report/dashboard_schema.py \
+            src/weekly_cs_report/web.py
+
+      - name: Install the Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Test production behavior in browsers
+        run: npm run test:e2e
+
+      - name: Build and validate the Python wheel
+        run: |
+          PATH="$PWD/.ci-tools/bin:$PATH" \
+            PYTHON_BIN="$PWD/.venv/bin/python" \
+            scripts/build_wheel.sh dist/wheelhouse
+
+      - name: Upload the validated wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-wheel
+          path: dist/wheelhouse/*.whl
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload browser diagnostics on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-debug
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  docker-build:
+    name: Build and smoke-test runtime image
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build runtime image
+        run: docker build --pull --tag langfuse-weekly-cs-report:ci .
+
+      - name: Smoke-test runtime image
+        shell: bash
+        run: |
+          set -euo pipefail
+          volume_name="weekly-cs-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          network_name="weekly-cs-ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          container_id=""
+          cleanup() {
+            if [[ -n "$container_id" ]]; then
+              docker rm --force "$container_id" >/dev/null 2>&1 || true
+            fi
+            docker network rm "$network_name" >/dev/null 2>&1 || true
+            docker volume rm --force "$volume_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker volume create "$volume_name" >/dev/null
+          docker network create --internal "$network_name" >/dev/null
+          docker run --rm \
+            --network none \
+            --user 0:0 \
+            --volume "$volume_name:/app/runtime" \
+            --entrypoint sh \
+            langfuse-weekly-cs-report:ci \
+            -c "chown 10001:10001 /app/runtime && chmod 0700 /app/runtime"
+
+          docker run --rm \
+            --network none \
+            --volume "$volume_name:/app/runtime" \
+            --volume "$PWD/scripts:/workspace/scripts:ro" \
+            --volume "$PWD/tests:/workspace/tests:ro" \
+            --volume "$PWD/config:/workspace/config:ro" \
+            --entrypoint python \
+            langfuse-weekly-cs-report:ci \
+            -c "import sys; from pathlib import Path; \
+          sys.path.insert(0, '/workspace'); \
+          from scripts.e2e_server import build_snapshot; \
+          from weekly_cs_report.dashboard_cache import ProtectedSnapshotStore; \
+          ProtectedSnapshotStore(Path('/app/runtime')).save(build_snapshot())"
+
+          container_id="$(
+            docker run --detach \
+              --network "$network_name" \
+              --publish 127.0.0.1:18080:8080 \
+              --volume "$volume_name:/app/runtime" \
+              --env DASHBOARD_AUTH_MODE=proxy \
+              --env DASHBOARD_IDENTITY_HEADER=X-Authenticated-User \
+              --env LANGFUSE_BASE_URL=https://langfuse.zalopay.vn \
+              --env LANGFUSE_PUBLIC_KEY=ci-placeholder \
+              --env LANGFUSE_SECRET_KEY=ci-placeholder \
+              langfuse-weekly-cs-report:ci
+          )"
+
+          healthy=false
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error \
+              http://127.0.0.1:18080/healthz >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$healthy" != true ]]; then
+            docker logs "$container_id"
+            exit 1
+          fi
+
+          unauthenticated_status="$(
+            curl --silent --output /dev/null --write-out '%{http_code}' \
+              http://127.0.0.1:18080/
+          )"
+          test "$unauthenticated_status" = "401"
+          unauthenticated_api_status="$(
+            curl --silent --output /dev/null --write-out '%{http_code}' \
+              http://127.0.0.1:18080/api/dashboard
+          )"
+          test "$unauthenticated_api_status" = "401"
+          curl --fail --silent --show-error \
+            http://127.0.0.1:18080/readyz >/dev/null
+          curl --fail --silent --show-error \
+            --header "X-Authenticated-User: ci-smoke" \
+            http://127.0.0.1:18080/api/dashboard >/dev/null
+          curl --fail --silent --show-error \
+            --header "X-Authenticated-User: ci-smoke" \
+            http://127.0.0.1:18080/ >/dev/null

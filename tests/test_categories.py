@@ -81,6 +81,8 @@ def test_v2_taxonomy_migrates_all_28_v1_mappings_without_inventing_unknown_codes
     )
 
     assert taxonomy_v2.version == "v2"
+    assert len(taxonomy_v2.transfer_texts) == 2
+    assert taxonomy_v2.transfer_text == taxonomy_v2.transfer_texts[0]
     assert tuple(
         (
             mapping["code"],
@@ -100,14 +102,26 @@ def test_v2_taxonomy_migrates_all_28_v1_mappings_without_inventing_unknown_codes
         "-333",
         "-367",
     } & {mapping["code"] for mapping in taxonomy_v2.tpe_mappings}
-    assert taxonomy_v2.guardrail_allowed_values[-1] == "off_topic"
+    assert "off_topic" in taxonomy_v2.guardrail_allowed_values
+    assert "tone_check_error" in taxonomy_v2.guardrail_allowed_values
     assert taxonomy_v2.guardrail_compliant_values == (
         "input_compliant",
         "output_compliant",
     )
+    assert not hasattr(taxonomy_v2, "tpe_applicable_entry_points")
 
 
-def test_extract_dimensions_reads_exact_vietnamese_meta_keys_and_pipe_index_two(
+def test_v2_taxonomy_rejects_retired_tpe_applicability_contract(tmp_path):
+    raw = json.loads(TAXONOMY_V2_PATH.read_text(encoding="utf-8"))
+    raw["tpe"]["applicable_entry_points"] = ["tranxdetail"]
+    path = tmp_path / "invalid-tpe-applicability.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        load_taxonomy(path)
+
+
+def test_extract_dimensions_keeps_private_meta_code_but_ignores_meta_step_result(
     taxonomy_v2,
 ):
     dimensions = extract_dimensions(
@@ -139,9 +153,10 @@ def test_extract_dimensions_reads_exact_vietnamese_meta_keys_and_pipe_index_two(
     assert dimensions.payment_channel == "38 - TK Zalo Pay"
     assert dimensions.tpe_code == "-244"
     assert dimensions.tpe_status_raw == "Bị từ chối"
-    assert dimensions.tpe_status_canonical == "LIMIT_EXCEEDED"
-    assert dimensions.tpe_step == "700212"
-    assert dimensions.tpe_case == 26
+    assert dimensions.tpe_status_canonical is None
+    assert dimensions.tpe_step is None
+    assert dimensions.tpe_case is None
+    assert dimensions.tpe_signals == ()
     assert dimensions.skill is None
     assert dimensions.intent is None
     assert dimensions.guardrail_rule is None
@@ -175,17 +190,16 @@ def test_extract_dimensions_does_not_coerce_unicode_numeric_app_code(
 
 
 @pytest.mark.parametrize(
-    ("step_result", "expected_step"),
+    "step_result",
     [
-        ("700212", "700212"),
-        ("Mô tả không phải mã", None),
-        ("-1003", "-1003"),
-        ("-1|20|not-a-code|Mô tả", None),
+        "700212",
+        "Mô tả không phải mã",
+        "-1003",
+        "-1|20|700212|Mô tả nội bộ",
     ],
 )
-def test_extract_dimensions_accepts_only_numeric_one_or_four_segment_step_codes(
+def test_extract_dimensions_never_interprets_meta_step_result(
     step_result,
-    expected_step,
     taxonomy_v2,
 ):
     dimensions = extract_dimensions(
@@ -202,7 +216,9 @@ def test_extract_dimensions_accepts_only_numeric_one_or_four_segment_step_codes(
         taxonomy_v2,
     )
 
-    assert dimensions.tpe_step == expected_step
+    assert dimensions.tpe_step is None
+    assert dimensions.tpe_status_canonical is None
+    assert dimensions.tpe_case is None
 
 
 @pytest.mark.parametrize(
@@ -371,7 +387,9 @@ def test_extract_dimensions_rejects_unicode_numeric_lookalike_tpe_steps(
     assert dimensions.tpe_step is None
 
 
-def test_extract_dimensions_prefers_exact_step_mapping_over_wildcard(taxonomy_v2):
+def test_extract_dimensions_does_not_map_meta_tpe_to_case_or_canonical_status(
+    taxonomy_v2,
+):
     configured = replace(
         taxonomy_v2,
         tpe_mappings=(
@@ -399,11 +417,12 @@ def test_extract_dimensions_prefers_exact_step_mapping_over_wildcard(taxonomy_v2
         configured,
     )
 
-    assert dimensions.tpe_case == 26
-    assert dimensions.tpe_status_canonical == "LIMIT_EXCEEDED"
+    assert dimensions.tpe_step is None
+    assert dimensions.tpe_case is None
+    assert dimensions.tpe_status_canonical is None
 
 
-def test_extract_dimensions_uses_wildcard_mapping_when_no_exact_step_exists(taxonomy_v2):
+def test_extract_dimensions_does_not_apply_wildcard_taxonomy_mapping(taxonomy_v2):
     dimensions = extract_dimensions(
         turn0(
             {
@@ -420,9 +439,9 @@ def test_extract_dimensions_uses_wildcard_mapping_when_no_exact_step_exists(taxo
 
     assert dimensions.tpe_code == "-383"
     assert dimensions.tpe_status_raw == "Đang xử lý"
-    assert dimensions.tpe_status_canonical == "PENDING"
-    assert dimensions.tpe_step == "999999"
-    assert dimensions.tpe_case == 2
+    assert dimensions.tpe_status_canonical is None
+    assert dimensions.tpe_step is None
+    assert dimensions.tpe_case is None
 
 
 def test_extract_dimensions_passthrough_keeps_unmapped_code_and_raw_status(taxonomy_v2):
@@ -669,6 +688,17 @@ def test_v2_taxonomy_loader_rejects_multiple_wildcards_for_one_code(tmp_path):
         load_taxonomy(path)
 
 
+def test_v2_taxonomy_loader_rejects_duplicate_transfer_templates(tmp_path):
+    raw = json.loads(TAXONOMY_V2_PATH.read_text(encoding="utf-8"))
+    template = raw["transfer"]["semantic_texts"][0]
+    raw["transfer"]["semantic_texts"] = [template, template]
+    path = tmp_path / "duplicate-transfer-template.json"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="semantic_texts must not contain duplicates"):
+        load_taxonomy(path)
+
+
 @pytest.mark.parametrize(
     "target",
     [
@@ -685,7 +715,7 @@ def test_v2_taxonomy_loader_rejects_multiple_wildcards_for_one_code(tmp_path):
 def test_v2_taxonomy_loader_rejects_whitespace_only_strings(target, tmp_path):
     raw = json.loads(TAXONOMY_V2_PATH.read_text(encoding="utf-8"))
     if target == "transfer":
-        raw["transfer"]["semantic_text"] = " \t"
+        raw["transfer"]["semantic_texts"] = [" \t"]
     elif target == "dimension_path":
         raw["dimensions"]["app"]["meta_path"] = ["  "]
     elif target == "dimension_fallback":

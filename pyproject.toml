@@ -31,7 +31,15 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-weekly_cs_report = ["static/*.html"]
+# The SPA build emits hashed files into nested directories, so the patterns
+# must be recursive: a flat `static/*` would ship an HTML shell whose script,
+# style and font references are all missing from the wheel.
+weekly_cs_report = [
+  "static/*.html",
+  "static/legacy/*.html",
+  "static/spa/*",
+  "static/spa/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

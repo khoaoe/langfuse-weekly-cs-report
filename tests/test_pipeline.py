@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date, datetime, timedelta
+from inspect import signature
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -11,7 +12,7 @@ from tests.fixtures.traces import TRANSFER_TEXT, trace
 from weekly_cs_report.categories import load_taxonomy
 from weekly_cs_report.classification import normalize_trace
 from weekly_cs_report.cohort import build_cohort_window
-from weekly_cs_report.dimension_backfill import DimensionBackfill
+from weekly_cs_report.enrichment import TraceEnrichment
 from weekly_cs_report.models import (
     AnalysisResult,
     CategoryResult,
@@ -25,6 +26,7 @@ from weekly_cs_report.pipeline import (
     evaluate_gates,
     normalize_raw_traces,
     select_candidate_sessions,
+    summarize_same_period,
     summarize_weeks,
     validate_invariants,
 )
@@ -177,27 +179,58 @@ def test_pipeline_injects_v2_dimensions_from_canonical_first_trace(window):
     assert metrics.data_quality == "no_turn_zero"
     assert metrics.dimensions.issue_category == "Thanh toán-IBFT"
     assert metrics.dimensions.tpe_code == "-217"
-    assert metrics.dimensions.tpe_step == "700212"
+    assert metrics.dimensions.tpe_step is None
+    assert metrics.dimensions.tpe_case is None
+    assert metrics.dimensions.tpe_status_canonical is None
+    assert metrics.dimensions.tpe_signals == ()
 
 
-def test_pipeline_applies_private_p0_overlay_before_v2_extraction(window):
-    raw = trace("overlay", "145665", 4, "2026-07-21T02:00:00Z", "AI reply")
-    raw["input"]["other_info"]["meta"] = {"Thông tin thêm": {}}
+def test_pipeline_uses_only_exact_source_tpe_signals_from_trace_enrichment(window):
+    raw = trace(
+        "dimension-first",
+        "dimension",
+        0,
+        "2026-07-21T02:00:00Z",
+        TRANSFER_TEXT,
+    )
+    raw["input"]["other_info"]["meta"] = {
+        "Mã lỗi TPE": "-217 Thất bại",
+        "Step result": "-1|20|700212|không được dùng",
+    }
     normalized = normalize_trace(raw)
     assert isinstance(normalized, TraceRecord)
 
     result = analyze_sessions(
         select([normalized], [], window),
         load_taxonomy(TAXONOMY_V2_PATH),
-        dimension_backfill={
-            "145665": DimensionBackfill(
-                "145665", "Thanh toán-IBFT", "-217 Thất bại"
+        trace_enrichment={
+            "dimension-first": TraceEnrichment(
+                tpe_signals=(("-365", "-1013"),)
             )
         },
     )
+    dimensions = result.sessions[0].dimensions
 
-    assert result.sessions[0].dimensions.issue_category == "Thanh toán-IBFT"
-    assert result.sessions[0].dimensions.tpe_code == "-217"
+    assert dimensions.tpe_signals == (("-365", "-1013"),)
+    assert dimensions.tpe_step is None
+    assert dimensions.tpe_case is None
+    assert dimensions.tpe_status_canonical is None
+
+
+def test_pipeline_has_no_backfill_argument_and_uses_raw_first_trace(window):
+    raw = trace("overlay", "145665", 4, "2026-07-21T02:00:00Z", "AI reply")
+    raw["input"]["other_info"]["meta"] = {"Thông tin thêm": {}}
+    normalized = normalize_trace(raw)
+    assert isinstance(normalized, TraceRecord)
+
+    assert "dimension_backfill" not in signature(analyze_sessions).parameters
+    result = analyze_sessions(
+        select([normalized], [], window),
+        load_taxonomy(TAXONOMY_V2_PATH),
+    )
+
+    assert result.sessions[0].dimensions.issue_category == "Không xác định"
+    assert result.sessions[0].dimensions.tpe_code is None
 
 
 def test_v2_pipeline_does_not_request_legacy_observations_or_emit_keyword_fallbacks(window):
@@ -409,6 +442,189 @@ def test_twelve_week_contract_emits_twelve_complete_rows_and_one_wtd(taxonomy):
     assert len(summaries) == 13
     assert [summary.cohort_status for summary in summaries].count("complete") == 12
     assert [summary.cohort_status for summary in summaries].count("wtd") == 1
+
+
+def _same_period_result(
+    taxonomy,
+    *,
+    as_of: datetime = datetime(2026, 7, 30, 10, tzinfo=TZ),
+    weeks: int = 4,
+    records: list[TraceRecord] | None = None,
+) -> AnalysisResult:
+    period_window = build_cohort_window(as_of, weeks=weeks, include_wtd=True)
+    return analyze(records or [], [], period_window, taxonomy)
+
+
+def _ai_session(
+    week: date,
+    suffix: str,
+    local_day: int,
+    taxonomy,
+    *,
+    as_of: datetime = datetime(2026, 7, 30, 10, tzinfo=TZ),
+    response: object = "AI reply",
+) -> TraceRecord:
+    local_timestamp = datetime.combine(
+        week + timedelta(days=local_day),
+        datetime.min.time().replace(hour=9),
+        tzinfo=TZ,
+    )
+    return record(
+        f"{week.isoformat()}-{suffix}",
+        f"{week.isoformat()}-{suffix}",
+        0,
+        local_timestamp.astimezone(ZoneInfo("UTC")).isoformat(),
+        response,
+    )
+
+
+def test_same_period_truncates_every_week_at_the_same_completed_day(taxonomy):
+    weeks = [date(2026, 6, 29), date(2026, 7, 6), date(2026, 7, 13), date(2026, 7, 20)]
+    records: list[TraceRecord] = []
+    for week in weeks:
+        records.extend(
+            [
+                _ai_session(week, "mon", 0, taxonomy),
+                _ai_session(week, "wed", 2, taxonomy, response=TRANSFER_TEXT),
+                _ai_session(week, "fri", 4, taxonomy),
+            ]
+        )
+    records.extend(
+        [
+            _ai_session(date(2026, 7, 27), "mon", 0, taxonomy),
+            _ai_session(date(2026, 7, 27), "wed", 2, taxonomy, response=TRANSFER_TEXT),
+            _ai_session(date(2026, 7, 27), "thu", 3, taxonomy),
+        ]
+    )
+    result = _same_period_result(taxonomy, records=records)
+
+    same_period = summarize_same_period(result, "mon_sun")
+
+    assert same_period is not None
+    assert same_period.cutoff_date == date(2026, 7, 29)
+    assert same_period.cutoff_weekday == 3
+    assert same_period.current.total_tickets == 2
+    assert same_period.current.ai_first_count == 1
+    assert same_period.baseline.weeks_used == 4
+    assert same_period.baseline.ai_first_rate == pytest.approx(0.5)
+    assert set(same_period.by_week) == {
+        date(2026, 6, 29),
+        date(2026, 7, 6),
+        date(2026, 7, 13),
+        date(2026, 7, 20),
+        date(2026, 7, 27),
+    }
+    assert all(summary.total_tickets == 2 for summary in same_period.by_week.values())
+
+
+def test_same_period_is_null_on_monday_when_no_day_has_completed(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        as_of=datetime(2026, 7, 27, 10, tzinfo=TZ),
+        records=[
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+            _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        ],
+    )
+
+    assert summarize_same_period(result, "mon_sun") is None
+
+
+def test_same_period_is_null_when_the_current_week_is_complete(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        as_of=datetime(2026, 8, 1, 10, tzinfo=TZ),
+        records=[
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+            _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        ],
+    )
+
+    assert summarize_same_period(result, "mon_fri") is None
+
+
+def test_same_period_by_week_includes_the_running_truncated_week(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        records=[
+            _ai_session(date(2026, 7, 27), "current", 0, taxonomy),
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+            _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        ],
+    )
+
+    same_period = summarize_same_period(result, "mon_sun")
+
+    assert same_period is not None
+    assert same_period.current.cohort_week == date(2026, 7, 27)
+    assert date(2026, 7, 27) in same_period.by_week
+
+
+def test_same_period_is_computed_independently_for_mon_fri_and_mon_sun(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        as_of=datetime(2026, 8, 1, 10, tzinfo=TZ),
+        records=[
+            _ai_session(date(2026, 7, 27), "current", 0, taxonomy),
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+            _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        ],
+    )
+
+    assert summarize_same_period(result, "mon_fri") is None
+    assert summarize_same_period(result, "mon_sun") is not None
+
+
+def test_mon_fri_current_row_is_complete_after_friday_has_finished(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        as_of=datetime(2026, 8, 2, 10, tzinfo=TZ),  # Sunday in Vietnam
+        records=[
+            _ai_session(date(2026, 7, 27), "current", 4, taxonomy),
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+        ],
+    )
+
+    mon_fri = summarize_weeks(result, result.selection.window, "mon_fri")
+    mon_sun = summarize_weeks(result, result.selection.window, "mon_sun")
+
+    assert mon_fri[-1].cohort_week == date(2026, 7, 27)
+    assert mon_fri[-1].cohort_status == "complete"
+    assert mon_sun[-1].cohort_status == "wtd"
+
+
+def test_same_period_baseline_skips_empty_weeks_rather_than_counting_them_as_zero(taxonomy):
+    records = [
+        _ai_session(date(2026, 7, 27), "current", 0, taxonomy),
+        _ai_session(date(2026, 7, 20), "after-cutoff", 4, taxonomy, response=TRANSFER_TEXT),
+        _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        _ai_session(date(2026, 7, 6), "baseline", 0, taxonomy),
+        _ai_session(date(2026, 6, 29), "baseline", 0, taxonomy),
+    ]
+    result = _same_period_result(taxonomy, weeks=5, records=records)
+
+    same_period = summarize_same_period(result, "mon_sun")
+
+    assert same_period is not None
+    assert same_period.baseline.weeks_used == 3
+    assert same_period.baseline.ai_first_rate == pytest.approx(1.0)
+    assert same_period.by_week[date(2026, 7, 20)].total_tickets == 0
+
+
+def test_same_period_keeps_an_empty_running_week_when_baselines_qualify(taxonomy):
+    result = _same_period_result(
+        taxonomy,
+        records=[
+            _ai_session(date(2026, 7, 20), "baseline", 0, taxonomy),
+            _ai_session(date(2026, 7, 13), "baseline", 0, taxonomy),
+        ],
+    )
+
+    same_period = summarize_same_period(result, "mon_sun")
+
+    assert same_period is not None
+    assert same_period.current.cohort_week == date(2026, 7, 27)
+    assert same_period.current.total_tickets == 0
 
 
 def known_observations(taxonomy):

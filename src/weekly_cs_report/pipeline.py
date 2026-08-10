@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, timedelta, timezone
-from typing import TYPE_CHECKING, Mapping, Sequence
+from types import MappingProxyType
+from typing import Mapping, Sequence
 
 from .categories import Taxonomy, extract_dimensions
 from .classification import classify_session, normalize_trace
 from .cohort import VIETNAM_TIMEZONE, is_week_fully_mature
-from .enrichment import TraceEnrichment, apply_trace_enrichment
+from .enrichment import (
+    TraceEnrichment,
+    apply_trace_enrichment,
+    transfer_trigger_for_trace,
+)
 from .models import (
     AnalysisResult,
     CandidateSelection,
@@ -32,8 +37,21 @@ _LEGACY_TPE_CATEGORIES = frozenset(
     }
 )
 
-if TYPE_CHECKING:
-    from .dimension_backfill import DimensionBackfill
+
+@dataclass(frozen=True)
+class SamePeriodBaseline:
+    weeks_used: int
+    ai_first_rate: float
+    reopen_lifetime_rate: float | None
+
+
+@dataclass(frozen=True)
+class SamePeriodComparison:
+    cutoff_date: date
+    cutoff_weekday: int
+    current: WeeklySummary
+    baseline: SamePeriodBaseline
+    by_week: Mapping[date, WeeklySummary]
 
 
 def normalize_raw_traces(
@@ -181,6 +199,13 @@ def _summarize_sessions(
 
     summaries: list[WeeklySummary] = []
     for cohort_week, cohort_status in _cohort_weeks(window):
+        effective_status = cohort_status
+        if cohort_status == "wtd":
+            reporting_last_day = cohort_week + timedelta(
+                days=4 if week_definition == "mon_fri" else 6
+            )
+            if window.as_of.astimezone(VIETNAM_TIMEZONE).date() > reporting_last_day:
+                effective_status = "complete"
         weekly_sessions = by_week.get(cohort_week, [])
         total = len(weekly_sessions)
         ai_first = [session for session in weekly_sessions if session.ai_first]
@@ -226,10 +251,10 @@ def _summarize_sessions(
         reply_counts = [session.ai_reply_count for session in weekly_sessions]
         ai_reply_counts = [session.ai_reply_count for session in ai_first]
         gt4_turn_with_cs = sum(
-            session.turn_count > 4 and session.transferred for session in weekly_sessions
+            session.turn_count > 3 and session.transferred for session in weekly_sessions
         )
         gt4_turn_without_cs = sum(
-            session.turn_count > 4 and not session.transferred for session in weekly_sessions
+            session.turn_count > 3 and not session.transferred for session in weekly_sessions
         )
         max_replies_rule_fired = sum(
             "max_replies_exceeded" in session.guardrail_rules
@@ -238,7 +263,7 @@ def _summarize_sessions(
         summaries.append(
             WeeklySummary(
                 cohort_week=cohort_week,
-                cohort_status=cohort_status,
+                cohort_status=effective_status,
                 total_tickets=total,
                 ai_first_count=len(ai_first),
                 ai_first_rate=len(ai_first) / total if total else 0.0,
@@ -322,7 +347,6 @@ def _v2_transfer_categories(metrics: SessionMetrics) -> TransferCategories:
 def analyze_sessions(
     selection: CandidateSelection,
     taxonomy: Taxonomy,
-    dimension_backfill: Mapping[str, "DimensionBackfill"] | None = None,
     trace_enrichment: Mapping[str, TraceEnrichment] | None = None,
 ) -> AnalysisResult:
     sessions: list[SessionMetrics] = []
@@ -332,20 +356,12 @@ def analyze_sessions(
 
     for session_id in sorted(selection.eligible):
         traces = selection.eligible[session_id]
-        classified = classify_session(traces, selection.window, taxonomy.transfer_text)
+        classified = classify_session(traces, selection.window, taxonomy.transfer_texts)
         if isinstance(classified, QualityIssue):
             invalid_keyed.append(classified)
             continue
-        # Keep this import local: P0's private store uses the normalizer and
-        # importing it at module load would create a verifier/pipeline cycle.
-        from .dimension_backfill import apply_dimension_backfill
-
-        first_trace = apply_dimension_backfill(
-            traces[0],
-            dimension_backfill.get(session_id) if dimension_backfill is not None else None,
-        )
         dimensions = (
-            extract_dimensions(first_trace, taxonomy)
+            extract_dimensions(traces[0], taxonomy)
             if taxonomy.version == "v2"
             else classified.dimensions
         )
@@ -353,13 +369,19 @@ def analyze_sessions(
             dimensions, guardrail_rules = apply_trace_enrichment(
                 dimensions, traces, trace_enrichment
             )
+            transfer_trigger = transfer_trigger_for_trace(
+                classified.first_transfer_trace_id,
+                trace_enrichment,
+            )
         else:
             guardrail_rules = ()
+            transfer_trigger = None
         classified = replace(
             classified,
             as_of=selection.window.as_of,
             dimensions=dimensions,
             guardrail_rules=guardrail_rules,
+            transfer_trigger=transfer_trigger,
         )
         sessions.append(classified)
         analyzed_eligible[session_id] = traces
@@ -400,6 +422,87 @@ def summarize_weeks(
     if window != result.selection.window:
         raise InvariantError("summary window must match the analysis window")
     return _summarize_sessions(result.sessions, window, week_definition)
+
+
+def summarize_same_period(
+    result: AnalysisResult,
+    week_definition: str = "mon_sun",
+) -> SamePeriodComparison | None:
+    if week_definition not in {"mon_sun", "mon_fri"}:
+        raise ValueError("week_definition must be mon_sun or mon_fri")
+    window = result.selection.window
+    if window.wtd_start_local is None:
+        return None
+
+    current_week = window.wtd_start_local.date()
+    cutoff_date = window.as_of.astimezone(VIETNAM_TIMEZONE).date() - timedelta(days=1)
+    if cutoff_date < current_week:
+        return None
+    current_week_last_day = current_week + timedelta(
+        days=4 if week_definition == "mon_fri" else 6
+    )
+    if cutoff_date >= current_week_last_day:
+        return None
+    cutoff_weekday = cutoff_date.isoweekday()
+
+    filtered = tuple(
+        session
+        for session in result.sessions
+        if _is_in_same_period_slice(session, cutoff_weekday)
+    )
+    summaries = _summarize_sessions(filtered, window, week_definition)
+    current = next(
+        summary
+        for summary in summaries
+        if summary.cohort_status == "wtd"
+    )
+    baseline = tuple(
+        summary
+        for summary in sorted(
+            (
+                item
+                for item in summaries
+                if item.cohort_status == "complete" and item.total_tickets > 0
+            ),
+            key=lambda item: item.cohort_week,
+            reverse=True,
+        )[:4]
+    )
+    if len(baseline) < 2:
+        return None
+    by_week = MappingProxyType({
+        summary.cohort_week: summary
+        for summary in summaries
+    })
+
+    reopen_rates = [
+        summary.reopen_lifetime_rate
+        for summary in baseline
+        if summary.reopen_lifetime_rate is not None
+    ]
+    return SamePeriodComparison(
+        cutoff_date=cutoff_date,
+        cutoff_weekday=cutoff_weekday,
+        current=current,
+        baseline=SamePeriodBaseline(
+            weeks_used=len(baseline),
+            ai_first_rate=sum(summary.ai_first_rate for summary in baseline) / len(baseline),
+            reopen_lifetime_rate=(
+                sum(reopen_rates) / len(reopen_rates) if reopen_rates else None
+            ),
+        ),
+        by_week=by_week,
+    )
+
+
+def _is_in_same_period_slice(
+    session: SessionMetrics,
+    cutoff_weekday: int,
+) -> bool:
+    local_date = session.turn0_timestamp.astimezone(VIETNAM_TIMEZONE).date()
+    start = session.cohort_week
+    end = start + timedelta(days=cutoff_weekday)
+    return start <= local_date < end
 
 
 def evaluate_gates(result: AnalysisResult) -> GateStatus:

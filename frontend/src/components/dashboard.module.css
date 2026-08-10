@@ -1,0 +1,1028 @@
+.page {
+  min-height: 100vh;
+  background: var(--canvas);
+}
+.shell {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  overflow: clip;
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  box-shadow: var(--shell-shadow);
+}
+
+.shellInner {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-3) var(--gutter);
+}
+
+.shellEdgeMark {
+  display: none;
+}
+.shellEdgeMarkImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+}
+
+.brand {
+  --brand-logo-width: 106px;
+  --brand-logo-height: 24px;
+
+  display: grid;
+  grid-template-columns: var(--brand-logo-width) minmax(0, max-content);
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  margin-right: auto;
+}
+
+.logoFrame {
+  position: relative;
+  display: block;
+  width: var(--brand-logo-width);
+  height: var(--brand-logo-height);
+  line-height: 0;
+}
+
+.logo {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: left center;
+}
+.productName {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.shellMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  color: var(--muted);
+  font-size: 13px;
+}
+.metaValue {
+  color: var(--ink);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.staleTimestamp {
+  color: var(--warning-text);
+}
+
+.quality {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.quality:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.qualityWarning {
+  border-color: var(--warning-text);
+  color: var(--warning-text);
+}
+
+.runtimeChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  color: var(--muted);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.runtimeChip[data-state="refreshing"],
+.runtimeChip[data-state="stale_error"] {
+  border-color: var(--warning-text);
+  color: var(--warning-text);
+}
+
+.runtimeReady {
+  border-color: var(--success-text);
+  color: var(--success-text);
+  background: color-mix(in srgb, var(--success-text) 9%, var(--surface));
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  overflow: hidden;
+}
+
+.segmentedButton {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--space-4);
+  border: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segmentedButton + .segmentedButton {
+  border-left: 1px solid var(--rule-strong);
+}
+
+.segmentedButton[aria-pressed="true"] {
+  background: var(--interactive);
+  color: var(--interactive-ink);
+}
+
+.action {
+  min-height: 44px;
+  padding: 0 var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.action:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.action:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.reportScopeBar {
+  position: relative;
+  z-index: 2;
+  border-top: 1px solid var(--rule);
+  background: var(--surface-sunken);
+}
+
+.reportScopeField {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-2) var(--gutter);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.reportScopeField > span {
+  white-space: nowrap;
+}
+
+.reportScopeDetails {
+  position: relative;
+  width: min(320px, 100%);
+  min-width: 0;
+  color: var(--ink);
+}
+
+.reportScopeSummary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-8) 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
+  list-style: none;
+}
+
+.reportScopeSummary::-webkit-details-marker {
+  display: none;
+}
+
+.reportScopeSummary::after {
+  position: absolute;
+  right: var(--space-3);
+  content: "▾";
+  color: var(--muted);
+}
+
+.reportScopeDetails[open] .reportScopeSummary::after {
+  content: "▴";
+}
+
+.reportScopeSummary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
+  outline-offset: 2px;
+  border-color: var(--interactive);
+}
+
+.shell:has(.reportScopeDetails[open]) {
+  overflow: visible;
+}
+
+.reportScopePanel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  width: min(360px, calc(100vw - 2 * var(--gutter)));
+  padding: var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  box-shadow: var(--shell-shadow);
+}
+
+.reportScopeAll {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.reportScopeAll[aria-pressed="true"] {
+  border-color: var(--interactive);
+  background: color-mix(in srgb, var(--interactive) 10%, var(--surface));
+}
+
+.reportScopeOptions {
+  max-height: min(52vh, 420px);
+  margin-top: var(--space-2);
+  overflow-y: auto;
+}
+
+.reportScopeOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-tight);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.reportScopeOption:hover {
+  background: var(--surface-sunken);
+}
+
+.reportScopeOption:has(input:focus-visible) {
+  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
+  outline-offset: -3px;
+}
+
+.reportScopeOption:has(input:disabled) {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.reportScopeOption input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--interactive);
+}
+
+.nav {
+  position: relative;
+  z-index: 1;
+  border-top: 1px solid var(--rule);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.navInner {
+  display: flex;
+  gap: var(--space-4);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+  white-space: nowrap;
+}
+
+.navLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.navLink:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.navLink[aria-current="location"] {
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--interactive);
+}
+
+.navAction {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.navAction:hover:not(:disabled) {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.navAction:disabled {
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
+  cursor: not-allowed;
+}
+
+.filterChips {
+  composes: filterChips from "./app-shell-popovers.module.css";
+}
+
+.filterChip {
+  composes: filterChip from "./app-shell-popovers.module.css";
+}
+
+.helpPanel {
+  composes: helpPanel from "./app-shell-popovers.module.css";
+}
+
+.status {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 var(--gutter);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.statusFilled {
+  padding: var(--space-2) var(--gutter);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface-sunken);
+  color: var(--ink);
+}
+
+.main {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-5) var(--gutter) var(--space-7);
+  scroll-margin-top: 280px;
+}
+
+.skeleton {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.skeletonTitle,
+.skeletonLine,
+.skeletonLineShort,
+.skeletonLedger span {
+  display: block;
+  background: var(--surface-sunken);
+}
+
+.skeletonTitle {
+  width: min(520px, 72%);
+  height: 28px;
+}
+
+.skeletonLine {
+  width: min(760px, 92%);
+  height: 16px;
+}
+
+.skeletonLineShort {
+  width: min(620px, 80%);
+  height: 16px;
+}
+
+.skeletonLedger {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: var(--space-2);
+  background: var(--rule);
+}
+
+.skeletonLedger span {
+  height: 104px;
+}
+
+.decision {
+  display: block;
+}
+
+.decisionBand {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.ledgerGroup {
+  display: grid;
+}
+
+.ledgerScope {
+  margin-top: 0;
+}
+
+.headline {
+  display: grid;
+  gap: var(--space-2);
+  padding-bottom: var(--space-4);
+}
+
+.title {
+  font-size: clamp(20px, 2.2vw, 28px);
+}
+
+.narrative {
+  display: grid;
+  gap: var(--space-1);
+  max-width: 92ch;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.narrativeAlert {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.ledger {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.ledgerCell {
+  display: grid;
+  gap: var(--space-1);
+  align-content: start;
+  padding: var(--space-4);
+  border-left: 1px solid var(--rule);
+}
+
+.ledgerCell:first-child {
+  border-left: 0;
+}
+
+.ledgerCellButton {
+  display: grid;
+  gap: inherit;
+  align-content: start;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ledgerCellButton:hover {
+  text-decoration: underline;
+  text-decoration-color: var(--muted);
+}
+
+.ledgerLabel {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ledgerValue {
+  font-size: clamp(26px, 3.4vw, 36px);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.ledgerSupport {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.toneBrand .ledgerValue {
+  color: var(--brand-ink);
+}
+
+.toneWarning .ledgerValue {
+  color: var(--warning-text);
+}
+
+.toneCritical .ledgerValue {
+  color: var(--critical-text);
+}
+
+/* The rail uses the ledger's grammar: one frame, rows divided by rules.
+   Severity is carried by its own text label, never by a coloured side tab. */
+.rail {
+  display: grid;
+  margin-top: var(--space-4);
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.railItem {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.railItem:first-child {
+  border-top: 0;
+}
+
+.railHeadline {
+  font-weight: 500;
+}
+
+.railSeverity {
+  font-weight: 500;
+}
+
+.railCritical .railSeverity {
+  color: var(--critical-text);
+}
+
+.railWarning .railSeverity {
+  color: var(--warning-text);
+}
+
+.railAction {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.railActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+}
+
+.railActionButton,
+.railActionLink {
+  min-height: 44px;
+  padding: 5px 10px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.railActionButton {
+  cursor: pointer;
+}
+
+.railActionButton:hover,
+.railActionLink:hover {
+  background: var(--surface-raised);
+  border-color: var(--ink);
+}
+
+.section {
+  scroll-margin-top: min(30vh, 280px);
+  padding-top: var(--space-6);
+  margin-top: var(--space-6);
+  border-top: 1px solid var(--rule);
+}
+
+.sectionHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+
+.sectionTitle {
+  font-size: 18px;
+}
+
+.sectionNote {
+  max-width: 80ch;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* The description lives outside the scroller so the sticky header can rest
+   flush against the container edge and stay readable while the table moves. */
+.tableCaption {
+  margin-bottom: var(--space-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.tableScroll {
+  overflow: auto;
+  max-height: 62vh;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.table {
+  width: 100%;
+  min-width: 100%;
+  font-size: 14px;
+}
+
+.table th,
+.table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--rule);
+  white-space: nowrap;
+}
+
+/* Inside a scroll container the sticky origin is the container, so `top: 0`. */
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface-sunken);
+  border-bottom: 1px solid var(--rule-strong);
+}
+
+.table thead .weeklyGroupHeader {
+  top: 0;
+  height: 34px;
+  padding-top: var(--space-1);
+  padding-bottom: var(--space-1);
+  border-right: 1px solid var(--rule-strong);
+  background: color-mix(in srgb, var(--interactive) 7%, var(--surface-sunken));
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+.table thead .weeklyGroupHeader:last-child {
+  border-right: 0;
+}
+
+.table thead .weeklyColumnRow th {
+  top: 34px;
+}
+
+.table tbody tr:hover td {
+  background: var(--surface-sunken);
+}
+
+.stickyColumn {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--surface);
+  border-right: 1px solid var(--rule);
+}
+
+.table thead .stickyColumn {
+  z-index: 3;
+  background: var(--surface-sunken);
+}
+
+.table tbody tr:hover .stickyColumn {
+  background: var(--surface-sunken);
+}
+
+.numeric {
+  text-align: right;
+}
+
+.currentWeekRow th,
+.currentWeekRow td {
+  background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+.emptyCell {
+  color: var(--muted);
+}
+
+.caption {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.qualityDisclosure {
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.qualitySummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+}
+
+.disclosureHint {
+  color: var(--interactive);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.qualityContent {
+  display: grid;
+  gap: var(--space-4);
+  padding: 0 var(--space-4) var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.qualityContent > :first-child {
+  padding-top: var(--space-4);
+}
+
+.qualityList {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--rule);
+  background: var(--surface-sunken);
+}
+
+.qualityList h3 {
+  font-size: 15px;
+}
+
+.qualityList ul {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.factGrid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.factLabel {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.factValue {
+  font-size: 20px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 900px) {
+  .skeletonLedger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ledger {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ledgerCell:nth-child(odd) {
+    border-left: 0;
+  }
+
+  .ledgerCell:nth-child(n + 3) {
+    border-top: 1px solid var(--rule);
+  }
+}
+
+@media (min-width: 1080px) {
+  .shellInner {
+    padding-right: calc(var(--gutter) + 88px);
+  }
+
+  .shellEdgeMark {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    /* Keep the decorative Z continuous across every header band. */
+    z-index: 5;
+    display: block;
+    width: 76px;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .decisionBand {
+    gap: 0;
+    border: 1px solid var(--rule-strong);
+    border-radius: var(--radius-tight);
+    background: var(--surface);
+    overflow: hidden;
+  }
+
+  .headline {
+    align-content: start;
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--rule);
+  }
+
+  .ledgerScope {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .ledger {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    border-radius: 0;
+  }
+}
+
+@media (max-width: 768px) {
+  .shell {
+    overflow: visible;
+  }
+
+  .nav {
+    -webkit-mask-image: linear-gradient(
+      to right,
+      #000 0,
+      #000 calc(100% - 28px),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      #000 0,
+      #000 calc(100% - 28px),
+      transparent 100%
+    );
+  }
+
+  .navInner {
+    padding-right: calc(var(--gutter) + 32px);
+  }
+
+  .shellInner {
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    padding-bottom: var(--space-2);
+  }
+
+  .brand {
+    --brand-logo-width: 88px;
+    --brand-logo-height: 20px;
+
+    width: 100%;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .productName {
+    font-size: clamp(12px, 3.4vw, 13px);
+  }
+
+  .controls {
+    width: 100%;
+  }
+
+  .reportScopeField {
+    gap: var(--space-2);
+  }
+
+  .reportScopeDetails {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .reportScopePanel {
+    right: 0;
+    left: auto;
+  }
+
+  .shellMeta {
+    order: 3;
+    width: 100%;
+    gap: var(--space-2);
+  }
+
+  .runtimeChip {
+    display: none;
+  }
+
+  .quality {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .main {
+    padding-top: var(--space-4);
+  }
+
+  .decision {
+    min-height: 600px;
+    padding-bottom: var(--space-5);
+  }
+
+  .headline {
+    padding-bottom: var(--space-3);
+  }
+
+  .rail {
+    margin-top: var(--space-3);
+  }
+
+  .table:not(.allColumns) .optionalColumn {
+    display: none;
+  }
+
+  .weeklyGroupRow {
+    display: none;
+  }
+
+  .table thead .weeklyColumnRow th {
+    top: 0;
+  }
+
+  .tableScroll {
+    max-height: none;
+  }
+}
+
+@media (min-width: 769px) {
+  .columnsToggle {
+    display: none;
+  }
+}

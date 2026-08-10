@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "canonical_root_hint": "../docs/zalopay-guideline",
+  "font_conversion": {
+    "script": "scripts/generate_brand_fonts.py",
+    "fonttools": "4.59.1",
+    "brotli": "1.2.0",
+    "recalc_timestamp": false,
+    "reorder_tables": false
+  },
+  "files": [
+    {
+      "path": "brand/icons/zalopay-app-icon.png",
+      "canonical_source": "Zalopay_LogoPNG/Logo FA-13.png",
+      "canonical_sha256": "970c4738c333dac4c22184b55477f6ce8089a11d128e33858d543ef1e10a553e",
+      "sha256": "970c4738c333dac4c22184b55477f6ce8089a11d128e33858d543ef1e10a553e",
+      "browser": true,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/logos/zalopay-logo-color.png",
+      "canonical_source": "Zalopay_LogoPNG/Logo FA-09.png",
+      "canonical_sha256": "6f401d0089ffce4d4069638e57bd6e4f16b9cdbb6fbe5ed412353e9217001dc5",
+      "sha256": "6f401d0089ffce4d4069638e57bd6e4f16b9cdbb6fbe5ed412353e9217001dc5",
+      "browser": true,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/logos/zalopay-logo-white.png",
+      "canonical_source": "Zalopay_LogoPNG/Logo FA-10.png",
+      "canonical_sha256": "a778739822f1f44d3ce0779d019b90f2e38d4575705e72fe0045895c3c60e2da",
+      "sha256": "a778739822f1f44d3ce0779d019b90f2e38d4575705e72fe0045895c3c60e2da",
+      "browser": true,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/graphics/zalopay-z-dark.png",
+      "canonical_source": "png/visual-43.png",
+      "canonical_sha256": "968a9b22fb3fc99424160184dfd80215cc7cca9f124c5ba456c56a85e8faccec",
+      "sha256": "968a9b22fb3fc99424160184dfd80215cc7cca9f124c5ba456c56a85e8faccec",
+      "browser": true,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/graphics/zalopay-z-light.png",
+      "canonical_source": "png/visual-42.png",
+      "canonical_sha256": "8a5a40e6781a8b3fe281e5c549bb5b2e56245d2226d0cf212fc00a2d51c2dae2",
+      "sha256": "8a5a40e6781a8b3fe281e5c549bb5b2e56245d2226d0cf212fc00a2d51c2dae2",
+      "browser": true,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/fonts/source/AeonikPro-Regular.otf",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Regular.otf",
+      "canonical_sha256": "6c502f426b9b21b7e19c8497f8da932274ecd887fa6c33fd28838ffb08b5681c",
+      "sha256": "6c502f426b9b21b7e19c8497f8da932274ecd887fa6c33fd28838ffb08b5681c",
+      "browser": false,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/fonts/source/AeonikPro-Medium.otf",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Medium.otf",
+      "canonical_sha256": "dbe566d2341103c848f1f2371340602e9017b94cc8ea87fa05cb2c7fa9fa941a",
+      "sha256": "dbe566d2341103c848f1f2371340602e9017b94cc8ea87fa05cb2c7fa9fa941a",
+      "browser": false,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/fonts/source/AeonikPro-Bold.otf",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Bold.otf",
+      "canonical_sha256": "32c7901a508fa12224d1cb63222270ec2d88b865e1dc2a07f5be7ede106fdd56",
+      "sha256": "32c7901a508fa12224d1cb63222270ec2d88b865e1dc2a07f5be7ede106fdd56",
+      "browser": false,
+      "derivation": "exact-copy"
+    },
+    {
+      "path": "brand/fonts/web/aeonik-pro-regular.woff2",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Regular.otf",
+      "canonical_sha256": "6c502f426b9b21b7e19c8497f8da932274ecd887fa6c33fd28838ffb08b5681c",
+      "sha256": "61810ab932aa9c2e7aded4f225ab5e614d91e5bdfe60e8cb20efc5b4011f1f8f",
+      "browser": true,
+      "derivation": "woff2"
+    },
+    {
+      "path": "brand/fonts/web/aeonik-pro-medium.woff2",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Medium.otf",
+      "canonical_sha256": "dbe566d2341103c848f1f2371340602e9017b94cc8ea87fa05cb2c7fa9fa941a",
+      "sha256": "fb0a13c1e3e5329dcb5a649659558cbc2be61460a2b94be57fa1f5b745a16053",
+      "browser": true,
+      "derivation": "woff2"
+    },
+    {
+      "path": "brand/fonts/web/aeonik-pro-bold.woff2",
+      "canonical_source": "Aeonik Pro - font final/AeonikPro-Bold.otf",
+      "canonical_sha256": "32c7901a508fa12224d1cb63222270ec2d88b865e1dc2a07f5be7ede106fdd56",
+      "sha256": "4a05776a68698a73109e554dac8bf2164163b60b1bffedc1e309dc3bb4aa230c",
+      "browser": true,
+      "derivation": "woff2"
+    }
+  ]
+}

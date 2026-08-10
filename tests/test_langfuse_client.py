@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import threading
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -10,6 +11,7 @@ import pytest
 from weekly_cs_report.langfuse_client import (
     LangfuseAPIError,
     LangfuseClient,
+    LangfuseDeadlineExceeded,
     ReadOnlyOperationError,
 )
 
@@ -47,6 +49,39 @@ class TrackingTransport(httpx.BaseTransport):
 
     def close(self) -> None:
         self.close_calls += 1
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_attempts": 0}, "max_attempts must be between 1 and 3"),
+        ({"max_attempts": 4}, "max_attempts must be between 1 and 3"),
+        ({"backoff_base_s": -0.5}, "backoff_base_s must not be negative"),
+        ({"poll_interval_s": 0}, "poll_interval_s must be positive"),
+    ],
+    ids=("attempts-too-low", "attempts-too-high", "negative-backoff", "zero-poll"),
+)
+def test_client_rejects_invalid_retry_configuration_before_http_client_creation(
+    monkeypatch,
+    kwargs: dict[str, float | int],
+    message: str,
+):
+    client_creations = 0
+
+    def fail_if_http_client_is_created(*_args, **_kwargs):
+        nonlocal client_creations
+        client_creations += 1
+        raise AssertionError("invalid configuration must not create an HTTP client")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.langfuse_client.httpx.Client",
+        fail_if_http_client_is_created,
+    )
+
+    with pytest.raises(ValueError, match=message):
+        LangfuseClient(BASE_URL, PUBLIC_KEY, SECRET_KEY, **kwargs)
+
+    assert client_creations == 0
 
 
 def test_client_context_manager_closes_owned_httpx_client():
@@ -152,7 +187,7 @@ def test_iter_observations_by_name_honors_shared_deadline_before_request():
         monotonic=lambda: 10.0,
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(LangfuseDeadlineExceeded) as captured:
         list(
             client.iter_observations_by_name(
                 "route",
@@ -162,7 +197,96 @@ def test_iter_observations_by_name_honors_shared_deadline_before_request():
             )
         )
 
+    assert captured.value.method == "GET"
+    assert captured.value.path == "/api/public/observations"
+    assert captured.value.status_code == "deadline_exceeded"
     assert transport.requests == []
+
+
+def test_iter_traces_rejects_advertised_page_count_above_limit_before_yielding():
+    """An unbounded upstream page count must not leak the first page into analysis."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json=page([{"id": "trace-should-not-yield"}], total_pages=501),
+            request=request,
+        )
+
+    with pytest.raises(LangfuseAPIError) as captured:
+        list(
+            client_for(handler).iter_traces(
+                datetime(2026, 7, 1, tzinfo=timezone.utc),
+                datetime(2026, 7, 2, tzinfo=timezone.utc),
+                max_pages=500,
+            )
+        )
+
+    assert type(captured.value).__name__ == "LangfuseTracePageLimitExceeded"
+    assert captured.value.method == "GET"
+    assert captured.value.path == "/api/public/traces"
+    assert captured.value.status_code == "page_limit_exceeded"
+    assert len(requests) == 1
+
+
+def test_iter_traces_stops_for_cancellation_before_the_next_request():
+    """Shutdown must stop pagination before it begins another HTTP request."""
+    requests: list[httpx.Request] = []
+    cancel_event = threading.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        cancel_event.set()
+        return httpx.Response(
+            200,
+            json=page([{"id": "first-page"}], total_pages=2),
+            request=request,
+        )
+
+    with pytest.raises(LangfuseAPIError) as captured:
+        list(
+            client_for(handler).iter_traces(
+                datetime(2026, 7, 1, tzinfo=timezone.utc),
+                datetime(2026, 7, 2, tzinfo=timezone.utc),
+                cancel_event=cancel_event,
+            )
+        )
+
+    assert type(captured.value).__name__ == "LangfuseRequestCancelled"
+    assert captured.value.method == "GET"
+    assert captured.value.path == "/api/public/traces"
+    assert captured.value.status_code == "cancelled"
+    assert len(requests) == 1
+
+
+def test_iter_traces_limits_http_timeout_to_remaining_refresh_budget():
+    """A near deadline must shorten HTTPX's request timeout below its 30-second cap."""
+    observed_timeouts: list[dict[str, float | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed_timeouts.append(request.extensions["timeout"])
+        return httpx.Response(200, json=page([]), request=request)
+
+    client = LangfuseClient(
+        BASE_URL,
+        PUBLIC_KEY,
+        SECRET_KEY,
+        transport=httpx.MockTransport(handler),
+        monotonic=lambda: 100.0,
+    )
+
+    assert list(
+        client.iter_traces(
+            datetime(2026, 7, 1, tzinfo=timezone.utc),
+            datetime(2026, 7, 2, tzinfo=timezone.utc),
+            deadline=105.0,
+        )
+    ) == []
+    assert observed_timeouts == [
+        {"connect": 5.0, "read": 5.0, "write": 5.0, "pool": 5.0}
+    ]
 
 
 @pytest.mark.parametrize("field", ["from_timestamp", "to_timestamp"])
@@ -216,6 +340,15 @@ def test_write_and_score_operations_fail_closed_before_transport(operation):
     assert SECRET_KEY not in str(captured.value)
     assert "sensitive-body" not in str(captured.value)
     assert transport.requests == []
+
+
+def test_client_exposes_no_private_score_readback_escape_hatch():
+    """Read-only score guards must not be bypassable through a private method."""
+    assert {
+        name
+        for name in LangfuseClient.__dict__
+        if name.startswith("_") and not name.startswith("__") and "score" in name
+    } == set()
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""The deliberately small, privacy-safe v4 browser/storage projection.
+"""The deliberately small, privacy-safe browser/storage projection.
 
 Raw Langfuse traces never cross this boundary.  This module is also the one
 place that defines the persisted browser contract, so a schema change cannot
@@ -14,13 +14,23 @@ from datetime import date, datetime, timezone
 import re
 from typing import Mapping
 from unicodedata import category, decimal, normalize
+from zoneinfo import ZoneInfo
 
+from .csat_cache import CSATCache, CachedCSATResponse
+from .entry_coverage_cache import (
+    ENTRY_COVERAGE_START_WEEK,
+    EntryCoverageCache,
+    EntryCoverageCacheError,
+    EntryCoverageRecord,
+)
+from .reconciliation_cache import ReconciliationCache
 from .models import AnalysisResult, SessionMetrics, WeeklySummary
+from .pipeline import SamePeriodComparison, summarize_same_period
 from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 4
+_STORAGE_VERSION = 20
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -28,25 +38,83 @@ _UUID = re.compile(
     re.IGNORECASE,
 )
 _INTENT_PATTERN = re.compile(r"^[a-z0-9_-]{1,64}$")
-_TPE_CODE_PATTERN = re.compile(r"^-?[0-9]{1,6}$")
+_TPE_CODE_PATTERN = re.compile(r"-?[0-9]{1,6}\Z")
+_NATURAL_SORT_PART = re.compile(r"([0-9]+)")
+_TICKET_SORT_DIRECTIONS = frozenset({"asc", "desc"})
 _GUARDRAIL_RULES = frozenset(
     {
         "cs_escalation",
+        "empty_input",
         "empty_message_marker",
         "max_replies_exceeded",
         "missing_transaction_id",
+        "off_topic_llm",
+        "prompt_injection",
         "prompt_injection_llm",
         "off_topic",
+        "system_prompt_leak",
+        "tone_check_error",
     }
 )
+_TRANSFER_TRIGGER_REASONS = frozenset(
+    {
+        "skill_suggested_transfer",
+        "ai_response_requires_transfer",
+        "missing_transaction_id",
+        "max_replies_exceeded",
+        "out_of_scope",
+        "empty_message",
+        "prompt_injection",
+        "output_check_error",
+        "other_guardrail",
+        "unknown",
+    }
+)
+_TRANSFER_TRIGGER_SOURCES = frozenset(
+    {"input_guardrail", "skill_guardrail_checked", "output_guardrail"}
+)
 _EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
-_URL = re.compile(r"(?:https?://|www\.)", re.IGNORECASE)
+_URL = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
+_COMMENT_URL = re.compile(
+    rf"{_URL.pattern}"
+    r"|(?<![\w])(?:"
+    r"(?:mailto|tel|sms|data|javascript|geo|urn):\S+"
+    r"|[a-z][a-z0-9+.-]*:(?://\S+|[^\s:/?#]+[/?#]\S*)"
+    r")"
+    r"|(?<![\w@])(?:[^\W_](?:[\w-]{0,61}[^\W_])?\.)+"
+    r"[^\W\d_]{2,63}(?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}"
+    r"(?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|\[[0-9a-f:.%]+\](?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|(?<![\w:])(?:[0-9a-f]{0,4}:)*[0-9a-f]{0,4}::"
+    r"(?:[0-9a-f]{0,4}:)*[0-9a-f]{0,4}(?:[/?#]\S*)?"
+    r"|(?<![\w:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}"
+    r"(?:[/?#]\S*)?",
+    re.IGNORECASE,
+)
+_UTC_ISO = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z\Z"
+)
 _VIETNAMESE_FAMILY_NAMES = frozenset({
     "nguyễn", "nguyen", "trần", "tran", "lê", "le", "phạm", "pham", "hoàng", "hoang", "huỳnh", "huynh", "vũ", "vu", "võ", "vo", "đặng", "dang", "bùi", "bui", "đỗ", "do", "hồ", "ho", "ngô", "ngo", "dương", "duong", "lý", "ly",
 })
 _VIETNAMESE_NAME_MIDDLES = frozenset({"văn", "van", "thị", "thi"})
 _OUTCOMES = ("ai_end_to_end", "ai_then_cs", "direct_cs", "unclassified")
+_CSAT_BUCKETS = ("positive", "neutral", "negative")
+_CSAT_TICKET_STATES = frozenset({*_CSAT_BUCKETS, "unrated"})
+_CSAT_SORT_RANK = {"negative": 0, "neutral": 1, "positive": 2}
 _VIEWS = ("mon_sun", "mon_fri")
+_ENTRY_COVERAGE_STATUSES = frozenset(
+    {
+        "ai_replied_only",
+        "ai_replied_then_transferred",
+        "transferred_without_ai_reply",
+        "invoked_no_result",
+        "not_observed_invoked",
+        "unresolved",
+    }
+)
+_VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 _SEGMENTS = (
     "issue_category",
     "app",
@@ -58,6 +126,11 @@ _SEGMENTS = (
     "entry_point",
 )
 _MISSING = "Không xác định"
+# `skill` never used _MISSING accurately: a ticket with three distinct skills
+# and a ticket with zero `execute` observations both collapsed to the same
+# label. These name the two real cases instead.
+_MULTI_SKILL = "Nhiều skill"
+_NO_SKILL = "Chưa ghi nhận"
 _QUALITY_LABELS = frozenset(
     {
         "valid", "empty_or_technical", "malformed_output", "invalid_timestamp",
@@ -74,11 +147,12 @@ _DASHBOARD_KEYS = frozenset(
 )
 _TICKET_KEYS = frozenset(
     {
-        "ticket_id", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
+        "ticket_id", "opened_at", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
         "ai_first", "transferred", "reopen_lifetime", "reopen_within_7d",
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
-        "guardrail_rule", "escalation_guard_blocked", "data_quality",
+        "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
+        "data_quality",
     }
 )
 _WEEKLY_KEYS = frozenset(
@@ -97,6 +171,7 @@ _WEEKLY_KEYS = frozenset(
 @dataclass(frozen=True)
 class TicketRow:
     ticket_id: str
+    opened_at: str
     cohort_week: str
     cohort_status: str
     is_weekend_start: bool
@@ -116,7 +191,9 @@ class TicketRow:
     tpe_code: str | None
     tpe_status: str | None
     guardrail_rule: str | None
+    transfer_reason: str | None
     escalation_guard_blocked: bool
+    csat_satisfaction: str | None
     data_quality: str
 
     def __post_init__(self) -> None:
@@ -128,6 +205,7 @@ class DashboardSnapshot:
     generated_at: datetime
     dashboard: dict[str, object]
     tickets: tuple[TicketRow, ...]
+    entry_coverage_tickets: tuple[EntryCoverageRecord, ...] = ()
 
     def dashboard_dict(self) -> dict[str, object]:
         _require_aware(self.generated_at, "generated_at")
@@ -137,22 +215,38 @@ class DashboardSnapshot:
             dashboard,
             tuple(_validated_ticket_dict(ticket) for ticket in self.tickets),
         )
+        _validate_entry_coverage_records(self.entry_coverage_tickets)
         return dashboard
 
     def storage_dict(self) -> dict[str, object]:
         tickets = tuple(_validated_ticket_dict(ticket) for ticket in self.tickets)
         _validate_projected_intent_frequency(self.dashboard_dict(), tickets)
+        _validate_entry_coverage_records(self.entry_coverage_tickets)
         return {
             "schema_version": _STORAGE_VERSION,
             "generated_at": _utc_iso(self.generated_at),
             "dashboard": self.dashboard_dict(),
             "tickets": list(tickets),
+            "entry_coverage_tickets": [
+                _entry_coverage_record_dict(record)
+                for record in self.entry_coverage_tickets
+            ],
         }
 
     @classmethod
     def from_storage_dict(cls, value: Mapping[str, object]) -> DashboardSnapshot:
         storage = _require_mapping(value, "storage")
-        _require_exact_keys(storage, {"schema_version", "generated_at", "dashboard", "tickets"}, "storage")
+        _require_exact_keys(
+            storage,
+            {
+                "schema_version",
+                "generated_at",
+                "dashboard",
+                "tickets",
+                "entry_coverage_tickets",
+            },
+            "storage",
+        )
         if storage["schema_version"] != _STORAGE_VERSION:
             raise ValueError("unsupported dashboard storage schema_version")
         generated_at = _parse_utc_iso(storage["generated_at"], "generated_at")
@@ -162,21 +256,44 @@ class DashboardSnapshot:
         if not isinstance(raw_tickets, list):
             raise ValueError("tickets must be a list")
         tickets = tuple(_ticket_from_storage(item) for item in raw_tickets)
+        raw_entry_tickets = storage["entry_coverage_tickets"]
+        if not isinstance(raw_entry_tickets, list):
+            raise ValueError("entry_coverage_tickets must be a list")
+        entry_tickets = tuple(
+            _entry_coverage_record_from_storage(item)
+            for item in raw_entry_tickets
+        )
+        _validate_entry_coverage_records(entry_tickets)
         _validate_projected_intent_frequency(dashboard, tuple(asdict(ticket) for ticket in tickets))
         return cls(
             generated_at=generated_at,
             dashboard=deepcopy(dashboard),
             tickets=tickets,
+            entry_coverage_tickets=entry_tickets,
         )
 
 
-def project_dashboard(run: ReportRun) -> DashboardSnapshot:
+def project_dashboard(
+    run: ReportRun,
+    *,
+    csat_cache: CSATCache | None = None,
+    reconciliation_cache: ReconciliationCache | None = None,
+    entry_coverage_cache: EntryCoverageCache | None = None,
+) -> DashboardSnapshot:
     result = run.result
     generated_at = result.selection.window.as_of.astimezone(timezone.utc)
     safe_intents = _projected_intents(result.sessions)
+    ordered_csat = _ordered_csat_by_ticket(
+        csat_cache.responses if csat_cache is not None else ()
+    )
     tickets = tuple(sorted(
         (
-            _ticket_row(session, safe_intents[session.session_id])
+            _ticket_row(
+                session,
+                safe_intents[session.session_id],
+                csat_cache,
+                ordered_csat,
+            )
             for session in result.sessions
             if _is_safe_ticket_id(session.session_id)
         ),
@@ -184,8 +301,17 @@ def project_dashboard(run: ReportRun) -> DashboardSnapshot:
     ))
     return DashboardSnapshot(
         generated_at,
-        _dashboard_payload(run, generated_at, safe_intents),
+        _dashboard_payload(
+            run,
+            generated_at,
+            safe_intents,
+            csat_cache,
+            ordered_csat,
+            reconciliation_cache,
+            entry_coverage_cache,
+        ),
         tickets,
+        tuple(entry_coverage_cache.records) if entry_coverage_cache is not None else (),
     )
 
 
@@ -193,6 +319,7 @@ def ticket_page(
     snapshot: DashboardSnapshot,
     *,
     cohort_week: str | None = None,
+    cohort_weeks: str | None = None,
     outcome: str | None = None,
     ticket_id: str | None = None,
     issue_category: str | None = None,
@@ -201,10 +328,14 @@ def ticket_page(
     skill: str | None = None,
     intent: str | None = None,
     tpe_code: str | None = None,
+    transfer_reason: str | None = None,
+    csat_satisfaction: str | None = None,
     gt4_turn: bool | None = None,
     transferred: bool | None = None,
     is_weekend_start: bool | None = None,
     week_definition: str | None = None,
+    sort_by: str | None = None,
+    sort_direction: str | None = None,
     page: int = 1,
     page_size: int = 50,
 ) -> dict[str, object]:
@@ -213,7 +344,15 @@ def ticket_page(
     Dimension values are never treated as open text: every requested value is
     checked against the current safe snapshot before ticket filtering.
     """
-    _validate_ticket_filters(cohort_week=cohort_week, outcome=outcome, ticket_id=ticket_id, page=page, page_size=page_size)
+    _validate_ticket_filters(
+        cohort_week=cohort_week,
+        cohort_weeks=cohort_weeks,
+        outcome=outcome,
+        ticket_id=ticket_id,
+        page=page,
+        page_size=page_size,
+    )
+    selected_cohort_weeks = _parse_cohort_weeks_filter(cohort_weeks)
     strings = {
         "issue_category": issue_category,
         "app": app,
@@ -225,10 +364,21 @@ def ticket_page(
     for name, value in strings.items():
         if value is None:
             continue
-        if not isinstance(value, str) or value not in {
-            _ticket_filter_value(ticket, name) for ticket in snapshot.tickets
-        }:
+        if (
+            not isinstance(value, str)
+            or value not in _ticket_filter_allowlist(snapshot, name)
+        ):
             raise ValueError(f"{name} is invalid")
+    if (
+        transfer_reason is not None
+        and transfer_reason not in _TRANSFER_TRIGGER_REASONS
+    ):
+        raise ValueError("transfer_reason is invalid")
+    if (
+        csat_satisfaction is not None
+        and csat_satisfaction not in _CSAT_TICKET_STATES
+    ):
+        raise ValueError("csat_satisfaction is invalid")
     for name, value in {
         "gt4_turn": gt4_turn,
         "transferred": transferred,
@@ -238,9 +388,14 @@ def ticket_page(
             raise ValueError(f"{name} is invalid")
     if week_definition is not None and week_definition not in _VIEWS:
         raise ValueError("week_definition is invalid")
+    effective_sort_direction = _validate_ticket_sort(sort_by, sort_direction)
     rows = [
-        row for row in sorted(snapshot.tickets, key=lambda row: (row.cohort_week, row.ticket_id))
+        row for row in snapshot.tickets
         if (cohort_week is None or row.cohort_week == cohort_week)
+        and (
+            selected_cohort_weeks is None
+            or row.cohort_week in selected_cohort_weeks
+        )
         and (outcome is None or row.outcome == outcome)
         and (ticket_id is None or row.ticket_id == ticket_id)
         and (issue_category is None or _ticket_filter_value(row, "issue_category") == issue_category)
@@ -249,24 +404,262 @@ def ticket_page(
         and (skill is None or _ticket_filter_value(row, "skill") == skill)
         and (intent is None or _ticket_filter_value(row, "intent") == intent)
         and (tpe_code is None or _ticket_filter_value(row, "tpe_code") == tpe_code)
+        and (transfer_reason is None or row.transfer_reason == transfer_reason)
+        and (
+            csat_satisfaction is None
+            or row.csat_satisfaction == csat_satisfaction
+        )
         and (gt4_turn is None or row.gt4_turn == gt4_turn)
         and (transferred is None or row.transferred == transferred)
         and (is_weekend_start is None or row.is_weekend_start == is_weekend_start)
         and (week_definition != "mon_fri" or not row.is_weekend_start)
     ]
+    rows = _sort_ticket_rows(rows, sort_by, effective_sort_direction)
     start = (page - 1) * page_size
     return {"items": [asdict(row) for row in rows[start:start + page_size]], "page": page, "page_size": page_size, "total": len(rows)}
 
 
+def entry_coverage_ticket_page(
+    snapshot: DashboardSnapshot,
+    *,
+    week_definition: str = "mon_sun",
+    cohort_weeks: str | None = None,
+    status: str | None = None,
+    page: int = 1,
+    page_size: int = 10,
+    sort_by: str = "opened_at",
+    sort_dir: str = "desc",
+) -> dict[str, object]:
+    """Return only the safe Freshdesk entry-coverage drill-down projection."""
+
+    if week_definition not in _VIEWS:
+        raise ValueError("week_definition is invalid")
+    if status is not None and status not in _ENTRY_COVERAGE_STATUSES:
+        raise ValueError("status is invalid")
+    if sort_by not in {"opened_at", "ticket_id"}:
+        raise ValueError("sort_by is invalid")
+    if sort_dir not in _TICKET_SORT_DIRECTIONS:
+        raise ValueError("sort_dir is invalid")
+    if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+        raise ValueError("page must be at least 1")
+    if (
+        isinstance(page_size, bool)
+        or not isinstance(page_size, int)
+        or not 1 <= page_size <= 100
+    ):
+        raise ValueError("page_size must be between 1 and 100")
+
+    view = _require_mapping(snapshot.dashboard["views"], "views")[week_definition]
+    weekly = _require_mapping(view, f"views.{week_definition}")["weekly"]
+    allowed_weeks = {
+        item["cohort_week"] for item in weekly if isinstance(item, Mapping)
+    }
+    selected_weeks = _parse_entry_coverage_weeks(cohort_weeks)
+    if selected_weeks is None:
+        selected_weeks = frozenset(allowed_weeks)
+    elif not selected_weeks.issubset(allowed_weeks):
+        raise ValueError("cohort_weeks contains a week outside this view")
+
+    rows = [
+        record
+        for record in snapshot.entry_coverage_tickets
+        if record.cohort_week in selected_weeks
+        and (status is None or record.status == status)
+        and (
+            week_definition == "mon_sun"
+            or _parse_utc_iso(record.opened_at, "entry coverage opened_at")
+            .astimezone(_VIETNAM_TIMEZONE)
+            .weekday()
+            < 5
+        )
+    ]
+    rows.sort(
+        key=(
+            lambda record: (
+                _parse_utc_iso(record.opened_at, "entry coverage opened_at"),
+                int(record.ticket_id),
+            )
+            if sort_by == "opened_at"
+            else int(record.ticket_id)
+        ),
+        reverse=sort_dir == "desc",
+    )
+    start = (page - 1) * page_size
+    return {
+        "items": [
+            _entry_coverage_record_dict(record)
+            for record in rows[start : start + page_size]
+        ],
+        "page": page,
+        "page_size": page_size,
+        "total": len(rows),
+    }
+
+
+def _parse_entry_coverage_weeks(value: str | None) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("cohort_weeks is invalid")
+    values = value.split(",")
+    if not 1 <= len(values) <= 52 or len(set(values)) != len(values):
+        raise ValueError("cohort_weeks is invalid")
+    for item in values:
+        try:
+            parsed = date.fromisoformat(item)
+        except ValueError as error:
+            raise ValueError("cohort_weeks is invalid") from error
+        if parsed.isoformat() != item or parsed.weekday() != 0:
+            raise ValueError("cohort_weeks must contain Mondays")
+    return frozenset(values)
+
+
+def _validate_ticket_sort(
+    sort_by: str | None,
+    sort_direction: str | None,
+) -> str | None:
+    if sort_by is None:
+        if sort_direction is not None:
+            raise ValueError("sort_direction is invalid")
+        return None
+    if not isinstance(sort_by, str) or sort_by not in _TICKET_KEYS:
+        raise ValueError("sort_by is invalid")
+    if sort_direction is None:
+        return "asc"
+    if (
+        not isinstance(sort_direction, str)
+        or sort_direction not in _TICKET_SORT_DIRECTIONS
+    ):
+        raise ValueError("sort_direction is invalid")
+    return sort_direction
+
+
+def _sort_ticket_rows(
+    rows: list[TicketRow],
+    sort_by: str | None,
+    sort_direction: str | None,
+) -> list[TicketRow]:
+    if sort_by is None:
+        return sorted(rows, key=lambda row: (row.cohort_week, row.ticket_id))
+
+    if sort_by == "csat_satisfaction":
+        rated = [
+            row for row in rows
+            if row.csat_satisfaction in _CSAT_SORT_RANK
+        ]
+        unrated = [row for row in rows if row.csat_satisfaction == "unrated"]
+        unavailable = [row for row in rows if row.csat_satisfaction is None]
+        return [
+            *sorted(
+                rated,
+                key=lambda row: (
+                    _CSAT_SORT_RANK[row.csat_satisfaction],
+                    int(row.ticket_id),
+                ),
+                reverse=sort_direction == "desc",
+            ),
+            *sorted(unrated, key=lambda row: int(row.ticket_id)),
+            *sorted(unavailable, key=lambda row: int(row.ticket_id)),
+        ]
+
+    # Ticket IDs are unique in the safe projection. Pre-sorting them makes the
+    # secondary order explicit and stable for every low-cardinality column.
+    by_ticket_id = sorted(rows, key=lambda row: int(row.ticket_id))
+    populated = [row for row in by_ticket_id if getattr(row, sort_by) is not None]
+    missing = [row for row in by_ticket_id if getattr(row, sort_by) is None]
+    return [
+        *sorted(
+            populated,
+            key=lambda row: _ticket_sort_value(row, sort_by),
+            reverse=sort_direction == "desc",
+        ),
+        # Missing values remain last in both directions so changing direction
+        # never makes an absent analytical dimension look like a top result.
+        *missing,
+    ]
+
+
+def _ticket_sort_value(
+    ticket: TicketRow,
+    name: str,
+) -> tuple[tuple[int, int | str], ...]:
+    value = getattr(ticket, name)
+    if name == "ticket_id":
+        return ((0, int(value)),)
+    if name == "opened_at" and isinstance(value, str):
+        opened_at = _parse_utc_iso(value, "opened_at")
+        return ((0, int(opened_at.timestamp() * 1_000_000)),)
+    if (
+        name == "tpe_code"
+        and isinstance(value, str)
+        and _TPE_CODE_PATTERN.fullmatch(value)
+    ):
+        return ((0, int(value)),)
+    if isinstance(value, (bool, int)):
+        return ((0, int(value)),)
+
+    normalised = normalize("NFKC", str(value)).casefold()
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in _NATURAL_SORT_PART.split(normalised)
+        if part
+    )
+
+
 def _ticket_filter_value(ticket: TicketRow, name: str) -> str:
     value = getattr(ticket, name)
-    return _MISSING if value is None else value
+    if value is not None:
+        return value
+    # A ticket-row skill of None means "not exactly one recorded skill" — most
+    # often zero. The Explorer's skill filter options come from the segment
+    # bucket labels, so this fallback must match the label those options use.
+    return _NO_SKILL if name == "skill" else _MISSING
+
+
+def _ticket_filter_allowlist(
+    snapshot: DashboardSnapshot,
+    name: str,
+) -> frozenset[str]:
+    """Union safe Ticket Explorer values with already-visible aggregates.
+
+    Non-numeric session IDs are intentionally omitted from ``snapshot.tickets``
+    but still contribute to the dashboard aggregates.  Their segment labels are
+    therefore valid filter options even when the resulting safe ticket page is
+    empty.  Intent labels come only from the schema-validated intent segment;
+    they are never accepted through an open pattern or another dimension.
+    """
+    segment_name = "tpe" if name == "tpe_code" else name
+    allowed = {
+        _ticket_filter_value(ticket, name)
+        for ticket in snapshot.tickets
+    }
+    views = _require_mapping(snapshot.dashboard["views"], "views")
+    for view_name in _VIEWS:
+        view = _require_mapping(views[view_name], f"views.{view_name}")
+        segments = _require_mapping(
+            view["segments"],
+            f"views.{view_name}.segments",
+        )
+        buckets = _require_mapping(
+            segments[segment_name],
+            f"views.{view_name}.segments.{segment_name}",
+        )
+        allowed.update(
+            label
+            for label in buckets
+            if isinstance(label, str)
+        )
+    return frozenset(allowed)
 
 
 def _dashboard_payload(
     run: ReportRun,
     generated_at: datetime,
     safe_intents: Mapping[str, str | None],
+    csat_cache: CSATCache | None,
+    ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
+    reconciliation_cache: ReconciliationCache | None,
+    entry_coverage_cache: EntryCoverageCache | None,
 ) -> dict[str, object]:
     result = run.result
     selection = result.selection
@@ -275,8 +668,30 @@ def _dashboard_payload(
         summary for summary in mon_sun if summary.week_definition == "mon_fri"
     )
     views = {
-        "mon_sun": _view_payload(result.sessions, mon_sun, "mon_sun", safe_intents, run.reopen_shadow),
-        "mon_fri": _view_payload(result.sessions, mon_fri, "mon_fri", safe_intents, run.reopen_shadow),
+        "mon_sun": _view_payload(
+            result.sessions,
+            mon_sun,
+            "mon_sun",
+            safe_intents,
+            run.reopen_shadow,
+            summarize_same_period(result, "mon_sun"),
+            csat_cache,
+            ordered_csat,
+            reconciliation_cache,
+            entry_coverage_cache,
+        ),
+        "mon_fri": _view_payload(
+            result.sessions,
+            mon_fri,
+            "mon_fri",
+            safe_intents,
+            run.reopen_shadow,
+            summarize_same_period(result, "mon_fri"),
+            csat_cache,
+            ordered_csat,
+            reconciliation_cache,
+            entry_coverage_cache,
+        ),
     }
     quality = Counter(_quality_label(session.data_quality) for session in result.sessions)
     quality.update(_quality_label(issue.reason) for issue in selection.invalid_keyed)
@@ -315,6 +730,11 @@ def _view_payload(
     week_definition: str,
     safe_intents: Mapping[str, str | None],
     reopen_shadow: ReopenReasonShadow,
+    same_period: SamePeriodComparison | None,
+    csat_cache: CSATCache | None,
+    ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
+    reconciliation_cache: ReconciliationCache | None,
+    entry_coverage_cache: EntryCoverageCache | None,
 ) -> dict[str, object]:
     sessions = tuple(
         session for session in all_sessions
@@ -328,8 +748,8 @@ def _view_payload(
     transfer_total = outcomes["ai_then_cs"] + outcomes["direct_cs"]
     lifetime = [session.reopen_lifetime for session in sessions if session.reopen_lifetime is not None]
     within = [session.reopen_within_7d for session in sessions if session.reopen_within_7d is not None]
-    gt4_with = sum(session.turn_count > 4 and session.transferred for session in sessions)
-    gt4_without = sum(session.turn_count > 4 and not session.transferred for session in sessions)
+    gt4_with = sum(session.turn_count > 3 and session.transferred for session in sessions)
+    gt4_without = sum(session.turn_count > 3 and not session.transferred for session in sessions)
     max_replies = sum("max_replies_exceeded" in session.guardrail_rules for session in sessions)
     weekly_payloads: list[dict[str, object]] = []
     for summary in weekly:
@@ -346,6 +766,11 @@ def _view_payload(
                 week_definition,
                 safe_intents,
                 unavailable_shadow(),
+                same_period,
+                csat_cache,
+                ordered_csat,
+                reconciliation_cache,
+                entry_coverage_cache,
             )
         weekly_payloads.append(_weekly_payload(summary, reopen_reason))
     return {
@@ -384,6 +809,18 @@ def _view_payload(
             }
             for summary in weekly
         },
+        "same_period": _same_period_payload(same_period),
+        "csat": _csat_payload(sessions, weekly, csat_cache, ordered_csat),
+        "outcome_reconciliation": _outcome_reconciliation_payload(
+            sessions,
+            weekly,
+            reconciliation_cache,
+        ),
+        "entry_coverage": _entry_coverage_payload(
+            weekly,
+            week_definition,
+            entry_coverage_cache,
+        ),
         "rule_gt4": {
             "gt4_turn_total": gt4_with + gt4_without,
             "gt4_turn_with_cs": gt4_with,
@@ -393,21 +830,414 @@ def _view_payload(
     }
 
 
+def _outcome_reconciliation_payload(
+    sessions: tuple[SessionMetrics, ...],
+    weekly: tuple[WeeklySummary, ...],
+    cache: ReconciliationCache | None,
+) -> dict[str, object] | None:
+    """Project only aggregate Freshdesk evidence for Langfuse AI-only tickets."""
+
+    if cache is None or cache.fetched_at is None:
+        return None
+    records = {record.ticket_id: record for record in cache.records}
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    by_week: dict[str, object] = {}
+    for summary in weekly:
+        cohort_week = summary.cohort_week.isoformat()
+        if cohort_week not in fetched_weeks:
+            continue
+        population = tuple(
+            session
+            for session in sessions
+            if (
+                session.cohort_week == summary.cohort_week
+                and _outcome(session.outcome) == "ai_end_to_end"
+                and _is_safe_ticket_id(session.session_id)
+            )
+        )
+        matched = tuple(
+            records[session.session_id]
+            for session in population
+            if (
+                session.session_id in records
+                and records[session.session_id].cohort_week == cohort_week
+            )
+        )
+        checked = sum(
+            record.human_replied_after_ai is not None for record in matched
+        )
+        human_replied = sum(
+            record.human_replied_after_ai is True for record in matched
+        )
+        unresolved = sum(
+            record.human_replied_after_ai is None for record in matched
+        )
+        by_week[cohort_week] = {
+            "langfuse_ai_end_to_end": len(population),
+            "checked_ticket_count": checked,
+            "human_replied_after_ai": human_replied,
+            "unresolved_ticket_count": unresolved,
+            "mismatch_rate": human_replied / checked if checked else None,
+        }
+    return {
+        "source": "freshdesk",
+        "fetched_at": cache.fetched_at,
+        "by_week": by_week,
+    }
+
+
+def _entry_coverage_payload(
+    weekly: tuple[WeeklySummary, ...],
+    week_definition: str,
+    cache: EntryCoverageCache | None,
+) -> dict[str, object] | None:
+    if cache is None or cache.fetched_at is None:
+        return None
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    by_week: dict[str, object] = {}
+    for summary in weekly:
+        cohort_week = summary.cohort_week.isoformat()
+        if cohort_week not in fetched_weeks:
+            continue
+        records = tuple(
+            record
+            for record in cache.records
+            if record.cohort_week == cohort_week
+            and (
+                week_definition == "mon_sun"
+                or _parse_utc_iso(record.opened_at, "entry coverage opened_at")
+                .astimezone(_VIETNAM_TIMEZONE)
+                .weekday()
+                < 5
+            )
+        )
+        counts = Counter(record.status for record in records)
+        by_week[cohort_week] = {
+            "freshdesk_ticket_count": len(records),
+            "ai_replied_only": counts["ai_replied_only"],
+            "ai_replied_then_transferred": counts["ai_replied_then_transferred"],
+            "transferred_without_ai_reply": counts["transferred_without_ai_reply"],
+            "invoked_no_result": counts["invoked_no_result"],
+            "not_observed_invoked": counts["not_observed_invoked"],
+            "not_observed_human_replied": sum(
+                record.status == "not_observed_invoked"
+                and record.human_replied is True
+                for record in records
+            ),
+            "not_observed_no_human_reply": sum(
+                record.status == "not_observed_invoked"
+                and record.human_replied is False
+                for record in records
+            ),
+            "unresolved": counts["unresolved"],
+        }
+    return {
+        "source": "freshdesk",
+        "source_start_week": ENTRY_COVERAGE_START_WEEK,
+        "fetched_at": cache.fetched_at,
+        "by_week": by_week,
+    }
+
+
+def _csat_payload(
+    sessions: tuple[SessionMetrics, ...],
+    weekly: tuple[WeeklySummary, ...],
+    cache: CSATCache | None,
+    ordered_responses: Mapping[str, tuple[CachedCSATResponse, ...]],
+) -> dict[str, object] | None:
+    if cache is None or cache.fetched_at is None:
+        return None
+    session_by_ticket = {
+        session.session_id: session
+        for session in sessions
+        if _is_safe_ticket_id(session.session_id)
+    }
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    by_week: dict[str, object] = {}
+    for summary in weekly:
+        cohort_week = summary.cohort_week.isoformat()
+        if cohort_week not in fetched_weeks:
+            continue
+        ticket_responses = {
+            ticket_id: responses
+            for ticket_id, responses in ordered_responses.items()
+            if (
+                ticket_id in session_by_ticket
+                and session_by_ticket[ticket_id].cohort_week == summary.cohort_week
+            )
+        }
+        latest = {
+            ticket_id: responses[-1]
+            for ticket_id, responses in ticket_responses.items()
+            if responses
+        }
+        buckets = Counter(
+            response.satisfaction_bucket for response in latest.values()
+        )
+        outcome_counts = {
+            outcome: _empty_csat_counts()
+            for outcome in _OUTCOMES
+        }
+        response_outcome_counts = {
+            outcome: _empty_csat_counts()
+            for outcome in _OUTCOMES
+        }
+        dimension_counts: dict[str, dict[str, dict[str, int]]] = {
+            "skill": {},
+            "issue_category": {},
+        }
+        response_dimension_counts: dict[str, dict[str, dict[str, int]]] = {
+            "skill": {},
+            "issue_category": {},
+        }
+        for ticket_id, response in latest.items():
+            session = session_by_ticket[ticket_id]
+            outcome = _outcome(session.outcome)
+            _increment_csat_counts(outcome_counts[outcome], response)
+            dimension_values = {
+                "skill": _skill_bucket(session),
+                "issue_category": _safe_dimension(
+                    session.dimensions.issue_category
+                ),
+            }
+            for dimension, value in dimension_values.items():
+                counts = dimension_counts[dimension].setdefault(
+                    value,
+                    _empty_csat_counts(),
+                )
+                _increment_csat_counts(counts, response)
+        for ticket_id, responses in ticket_responses.items():
+            session = session_by_ticket[ticket_id]
+            outcome = _outcome(session.outcome)
+            dimension_values = {
+                "skill": _skill_bucket(session),
+                "issue_category": _safe_dimension(
+                    session.dimensions.issue_category
+                ),
+            }
+            for response in responses:
+                _increment_csat_counts(response_outcome_counts[outcome], response)
+                for dimension, value in dimension_values.items():
+                    counts = response_dimension_counts[dimension].setdefault(
+                        value,
+                        _empty_csat_counts(),
+                    )
+                    _increment_csat_counts(counts, response)
+
+        feedback_entries: list[dict[str, object]] = []
+        for ticket_id, responses in ticket_responses.items():
+            session = session_by_ticket[ticket_id]
+            response_total = len(responses)
+            for response_number, response in enumerate(responses, start=1):
+                if response.comment_redacted is None:
+                    continue
+                feedback_entries.append(
+                    {
+                        "ticket_id": ticket_id,
+                        "responded_at": response.responded_at,
+                        "satisfaction_bucket": response.satisfaction_bucket,
+                        "outcome": _outcome(session.outcome),
+                        "skill": _skill_bucket(session),
+                        "issue_category": _safe_dimension(
+                            session.dimensions.issue_category
+                        ),
+                        "text": response.comment_redacted,
+                        "response_number": response_number,
+                        "response_total": response_total,
+                        "is_latest_for_ticket": response_number == response_total,
+                    }
+                )
+        feedback_entries.sort(
+            key=lambda item: (
+                _parse_utc_iso(item["responded_at"], "CSAT responded_at"),
+                item["ticket_id"],
+                item["response_number"],
+            )
+        )
+        response_count = sum(len(responses) for responses in ticket_responses.values())
+        by_week[cohort_week] = {
+            "response_count": response_count,
+            "ticket_count": len(latest),
+            "positive": buckets["positive"],
+            "neutral": buckets["neutral"],
+            "negative": buckets["negative"],
+            "by_outcome": outcome_counts,
+            "by_dimension": {
+                dimension: [
+                    {"value": value, **counts}
+                    for value, counts in sorted(
+                        values.items(),
+                        key=lambda item: (
+                            -item[1]["ticket_count"],
+                            _natural_string_sort_key(item[0]),
+                        ),
+                    )
+                ]
+                for dimension, values in dimension_counts.items()
+            },
+            "response_by_outcome": response_outcome_counts,
+            "response_by_dimension": {
+                dimension: [
+                    {"value": value, **counts}
+                    for value, counts in sorted(
+                        values.items(),
+                        key=lambda item: (
+                            -item[1]["ticket_count"],
+                            _natural_string_sort_key(item[0]),
+                        ),
+                    )
+                ]
+                for dimension, values in response_dimension_counts.items()
+            },
+            "feedback_entries": feedback_entries,
+        }
+    return {
+        "source": "freshdesk",
+        "fetched_at": cache.fetched_at,
+        "by_week": by_week,
+    }
+
+
+def _csat_response_order(
+    response: CachedCSATResponse,
+) -> tuple[datetime, str]:
+    return (
+        _parse_utc_iso(response.responded_at, "CSAT responded_at"),
+        response.response_key,
+    )
+
+
+def _ordered_csat_by_ticket(
+    responses: tuple[CachedCSATResponse, ...],
+) -> dict[str, tuple[CachedCSATResponse, ...]]:
+    grouped: dict[str, list[CachedCSATResponse]] = defaultdict(list)
+    for response in responses:
+        grouped[response.ticket_id].append(response)
+    return {
+        ticket_id: tuple(sorted(items, key=_csat_response_order))
+        for ticket_id, items in sorted(grouped.items())
+    }
+
+
+def _empty_csat_counts() -> dict[str, int]:
+    return {
+        "ticket_count": 0,
+        "positive": 0,
+        "neutral": 0,
+        "negative": 0,
+    }
+
+
+def _increment_csat_counts(
+    counts: dict[str, int],
+    response: CachedCSATResponse,
+) -> None:
+    counts["ticket_count"] += 1
+    counts[response.satisfaction_bucket] += 1
+
+
+def _natural_string_sort_key(value: str) -> tuple[tuple[int, int | str], ...]:
+    normalised = normalize("NFKC", value).casefold()
+    return tuple(
+        (0, int(part)) if part.isdigit() else (1, part)
+        for part in _NATURAL_SORT_PART.split(normalised)
+        if part
+    )
+
+
+def _same_period_payload(
+    same_period: SamePeriodComparison | None,
+) -> dict[str, object] | None:
+    if same_period is None:
+        return None
+    return {
+        "cutoff_date": same_period.cutoff_date.isoformat(),
+        "cutoff_weekday": same_period.cutoff_weekday,
+        "current": _same_period_week_payload(same_period.current),
+        "baseline": {
+            "weeks_used": same_period.baseline.weeks_used,
+            "ai_first_rate": same_period.baseline.ai_first_rate,
+            "reopen_lifetime_rate": same_period.baseline.reopen_lifetime_rate,
+        },
+        "by_week": {
+            week.isoformat(): _same_period_week_payload(summary)
+            for week, summary in same_period.by_week.items()
+        },
+    }
+
+
+def _same_period_week_payload(summary: WeeklySummary) -> dict[str, object]:
+    return {
+        "cohort_week": summary.cohort_week.isoformat(),
+        "total_tickets": summary.total_tickets,
+        "ai_first_count": summary.ai_first_count,
+        "ai_first_rate": summary.ai_first_rate,
+        "reopen_lifetime_rate": summary.reopen_lifetime_rate,
+        "reopen_lifetime_numerator": summary.reopen_lifetime_numerator,
+        "reopen_lifetime_denominator": summary.reopen_lifetime_denominator,
+    }
+
+
+def _valid_tpe_signals(
+    values: object,
+) -> tuple[tuple[str, str | None], ...]:
+    if not isinstance(values, tuple):
+        return ()
+    parsed: set[tuple[str, str | None]] = set()
+    for value in values:
+        if not isinstance(value, tuple) or len(value) != 2:
+            continue
+        transstatus, raw_step_result = value
+        if (
+            not isinstance(transstatus, str)
+            or _TPE_CODE_PATTERN.fullmatch(transstatus) is None
+        ):
+            continue
+        step_result = (
+            raw_step_result
+            if isinstance(raw_step_result, str)
+            and _TPE_CODE_PATTERN.fullmatch(raw_step_result) is not None
+            else None
+        )
+        parsed.add((transstatus, step_result))
+    return tuple(
+        sorted(
+            parsed,
+            key=lambda item: (
+                item[0],
+                item[1] is None,
+                item[1] or "",
+            ),
+        )
+    )
+
+
+def _unique_tpe_transstatus(values: object) -> str | None:
+    transstatuses = {
+        transstatus
+        for transstatus, _step_result in _valid_tpe_signals(values)
+    }
+    return next(iter(transstatuses)) if len(transstatuses) == 1 else None
+
+
 def _transfer_reasons(
     sessions: tuple[SessionMetrics, ...],
 ) -> dict[str, object]:
     transferred = tuple(session for session in sessions if session.transferred)
-    tpe_counts: Counter[tuple[str, str | None, int | None, bool]] = Counter()
+    tpe_counts: Counter[tuple[str, str | None]] = Counter()
     guardrail_counts: Counter[str] = Counter()
+    trigger_counts: Counter[
+        tuple[str, str | None, str | None, str | None, str | None]
+    ] = Counter()
     escalation_blocked = 0
+    step_result_missing = 0
     for session in transferred:
         dims = session.dimensions
-        if dims.tpe_code is not None:
-            code = _safe_optional(dims.tpe_code)
-            status = _safe_optional(dims.tpe_status_raw)
-            if code is not None and _TPE_CODE_PATTERN.fullmatch(code):
-                case = dims.tpe_case
-                tpe_counts[(code, status, case, case is not None)] += 1
+        signals = _valid_tpe_signals(dims.tpe_signals)
+        tpe_counts.update(signals)
+        step_result_missing += int(
+            not any(step_result is not None for _, step_result in signals)
+        )
         # These are overlapping diagnostic indicators, not a partition of
         # transferred sessions.  Their sum may exceed the denominator and a
         # "missing reason" must never be inferred by subtraction.
@@ -415,22 +1245,21 @@ def _transfer_reasons(
             if rule in _GUARDRAIL_RULES:
                 guardrail_counts[rule] += 1
         escalation_blocked += int(dims.escalation_guard_blocked)
+        trigger_counts[_transfer_trigger_grain(session)] += 1
 
     tpe_rows = [
         {
-            "code": code,
-            "status": status,
-            "case": case,
-            "mapped": mapped,
+            "transstatus": transstatus,
+            "step_result": step_result,
             "count": count,
         }
-        for (code, status, case, mapped), count in sorted(
+        for (transstatus, step_result), count in sorted(
             tpe_counts.items(),
             key=lambda item: (
                 -item[1],
                 item[0][0],
+                item[0][1] is None,
                 item[0][1] or "",
-                item[0][2] if item[0][2] is not None else -1,
             ),
         )
     ]
@@ -442,15 +1271,107 @@ def _transfer_reasons(
         )
     ]
     denominator = len(transferred)
+    trigger_rows = [
+        {
+            "reason": reason,
+            "rule": rule,
+            "source": source,
+            "stage": stage,
+            "skill": skill,
+            "count": count,
+        }
+        for (reason, rule, source, stage, skill), count in sorted(
+            trigger_counts.items(),
+            key=lambda item: (
+                -item[1],
+                item[0][0],
+                item[0][1] or "",
+                item[0][2] or "",
+                item[0][3] or "",
+                item[0][4] or "",
+            ),
+        )
+    ]
     return {
         "observed_transfer_denominator": denominator,
+        "triggers": trigger_rows,
         "tpe": tpe_rows,
+        "step_result_missing": {
+            "count": step_result_missing,
+            "denominator": denominator,
+        },
         "guardrail": guardrail_rows,
         "escalation_guard_blocked": {
             "count": escalation_blocked,
             "denominator": denominator,
         },
     }
+
+
+def _transfer_trigger_grain(
+    session: SessionMetrics,
+) -> tuple[str, str | None, str | None, str | None, str | None]:
+    trigger = session.transfer_trigger
+    if trigger is None:
+        return ("unknown", None, None, None, None)
+    skill = _safe_optional(trigger.skill)
+    if (
+        trigger.reason not in _TRANSFER_TRIGGER_REASONS
+        or trigger.reason == "unknown"
+        or trigger.rule not in _GUARDRAIL_RULES
+        or trigger.source not in _TRANSFER_TRIGGER_SOURCES
+        or trigger.stage not in {None, "input", "output"}
+        or (
+            trigger.source == "skill_guardrail_checked"
+            and trigger.stage not in {"input", "output"}
+        )
+        or (
+            trigger.source != "skill_guardrail_checked"
+            and (trigger.stage is not None or trigger.skill is not None)
+        )
+        or (trigger.skill is not None and skill is None)
+        or trigger.reason
+        != _expected_transfer_reason(
+            trigger.rule,
+            trigger.source,
+            trigger.stage,
+        )
+    ):
+        return ("unknown", None, None, None, None)
+    return (
+        trigger.reason,
+        trigger.rule,
+        trigger.source,
+        trigger.stage,
+        skill,
+    )
+
+
+def _expected_transfer_reason(
+    rule: str,
+    source: str,
+    stage: str | None,
+) -> str:
+    if (
+        rule == "cs_escalation"
+        and source == "skill_guardrail_checked"
+        and stage == "output"
+    ):
+        return "skill_suggested_transfer"
+    if rule == "cs_escalation" and source == "output_guardrail":
+        return "ai_response_requires_transfer"
+    return {
+        "missing_transaction_id": "missing_transaction_id",
+        "max_replies_exceeded": "max_replies_exceeded",
+        "off_topic": "out_of_scope",
+        "off_topic_llm": "out_of_scope",
+        "empty_input": "empty_message",
+        "empty_message_marker": "empty_message",
+        "prompt_injection": "prompt_injection",
+        "prompt_injection_llm": "prompt_injection",
+        "system_prompt_leak": "prompt_injection",
+        "tone_check_error": "output_check_error",
+    }.get(rule, "other_guardrail")
 
 
 def _segments(
@@ -468,8 +1389,11 @@ def _segments(
             bucket["transferred"] += int(session.transferred)
             bucket["reopen"] += int(session.reopen_lifetime == 1)
         # The missing bucket is always present, making the consumer's closure
-        # logic deterministic even when this run happens to have no missing data.
-        buckets.setdefault(_MISSING, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0})
+        # logic deterministic even when this run happens to have no missing
+        # data. `skill` uses its own always-present "chưa ghi nhận" bucket
+        # instead, since _MISSING would sit alongside it meaning nothing.
+        missing_label = _NO_SKILL if dimension == "skill" else _MISSING
+        buckets.setdefault(missing_label, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0})
         result[dimension] = dict(sorted(buckets.items()))
     return result
 
@@ -481,13 +1405,24 @@ def _segment_value(
 ) -> str:
     dims = session.dimensions
     value: str | None
-    if dimension == "intent":
+    if dimension == "skill":
+        return _skill_bucket(session)
+    elif dimension == "intent":
         value = safe_intents[session.session_id]
     elif dimension == "tpe":
-        value = dims.tpe_code
+        value = _unique_tpe_transstatus(dims.tpe_signals)
     else:
         value = getattr(dims, dimension)
     return _safe_dimension(value) if isinstance(value, str) else _MISSING
+
+
+def _skill_bucket(session: SessionMetrics) -> str:
+    dims = session.dimensions
+    if dims.skill_count >= 2:
+        return _MULTI_SKILL
+    if dims.skill_count == 1 and isinstance(dims.skill, str):
+        return _safe_dimension(dims.skill)
+    return _NO_SKILL
 
 
 def _coverage(
@@ -499,22 +1434,23 @@ def _coverage(
     return {
         "issue_category": sum(_segment_value(s, "issue_category", safe_intents) != _MISSING for s in sessions) / len(sessions),
         "app": sum(_segment_value(s, "app", safe_intents) != _MISSING for s in sessions) / len(sessions),
-        "tpe": sum(s.dimensions.tpe_code is not None for s in sessions) / len(sessions),
+        "tpe": sum(
+            bool(_valid_tpe_signals(s.dimensions.tpe_signals))
+            for s in sessions
+        )
+        / len(sessions),
         "intent": sum(safe_intents[s.session_id] is not None for s in sessions) / len(sessions),
-        "skill": sum(s.dimensions.skill is not None for s in sessions) / len(sessions),
+        # `skill_count > 0` covers both the one-skill and multi-skill case;
+        # `skill is not None` alone undercounted multi-skill tickets as
+        # unrecorded even though they carry the most skill signal of any row.
+        "skill": sum(s.dimensions.skill_count > 0 for s in sessions) / len(sessions),
     }
 
 
 def _unmapped_tpe_codes(sessions: tuple[SessionMetrics, ...]) -> list[dict[str, object]]:
-    counts: Counter[tuple[str, str]] = Counter()
-    for session in sessions:
-        dims = session.dimensions
-        if dims.tpe_code is not None and dims.tpe_case is None:
-            counts[(dims.tpe_code, dims.tpe_status_raw or "")] += 1
-    return [
-        {"code": code, "status": status, "count": count}
-        for (code, status), count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
-    ]
+    # Kept as an empty compatibility field for one storage release. Public
+    # diagnostics no longer interpret exact source signals through taxonomy.
+    return []
 
 
 def _data_range(weekly: tuple[WeeklySummary, ...]) -> dict[str, object]:
@@ -525,19 +1461,43 @@ def _data_range(weekly: tuple[WeeklySummary, ...]) -> dict[str, object]:
     }
 
 
-def _ticket_row(session: SessionMetrics, safe_intent: str | None) -> TicketRow:
+def _ticket_row(
+    session: SessionMetrics,
+    safe_intent: str | None,
+    csat_cache: CSATCache | None,
+    ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
+) -> TicketRow:
     dims = session.dimensions
+    cohort_week = session.cohort_week.isoformat()
+    if csat_cache is None or cohort_week not in csat_cache.fetched_weeks:
+        csat_satisfaction = None
+    elif session.session_id not in ordered_csat:
+        csat_satisfaction = "unrated"
+    else:
+        csat_satisfaction = ordered_csat[session.session_id][
+            -1
+        ].satisfaction_bucket
     return TicketRow(
-        ticket_id=session.session_id, cohort_week=session.cohort_week.isoformat(), cohort_status=session.cohort_status,
+        ticket_id=session.session_id, opened_at=_utc_iso(session.turn0_timestamp),
+        cohort_week=cohort_week, cohort_status=session.cohort_status,
         is_weekend_start=session.is_weekend_start, outcome=_outcome(session.outcome), ai_first=session.ai_first,
         transferred=session.transferred, reopen_lifetime=session.reopen_lifetime,
         reopen_within_7d=session.reopen_within_7d, ai_reply_count=session.ai_reply_count,
-        turn_count=session.turn_count, gt4_turn=session.turn_count > 4,
+        turn_count=session.turn_count, gt4_turn=session.turn_count > 3,
         issue_category=_safe_dimension(dims.issue_category), app=_safe_dimension(dims.app),
-        product_code=_safe_dimension(dims.product_code), skill=_safe_optional(dims.skill),
-        intent=safe_intent, tpe_code=_safe_optional(dims.tpe_code),
-        tpe_status=_safe_optional(dims.tpe_status_raw), guardrail_rule=_safe_optional(dims.guardrail_rule),
-        escalation_guard_blocked=dims.escalation_guard_blocked, data_quality=_quality_label(session.data_quality),
+        product_code=_safe_dimension(dims.product_code), skill=_skill_bucket(session),
+        intent=safe_intent,
+        tpe_code=_unique_tpe_transstatus(dims.tpe_signals),
+        tpe_status=None,
+        guardrail_rule=_safe_optional(dims.guardrail_rule),
+        transfer_reason=(
+            _transfer_trigger_grain(session)[0]
+            if session.transferred
+            else None
+        ),
+        escalation_guard_blocked=dims.escalation_guard_blocked,
+        csat_satisfaction=csat_satisfaction,
+        data_quality=_quality_label(session.data_quality),
     )
 
 
@@ -709,7 +1669,33 @@ def _unchecked_reopen_reason_payload(
     }
 
 
-def _validate_ticket_filters(*, cohort_week: str | None, outcome: str | None, ticket_id: str | None, page: int, page_size: int) -> None:
+def _parse_cohort_weeks_filter(value: str | None) -> frozenset[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("cohort_weeks is invalid")
+    weeks = value.split(",")
+    if not 2 <= len(weeks) <= 52 or len(set(weeks)) != len(weeks):
+        raise ValueError("cohort_weeks is invalid")
+    for cohort_week in weeks:
+        try:
+            parsed = date.fromisoformat(cohort_week)
+        except ValueError as error:
+            raise ValueError("cohort_weeks is invalid") from error
+        if parsed.weekday() != 0:
+            raise ValueError("cohort_weeks must contain Mondays")
+    return frozenset(weeks)
+
+
+def _validate_ticket_filters(
+    *,
+    cohort_week: str | None,
+    outcome: str | None,
+    ticket_id: str | None,
+    page: int,
+    page_size: int,
+    cohort_weeks: str | None = None,
+) -> None:
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
         raise ValueError("page must be at least 1")
     if isinstance(page_size, bool) or not isinstance(page_size, int) or not 1 <= page_size <= 100:
@@ -718,6 +1704,8 @@ def _validate_ticket_filters(*, cohort_week: str | None, outcome: str | None, ti
         raise ValueError("ticket_id is invalid")
     if outcome is not None and outcome not in _OUTCOMES:
         raise ValueError("outcome is invalid")
+    if cohort_week is not None and cohort_weeks is not None:
+        raise ValueError("cohort_weeks cannot be combined with cohort_week")
     if cohort_week is not None:
         if not isinstance(cohort_week, str):
             raise ValueError("cohort_week is invalid")
@@ -727,6 +1715,7 @@ def _validate_ticket_filters(*, cohort_week: str | None, outcome: str | None, ti
             raise ValueError("cohort_week is invalid") from error
         if parsed.weekday() != 0:
             raise ValueError("cohort_week must be a Monday")
+    _parse_cohort_weeks_filter(cohort_weeks)
 
 
 def _ticket_from_storage(value: object) -> TicketRow:
@@ -745,8 +1734,43 @@ def _validated_ticket_dict(ticket: object) -> dict[str, object]:
     return asdict(ticket)
 
 
+def _entry_coverage_record_dict(record: EntryCoverageRecord) -> dict[str, object]:
+    if not isinstance(record, EntryCoverageRecord):
+        raise ValueError("entry coverage tickets are invalid")
+    return {
+        "ticket_id": record.ticket_id,
+        "opened_at": record.opened_at,
+        "cohort_week": record.cohort_week,
+        "status": record.status,
+        "human_replied": record.human_replied,
+    }
+
+
+def _entry_coverage_record_from_storage(value: object) -> EntryCoverageRecord:
+    mapping = _require_mapping(value, "entry coverage ticket")
+    _require_exact_keys(
+        mapping,
+        {"ticket_id", "opened_at", "cohort_week", "status", "human_replied"},
+        "entry coverage ticket",
+    )
+    try:
+        return EntryCoverageRecord(**dict(mapping))
+    except (TypeError, EntryCoverageCacheError) as error:
+        raise ValueError("stored entry coverage ticket is invalid") from error
+
+
+def _validate_entry_coverage_records(
+    records: tuple[EntryCoverageRecord, ...],
+) -> None:
+    try:
+        EntryCoverageCache(fetched_weeks={}, records=records)
+    except EntryCoverageCacheError as error:
+        raise ValueError("entry coverage tickets are invalid") from error
+
+
 def _validate_ticket_values(ticket: TicketRow) -> None:
     _validate_ticket_filters(cohort_week=ticket.cohort_week, outcome=None, ticket_id=ticket.ticket_id, page=1, page_size=1)
+    _parse_utc_iso(ticket.opened_at, "opened_at")
     if ticket.cohort_status not in {"complete", "wtd"}:
         raise ValueError("cohort_status is invalid")
     if ticket.outcome not in _OUTCOMES:
@@ -762,13 +1786,20 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         raise ValueError("reopen_within_7d is invalid")
     _nonnegative_int(ticket.ai_reply_count, "ai_reply_count")
     _positive_int(ticket.turn_count, "turn_count")
-    if ticket.gt4_turn != (ticket.turn_count > 4):
+    if ticket.gt4_turn != (ticket.turn_count > 3):
         raise ValueError("gt4_turn is inconsistent")
     for value, name in ((ticket.issue_category, "issue_category"), (ticket.app, "app"), (ticket.product_code, "product_code")):
         _safe_string(value, name)
-    for value, name in ((ticket.skill, "skill"), (ticket.tpe_status, "tpe_status"), (ticket.guardrail_rule, "guardrail_rule")):
+    for value, name in ((ticket.skill, "skill"), (ticket.guardrail_rule, "guardrail_rule")):
         if value is not None:
             _safe_string(value, name)
+    if ticket.transferred:
+        if ticket.transfer_reason not in _TRANSFER_TRIGGER_REASONS:
+            raise ValueError("transfer_reason is invalid for a transferred ticket")
+    elif ticket.transfer_reason is not None:
+        raise ValueError("transfer_reason must be null for a ticket not transferred")
+    if ticket.tpe_status is not None:
+        raise ValueError("tpe_status must be null")
     if ticket.intent is not None and ticket.intent != "khác" and not _is_safe_intent_label(ticket.intent):
         raise ValueError("intent is invalid")
     if ticket.tpe_code is not None and (
@@ -776,6 +1807,11 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         or _TPE_CODE_PATTERN.fullmatch(ticket.tpe_code) is None
     ):
         raise ValueError("tpe_code is invalid")
+    if (
+        ticket.csat_satisfaction is not None
+        and ticket.csat_satisfaction not in _CSAT_TICKET_STATES
+    ):
+        raise ValueError("csat_satisfaction is invalid")
     if ticket.data_quality not in _QUALITY_LABELS:
         raise ValueError("data_quality is invalid")
 
@@ -816,13 +1852,10 @@ def _validate_data_range(value: object) -> None:
 
 
 def _validate_unmapped(value: object) -> None:
-    if not isinstance(value, list): raise ValueError("unmapped_tpe_codes must be a list")
-    for item in value:
-        mapping = _require_mapping(item, "unmapped_tpe_code")
-        _require_exact_keys(mapping, {"code", "status", "count"}, "unmapped_tpe_code")
-        _safe_string(mapping["code"], "unmapped_tpe_code.code")
-        _safe_string(mapping["status"], "unmapped_tpe_code.status", allow_empty=True)
-        _nonnegative_int(mapping["count"], "unmapped_tpe_code.count")
+    if not isinstance(value, list):
+        raise ValueError("unmapped_tpe_codes must be a list")
+    if value:
+        raise ValueError("unmapped_tpe_codes must be empty")
 
 
 def _validate_gate(value: object) -> None:
@@ -858,6 +1891,10 @@ def _validate_view(value: object, expected_definition: str) -> None:
             "segments",
             "transfer_reasons",
             "by_week",
+            "same_period",
+            "csat",
+            "outcome_reconciliation",
+            "entry_coverage",
             "rule_gt4",
         },
         "view",
@@ -921,6 +1958,13 @@ def _validate_view(value: object, expected_definition: str) -> None:
             detail["transfer_reasons"],
             detail["segments"],
         )
+    _validate_same_period(view["same_period"], weekly_by_key)
+    _validate_csat(view["csat"], weekly_by_key)
+    _validate_outcome_reconciliation(
+        view["outcome_reconciliation"],
+        weekly_by_key,
+    )
+    _validate_entry_coverage(view["entry_coverage"], weekly_by_key)
     _validate_segment_rollup(
         view["segments"],
         tuple(
@@ -952,6 +1996,573 @@ def _validate_view(value: object, expected_definition: str) -> None:
     if weekly_total != view["totals"]["eligible_ticket_count"]: raise ValueError("view weekly does not reconcile")
 
 
+def _validate_entry_coverage(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    coverage = _require_mapping(value, "view.entry_coverage")
+    _require_exact_keys(
+        coverage,
+        {"source", "source_start_week", "fetched_at", "by_week"},
+        "view.entry_coverage",
+    )
+    if coverage["source"] != "freshdesk":
+        raise ValueError("view.entry_coverage source is invalid")
+    if coverage["source_start_week"] != ENTRY_COVERAGE_START_WEEK:
+        raise ValueError("view.entry_coverage source start week is invalid")
+    _parse_utc_iso(coverage["fetched_at"], "view.entry_coverage.fetched_at")
+    by_week = _require_mapping(coverage["by_week"], "view.entry_coverage.by_week")
+    if not set(by_week).issubset(weekly_by_key):
+        raise ValueError("view.entry_coverage contains a week outside this view")
+    count_keys = {
+        "freshdesk_ticket_count",
+        "ai_replied_only",
+        "ai_replied_then_transferred",
+        "transferred_without_ai_reply",
+        "invoked_no_result",
+        "not_observed_invoked",
+        "not_observed_human_replied",
+        "not_observed_no_human_reply",
+        "unresolved",
+    }
+    for cohort_week, raw_counts in by_week.items():
+        _week_string(cohort_week, "view.entry_coverage.by_week key")
+        counts = _require_mapping(
+            raw_counts,
+            f"view.entry_coverage.by_week.{cohort_week}",
+        )
+        _require_exact_keys(
+            counts,
+            count_keys,
+            f"view.entry_coverage.by_week.{cohort_week}",
+        )
+        for key in count_keys:
+            _nonnegative_int(
+                counts[key],
+                f"view.entry_coverage.by_week.{cohort_week}.{key}",
+            )
+        status_total = sum(
+            counts[key]
+            for key in (
+                "ai_replied_only",
+                "ai_replied_then_transferred",
+                "transferred_without_ai_reply",
+                "invoked_no_result",
+                "not_observed_invoked",
+                "unresolved",
+            )
+        )
+        if counts["freshdesk_ticket_count"] != status_total:
+            raise ValueError("entry coverage status counts do not reconcile")
+        if counts["not_observed_invoked"] != (
+            counts["not_observed_human_replied"]
+            + counts["not_observed_no_human_reply"]
+        ):
+            raise ValueError("entry coverage human counts do not reconcile")
+
+
+def _validate_csat(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    csat = _require_mapping(value, "view.csat")
+    _require_exact_keys(csat, {"source", "fetched_at", "by_week"}, "view.csat")
+    if csat["source"] != "freshdesk":
+        raise ValueError("view.csat source is invalid")
+    _parse_utc_iso(csat["fetched_at"], "view.csat.fetched_at")
+    by_week = _require_mapping(csat["by_week"], "view.csat.by_week")
+    if not set(by_week).issubset(weekly_by_key):
+        raise ValueError("view.csat contains a week outside this view")
+    count_keys = {"response_count", "ticket_count", *_CSAT_BUCKETS}
+    for cohort_week, raw_counts in by_week.items():
+        _week_string(cohort_week, "view.csat.by_week key")
+        counts = _require_mapping(raw_counts, f"view.csat.by_week.{cohort_week}")
+        _require_exact_keys(
+            counts,
+            count_keys
+            | {
+                "by_outcome",
+                "by_dimension",
+                "response_by_outcome",
+                "response_by_dimension",
+                "feedback_entries",
+            },
+            f"view.csat.by_week.{cohort_week}",
+        )
+        for key in count_keys:
+            _nonnegative_int(
+                counts[key],
+                f"view.csat.by_week.{cohort_week}.{key}",
+            )
+        if counts["response_count"] < counts["ticket_count"]:
+            raise ValueError("view.csat ticket count exceeds response count")
+        if counts["ticket_count"] != sum(counts[key] for key in _CSAT_BUCKETS):
+            raise ValueError("view.csat ticket counts do not reconcile")
+        if counts["ticket_count"] > weekly_by_key[cohort_week]["total_tickets"]:
+            raise ValueError("view.csat ticket count exceeds weekly population")
+
+        by_outcome = _require_mapping(
+            counts["by_outcome"],
+            f"view.csat.by_week.{cohort_week}.by_outcome",
+        )
+        _require_exact_keys(
+            by_outcome,
+            set(_OUTCOMES),
+            f"view.csat.by_week.{cohort_week}.by_outcome",
+        )
+        outcome_rows = [
+            _validate_csat_count_row(
+                by_outcome[outcome],
+                f"view.csat outcome {outcome}",
+            )
+            for outcome in _OUTCOMES
+        ]
+        _validate_csat_rollup(counts, outcome_rows, "outcome")
+
+        by_dimension = _require_mapping(
+            counts["by_dimension"],
+            f"view.csat.by_week.{cohort_week}.by_dimension",
+        )
+        _require_exact_keys(
+            by_dimension,
+            {"skill", "issue_category"},
+            f"view.csat.by_week.{cohort_week}.by_dimension",
+        )
+        for dimension in ("skill", "issue_category"):
+            raw_rows = by_dimension[dimension]
+            if not isinstance(raw_rows, list):
+                raise ValueError("view.csat dimension rows are invalid")
+            labels: set[str] = set()
+            dimension_rows: list[Mapping[str, object]] = []
+            for raw_row in raw_rows:
+                row = _require_mapping(raw_row, "view.csat dimension row")
+                _require_exact_keys(
+                    row,
+                    {"value", "ticket_count", *_CSAT_BUCKETS},
+                    "view.csat dimension row",
+                )
+                label = _safe_string(row["value"], "view.csat dimension value")
+                if label in labels:
+                    raise ValueError("view.csat dimension values are duplicated")
+                labels.add(label)
+                dimension_rows.append(
+                    _validate_csat_count_row(
+                        {
+                            key: row[key]
+                            for key in ("ticket_count", *_CSAT_BUCKETS)
+                        },
+                        "view.csat dimension row",
+                    )
+                )
+            _validate_csat_rollup(counts, dimension_rows, "dimension")
+
+        response_by_outcome = _require_mapping(
+            counts["response_by_outcome"],
+            f"view.csat.by_week.{cohort_week}.response_by_outcome",
+        )
+        _require_exact_keys(
+            response_by_outcome,
+            set(_OUTCOMES),
+            f"view.csat.by_week.{cohort_week}.response_by_outcome",
+        )
+        response_outcome_rows = [
+            _validate_csat_count_row(
+                response_by_outcome[outcome],
+                f"view.csat response outcome {outcome}",
+            )
+            for outcome in _OUTCOMES
+        ]
+        response_totals = {
+            "ticket_count": counts["response_count"],
+            **{
+                bucket: sum(row[bucket] for row in response_outcome_rows)
+                for bucket in _CSAT_BUCKETS
+            },
+        }
+        _validate_csat_rollup(response_totals, response_outcome_rows, "response outcome")
+
+        response_by_dimension = _require_mapping(
+            counts["response_by_dimension"],
+            f"view.csat.by_week.{cohort_week}.response_by_dimension",
+        )
+        _require_exact_keys(
+            response_by_dimension,
+            {"skill", "issue_category"},
+            f"view.csat.by_week.{cohort_week}.response_by_dimension",
+        )
+        for dimension in ("skill", "issue_category"):
+            raw_rows = response_by_dimension[dimension]
+            if not isinstance(raw_rows, list):
+                raise ValueError("view.csat response dimension rows are invalid")
+            labels: set[str] = set()
+            response_dimension_rows: list[Mapping[str, object]] = []
+            for raw_row in raw_rows:
+                row = _require_mapping(raw_row, "view.csat response dimension row")
+                _require_exact_keys(
+                    row,
+                    {"value", "ticket_count", *_CSAT_BUCKETS},
+                    "view.csat response dimension row",
+                )
+                label = _safe_string(
+                    row["value"], "view.csat response dimension value"
+                )
+                if label in labels:
+                    raise ValueError(
+                        "view.csat response dimension values are duplicated"
+                    )
+                labels.add(label)
+                response_dimension_rows.append(
+                    _validate_csat_count_row(
+                        {
+                            key: row[key]
+                            for key in ("ticket_count", *_CSAT_BUCKETS)
+                        },
+                        "view.csat response dimension row",
+                    )
+                )
+            _validate_csat_rollup(
+                response_totals,
+                response_dimension_rows,
+                "response dimension",
+            )
+
+        feedback_entries = counts["feedback_entries"]
+        if (
+            not isinstance(feedback_entries, list)
+            or len(feedback_entries) > counts["response_count"]
+        ):
+            raise ValueError("view.csat feedback entries are invalid")
+        ticket_metadata: dict[str, tuple[object, ...]] = {}
+        ticket_numbers: dict[str, set[int]] = defaultdict(set)
+        for raw_entry in feedback_entries:
+            entry = _require_mapping(raw_entry, "view.csat feedback entry")
+            _require_exact_keys(
+                entry,
+                {
+                    "ticket_id",
+                    "responded_at",
+                    "satisfaction_bucket",
+                    "outcome",
+                    "skill",
+                    "issue_category",
+                    "text",
+                    "response_number",
+                    "response_total",
+                    "is_latest_for_ticket",
+                },
+                "view.csat feedback entry",
+            )
+            if not _is_safe_ticket_id(entry["ticket_id"]):
+                raise ValueError("view.csat feedback ticket_id is invalid")
+            _parse_utc_iso(
+                entry["responded_at"],
+                "view.csat feedback responded_at",
+            )
+            if entry["satisfaction_bucket"] not in _CSAT_BUCKETS:
+                raise ValueError("view.csat feedback bucket is invalid")
+            if entry["outcome"] not in _OUTCOMES:
+                raise ValueError("view.csat feedback outcome is invalid")
+            skill = _safe_string(entry["skill"], "view.csat feedback skill")
+            issue_category = _safe_string(
+                entry["issue_category"],
+                "view.csat feedback issue_category",
+            )
+            text = _safe_string(entry["text"], "view.csat feedback text")
+            if _COMMENT_URL.search(text):
+                raise ValueError("view.csat feedback text is unsafe")
+            if len(text) > 200:
+                raise ValueError("view.csat feedback text is invalid")
+            response_number = _positive_int(
+                entry["response_number"],
+                "view.csat feedback response number",
+            )
+            response_total = _positive_int(
+                entry["response_total"],
+                "view.csat feedback response total",
+            )
+            if response_number > response_total:
+                raise ValueError("view.csat feedback response number exceeds total")
+            if response_total > counts["response_count"]:
+                raise ValueError("view.csat feedback response total is invalid")
+            if not isinstance(entry["is_latest_for_ticket"], bool):
+                raise ValueError("view.csat feedback latest marker is invalid")
+            if entry["is_latest_for_ticket"] != (response_number == response_total):
+                raise ValueError("view.csat feedback latest marker is inconsistent")
+            ticket_id = entry["ticket_id"]
+            metadata = (
+                response_total,
+                entry["outcome"],
+                skill,
+                issue_category,
+            )
+            if ticket_id in ticket_metadata and ticket_metadata[ticket_id] != metadata:
+                raise ValueError("view.csat feedback ticket metadata is inconsistent")
+            if response_number in ticket_numbers[ticket_id]:
+                raise ValueError("view.csat feedback response number is duplicated")
+            ticket_metadata[ticket_id] = metadata
+            ticket_numbers[ticket_id].add(response_number)
+
+
+def _validate_outcome_reconciliation(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    reconciliation = _require_mapping(value, "view.outcome_reconciliation")
+    _require_exact_keys(
+        reconciliation,
+        {"source", "fetched_at", "by_week"},
+        "view.outcome_reconciliation",
+    )
+    if reconciliation["source"] != "freshdesk":
+        raise ValueError("view outcome reconciliation source is invalid")
+    _parse_utc_iso(
+        reconciliation["fetched_at"],
+        "view.outcome_reconciliation.fetched_at",
+    )
+    by_week = _require_mapping(
+        reconciliation["by_week"],
+        "view.outcome_reconciliation.by_week",
+    )
+    if not set(by_week).issubset(weekly_by_key):
+        raise ValueError("view outcome reconciliation contains an unknown week")
+    keys = {
+        "langfuse_ai_end_to_end",
+        "checked_ticket_count",
+        "human_replied_after_ai",
+        "unresolved_ticket_count",
+        "mismatch_rate",
+    }
+    for cohort_week, raw_row in by_week.items():
+        _week_string(cohort_week, "view.outcome_reconciliation.by_week key")
+        row = _require_mapping(
+            raw_row,
+            f"view.outcome_reconciliation.by_week.{cohort_week}",
+        )
+        _require_exact_keys(
+            row,
+            keys,
+            f"view.outcome_reconciliation.by_week.{cohort_week}",
+        )
+        for key in keys - {"mismatch_rate"}:
+            _nonnegative_int(
+                row[key],
+                f"view outcome reconciliation {key}",
+            )
+        population = row["langfuse_ai_end_to_end"]
+        checked = row["checked_ticket_count"]
+        human_replied = row["human_replied_after_ai"]
+        unresolved = row["unresolved_ticket_count"]
+        if checked + unresolved > population or human_replied > checked:
+            raise ValueError("view outcome reconciliation counts do not reconcile")
+        mismatch_rate = row["mismatch_rate"]
+        if checked == 0:
+            if mismatch_rate is not None:
+                raise ValueError("view outcome reconciliation rate is invalid")
+        else:
+            _rate(mismatch_rate, "view outcome reconciliation mismatch rate")
+            if abs(mismatch_rate - human_replied / checked) > 1e-12:
+                raise ValueError("view outcome reconciliation rate does not reconcile")
+        weekly_ai_end_to_end = weekly_by_key[cohort_week][
+            "ai_end_to_end_count"
+        ]
+        if population > weekly_ai_end_to_end:
+            raise ValueError("view outcome reconciliation population does not reconcile")
+
+
+def _validate_csat_count_row(
+    value: object,
+    name: str,
+) -> Mapping[str, object]:
+    row = _require_mapping(value, name)
+    _require_exact_keys(row, {"ticket_count", *_CSAT_BUCKETS}, name)
+    for key in ("ticket_count", *_CSAT_BUCKETS):
+        _nonnegative_int(row[key], f"{name}.{key}")
+    if row["ticket_count"] != sum(row[key] for key in _CSAT_BUCKETS):
+        raise ValueError(f"{name} buckets do not reconcile")
+    return row
+
+
+def _validate_csat_rollup(
+    totals: Mapping[str, object],
+    rows: list[Mapping[str, object]],
+    name: str,
+) -> None:
+    for key in ("ticket_count", *_CSAT_BUCKETS):
+        if sum(row[key] for row in rows) != totals[key]:
+            raise ValueError(f"view.csat {name} counts do not reconcile")
+
+
+def _validate_same_period(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    same_period = _require_mapping(value, "view.same_period")
+    _require_exact_keys(
+        same_period,
+        {"cutoff_date", "cutoff_weekday", "current", "baseline", "by_week"},
+        "view.same_period",
+    )
+    cutoff = _date_string(same_period["cutoff_date"], "view.same_period.cutoff_date")
+    weekday = _positive_int(
+        same_period["cutoff_weekday"],
+        "view.same_period.cutoff_weekday",
+    )
+    if weekday > 7:
+        raise ValueError("view.same_period.cutoff_weekday is invalid")
+    if weekday != cutoff.isoweekday():
+        raise ValueError("view.same_period cutoff weekday does not match date")
+    current = _validate_same_period_week(
+        same_period["current"],
+        "view.same_period.current",
+    )
+    current_weekly = weekly_by_key.get(current["cohort_week"])
+    if current_weekly is None or current_weekly["cohort_status"] != "wtd":
+        raise ValueError("view.same_period.current must identify the running week")
+    baseline = _require_mapping(same_period["baseline"], "view.same_period.baseline")
+    _require_exact_keys(
+        baseline,
+        {"weeks_used", "ai_first_rate", "reopen_lifetime_rate"},
+        "view.same_period.baseline",
+    )
+    weeks_used = _positive_int(
+        baseline["weeks_used"],
+        "view.same_period.baseline.weeks_used",
+    )
+    if weeks_used < 2:
+        raise ValueError("view.same_period baseline needs at least two weeks")
+    if weeks_used > 4:
+        raise ValueError("view.same_period.baseline.weeks_used exceeds four")
+    baseline_ai_rate = _rate(
+        baseline["ai_first_rate"],
+        "view.same_period.baseline.ai_first_rate",
+    )
+    baseline_reopen_rate = _nullable_rate(
+        baseline["reopen_lifetime_rate"],
+        "view.same_period.baseline.reopen_lifetime_rate",
+    )
+    by_week = _require_mapping(same_period["by_week"], "view.same_period.by_week")
+    if current["cohort_week"] not in by_week:
+        raise ValueError("view.same_period.by_week must include current week")
+    current_week = date.fromisoformat(current["cohort_week"])
+    validated_by_week: dict[date, Mapping[str, object]] = {}
+    for cohort_week, detail_value in by_week.items():
+        _week_string(cohort_week, "view.same_period.by_week key")
+        if cohort_week not in weekly_by_key:
+            raise ValueError("view.same_period.by_week key is outside view.by_week")
+        detail = _validate_same_period_week(
+            detail_value,
+            f"view.same_period.by_week.{cohort_week}",
+        )
+        if detail["cohort_week"] != cohort_week:
+            raise ValueError("view.same_period by_week key does not match cohort_week")
+        parsed_week = date.fromisoformat(cohort_week)
+        if parsed_week > current_week:
+            raise ValueError("view.same_period.by_week cannot extend past current")
+        validated_by_week[parsed_week] = detail
+
+    current_detail = validated_by_week[current_week]
+    if dict(current_detail) != dict(current):
+        raise ValueError("view.same_period.current must match its by_week row")
+
+    contributors = [
+        detail
+        for week, detail in sorted(validated_by_week.items())
+        if week < current_week and detail["total_tickets"] > 0
+    ][-4:]
+    if len(contributors) != weeks_used:
+        raise ValueError("view.same_period.baseline.weeks_used is inconsistent")
+    expected_ai_rate = sum(
+        float(detail["ai_first_rate"]) for detail in contributors
+    ) / weeks_used
+    if abs(baseline_ai_rate - expected_ai_rate) > 1e-12:
+        raise ValueError("view.same_period.baseline.ai_first_rate is inconsistent")
+    contributor_reopen_rates = [
+        float(detail["reopen_lifetime_rate"])
+        for detail in contributors
+        if detail["reopen_lifetime_rate"] is not None
+    ]
+    expected_reopen_rate = (
+        sum(contributor_reopen_rates) / len(contributor_reopen_rates)
+        if contributor_reopen_rates
+        else None
+    )
+    if (
+        (baseline_reopen_rate is None) != (expected_reopen_rate is None)
+        or (
+            baseline_reopen_rate is not None
+            and expected_reopen_rate is not None
+            and abs(baseline_reopen_rate - expected_reopen_rate) > 1e-12
+        )
+    ):
+        raise ValueError(
+            "view.same_period.baseline.reopen_lifetime_rate is inconsistent"
+        )
+
+
+def _validate_same_period_week(
+    value: object,
+    name: str,
+) -> Mapping[str, object]:
+    item = _require_mapping(value, name)
+    _require_exact_keys(
+        item,
+        {
+            "cohort_week",
+            "total_tickets",
+            "ai_first_count",
+            "ai_first_rate",
+            "reopen_lifetime_rate",
+            "reopen_lifetime_numerator",
+            "reopen_lifetime_denominator",
+        },
+        name,
+    )
+    _week_string(item["cohort_week"], f"{name}.cohort_week")
+    total = _nonnegative_int(item["total_tickets"], f"{name}.total_tickets")
+    ai_first = _nonnegative_int(item["ai_first_count"], f"{name}.ai_first_count")
+    if ai_first > total:
+        raise ValueError(f"{name}.ai_first_count exceeds total")
+    ai_rate = _rate(item["ai_first_rate"], f"{name}.ai_first_rate")
+    expected_ai_rate = ai_first / total if total else 0.0
+    if abs(ai_rate - expected_ai_rate) > 1e-12:
+        raise ValueError(f"{name}.ai_first_rate does not match division")
+    reopen_numerator = _nonnegative_int(
+        item["reopen_lifetime_numerator"],
+        f"{name}.reopen_lifetime_numerator",
+    )
+    reopen_denominator = _nonnegative_int(
+        item["reopen_lifetime_denominator"],
+        f"{name}.reopen_lifetime_denominator",
+    )
+    if reopen_numerator > reopen_denominator:
+        raise ValueError(f"{name}.reopen numerator exceeds denominator")
+    reopen_rate = _nullable_rate(
+        item["reopen_lifetime_rate"],
+        f"{name}.reopen_lifetime_rate",
+    )
+    expected_reopen_rate = (
+        reopen_numerator / reopen_denominator if reopen_denominator else None
+    )
+    if (
+        (expected_reopen_rate is None) != (reopen_rate is None)
+        or (
+            expected_reopen_rate is not None
+            and reopen_rate is not None
+            and abs(reopen_rate - expected_reopen_rate) > 1e-12
+        )
+    ):
+        raise ValueError(f"{name}.reopen_lifetime_rate does not match division")
+    return item
+
+
 def _validate_transfer_reasons(
     value: object,
     segments_value: object,
@@ -961,7 +2572,9 @@ def _validate_transfer_reasons(
         reasons,
         {
             "observed_transfer_denominator",
+            "triggers",
             "tpe",
+            "step_result_missing",
             "guardrail",
             "escalation_guard_blocked",
         },
@@ -984,38 +2597,109 @@ def _validate_transfer_reasons(
         if transferred_total != denominator:
             raise ValueError("transfer reason denominator does not reconcile")
 
+    trigger_rows = reasons["triggers"]
+    if not isinstance(trigger_rows, list):
+        raise ValueError("transfer_reasons.triggers must be a list")
+    seen_triggers: set[
+        tuple[str, str | None, str | None, str | None, str | None]
+    ] = set()
+    trigger_total = 0
+    for raw_row in trigger_rows:
+        row = _require_mapping(raw_row, "transfer_reasons.triggers item")
+        _require_exact_keys(
+            row,
+            {"reason", "rule", "source", "stage", "skill", "count"},
+            "transfer_reasons.triggers item",
+        )
+        reason = row["reason"]
+        rule = row["rule"]
+        source = row["source"]
+        stage = row["stage"]
+        skill = row["skill"]
+        if reason not in _TRANSFER_TRIGGER_REASONS:
+            raise ValueError("transfer_reasons trigger reason is invalid")
+        if reason == "unknown":
+            if any(value is not None for value in (rule, source, stage, skill)):
+                raise ValueError("transfer_reasons unknown trigger is invalid")
+        else:
+            if rule not in _GUARDRAIL_RULES:
+                raise ValueError("transfer_reasons trigger rule is invalid")
+            if source not in _TRANSFER_TRIGGER_SOURCES:
+                raise ValueError("transfer_reasons trigger source is invalid")
+            if source == "skill_guardrail_checked":
+                if stage not in {"input", "output"}:
+                    raise ValueError("transfer_reasons trigger stage is invalid")
+            elif stage is not None or skill is not None:
+                raise ValueError("transfer_reasons global trigger metadata is invalid")
+            if skill is not None and (
+                not isinstance(skill, str)
+                or not _is_safe_intent_label(skill)
+            ):
+                raise ValueError("transfer_reasons trigger skill is invalid")
+            if reason != _expected_transfer_reason(rule, source, stage):
+                raise ValueError("transfer_reasons trigger reason does not match source")
+        key = (reason, rule, source, stage, skill)
+        if key in seen_triggers:
+            raise ValueError("transfer_reasons trigger rows must be unique")
+        seen_triggers.add(key)
+        trigger_total += _positive_int(
+            row["count"],
+            "transfer_reasons trigger count",
+        )
+    if trigger_total != denominator:
+        raise ValueError("transfer_reasons triggers do not partition transfers")
+
     tpe_rows = reasons["tpe"]
     if not isinstance(tpe_rows, list):
         raise ValueError("transfer_reasons.tpe must be a list")
-    seen_tpe: set[tuple[str, str | None, int | None, bool]] = set()
-    tpe_count = 0
+    seen_tpe: set[tuple[str, str | None]] = set()
     for raw_row in tpe_rows:
         row = _require_mapping(raw_row, "transfer_reasons.tpe item")
         _require_exact_keys(
             row,
-            {"code", "status", "case", "mapped", "count"},
+            {"transstatus", "step_result", "count"},
             "transfer_reasons.tpe item",
         )
-        code = row["code"]
-        if not isinstance(code, str) or _TPE_CODE_PATTERN.fullmatch(code) is None:
-            raise ValueError("transfer_reasons.tpe code is invalid")
-        status = row["status"]
-        if status is not None:
-            status = _safe_string(status, "transfer_reasons.tpe status")
-        case = row["case"]
-        if case is not None:
-            _nonnegative_int(case, "transfer_reasons.tpe case")
-        mapped = row["mapped"]
-        if not isinstance(mapped, bool) or mapped != (case is not None):
-            raise ValueError("transfer_reasons.tpe mapped is invalid")
+        transstatus = row["transstatus"]
+        if (
+            not isinstance(transstatus, str)
+            or _TPE_CODE_PATTERN.fullmatch(transstatus) is None
+        ):
+            raise ValueError("transfer_reasons.tpe transstatus is invalid")
+        step_result = row["step_result"]
+        if step_result is not None:
+            if (
+                not isinstance(step_result, str)
+                or _TPE_CODE_PATTERN.fullmatch(step_result) is None
+            ):
+                raise ValueError("transfer_reasons.tpe step_result is invalid")
         count = _positive_int(row["count"], "transfer_reasons.tpe count")
-        key = (code, status, case, mapped)
+        key = (transstatus, step_result)
         if key in seen_tpe:
             raise ValueError("transfer_reasons.tpe rows must be unique")
         seen_tpe.add(key)
-        tpe_count += count
-    if tpe_count > denominator:
-        raise ValueError("transfer_reasons.tpe exceeds denominator")
+        if count > denominator:
+            raise ValueError("transfer_reasons.tpe exceeds denominator")
+
+    missing = _require_mapping(
+        reasons["step_result_missing"],
+        "transfer_reasons.step_result_missing",
+    )
+    _require_exact_keys(
+        missing,
+        {"count", "denominator"},
+        "transfer_reasons.step_result_missing",
+    )
+    missing_count = _nonnegative_int(
+        missing["count"],
+        "transfer_reasons.step_result_missing.count",
+    )
+    missing_denominator = _nonnegative_int(
+        missing["denominator"],
+        "transfer_reasons.step_result_missing.denominator",
+    )
+    if missing_denominator != denominator or missing_count > denominator:
+        raise ValueError("transfer_reasons step_result_missing does not reconcile")
 
     guardrail_rows = reasons["guardrail"]
     if not isinstance(guardrail_rows, list):
@@ -1091,9 +2775,15 @@ def _validate_transfer_reason_rollup(
     aggregate_tpe = row_counter(
         aggregate,
         "tpe",
-        ("code", "status", "case", "mapped"),
+        ("transstatus", "step_result"),
     )
     weekly_tpe: Counter[tuple[object, ...]] = Counter()
+    aggregate_triggers = row_counter(
+        aggregate,
+        "triggers",
+        ("reason", "rule", "source", "stage", "skill"),
+    )
+    weekly_triggers: Counter[tuple[object, ...]] = Counter()
     aggregate_guardrail = row_counter(
         aggregate,
         "guardrail",
@@ -1102,13 +2792,49 @@ def _validate_transfer_reason_rollup(
     weekly_guardrail: Counter[tuple[object, ...]] = Counter()
     for value in weekly:
         weekly_tpe.update(
-            row_counter(value, "tpe", ("code", "status", "case", "mapped"))
+            row_counter(value, "tpe", ("transstatus", "step_result"))
         )
         weekly_guardrail.update(
             row_counter(value, "guardrail", ("rule",))
         )
-    if aggregate_tpe != weekly_tpe or aggregate_guardrail != weekly_guardrail:
+        weekly_triggers.update(
+            row_counter(
+                value,
+                "triggers",
+                ("reason", "rule", "source", "stage", "skill"),
+            )
+        )
+    if (
+        aggregate_tpe != weekly_tpe
+        or aggregate_guardrail != weekly_guardrail
+        or aggregate_triggers != weekly_triggers
+    ):
         raise ValueError("transfer reason weekly rows do not reconcile")
+    aggregate_missing = _require_mapping(
+        aggregate["step_result_missing"],
+        "transfer_reasons.step_result_missing",
+    )
+    if (
+        aggregate_missing["count"]
+        != sum(
+            _require_mapping(
+                value["step_result_missing"],
+                "weekly step_result_missing",
+            )["count"]
+            for value in weekly
+        )
+        or aggregate_missing["denominator"]
+        != sum(
+            _require_mapping(
+                value["step_result_missing"],
+                "weekly step_result_missing",
+            )["denominator"]
+            for value in weekly
+        )
+    ):
+        raise ValueError(
+            "transfer reason weekly step_result_missing does not reconcile"
+        )
     aggregate_escalation = _require_mapping(
         aggregate["escalation_guard_blocked"],
         "transfer_reasons.escalation_guard_blocked",
@@ -1150,7 +2876,8 @@ def _validate_segment_rollup(
                 counts = _require_mapping(raw_counts, "weekly segment counts")
                 for field in fields:
                     weekly_counts[label][field] += counts[field]
-        expected_labels = weekly_labels or {_MISSING}
+        default_label = _NO_SKILL if dimension == "skill" else _MISSING
+        expected_labels = weekly_labels or {default_label}
         if set(aggregate_buckets) != expected_labels:
             raise ValueError(
                 f"segment weekly rows do not reconcile for {dimension}"
@@ -1171,7 +2898,9 @@ def _validate_segments(value: object, total: object) -> None:
     _require_exact_keys(segments, set(_SEGMENTS), "segments")
     for name in _SEGMENTS:
         buckets = _require_mapping(segments[name], f"segments.{name}")
-        if _MISSING not in buckets: raise ValueError("segments must include missing bucket")
+        required_missing_label = _NO_SKILL if name == "skill" else _MISSING
+        if required_missing_label not in buckets:
+            raise ValueError("segments must include missing bucket")
         summed = 0
         for label, counts in buckets.items():
             _validate_segment_label(name, label)
@@ -1492,6 +3221,18 @@ def _week_string(value: object, name: str) -> None:
     if parsed.weekday() != 0: raise ValueError(f"{name} must be a Monday")
 
 
+def _date_string(value: object, name: str) -> date:
+    if not isinstance(value, str):
+        raise ValueError(f"{name} is invalid")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"{name} is invalid") from error
+    if parsed.isoformat() != value:
+        raise ValueError(f"{name} is invalid")
+    return parsed
+
+
 def _validate_count_map(value: object, keys: set[str] | frozenset[str], name: str) -> None:
     mapping = _require_mapping(value, name); _require_exact_keys(mapping, keys, name)
     for count in mapping.values(): _nonnegative_int(count, name)
@@ -1507,7 +3248,8 @@ def _require_exact_keys(value: Mapping[str, object], keys: set[str] | frozenset[
 
 
 def _parse_utc_iso(value: object, name: str) -> datetime:
-    if not isinstance(value, str) or not value.endswith("Z"): raise ValueError(f"{name} must be a UTC ISO timestamp ending in Z")
+    if not isinstance(value, str) or _UTC_ISO.fullmatch(value) is None:
+        raise ValueError(f"{name} must be a canonical UTC ISO timestamp")
     try: parsed = datetime.fromisoformat(value[:-1] + "+00:00")
     except ValueError as error: raise ValueError(f"{name} must be a valid ISO timestamp") from error
     _require_aware(parsed, name); return parsed.astimezone(timezone.utc)

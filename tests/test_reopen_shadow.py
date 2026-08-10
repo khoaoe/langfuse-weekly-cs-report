@@ -29,7 +29,7 @@ class FakeClient:
     def __init__(self, traces):
         self.traces = traces
 
-    def iter_traces(self, _from, _to):
+    def iter_traces(self, _from, _to, **_controls):
         yield from self.traces
 
     def list_observations(self, _trace_id):
