@@ -1199,6 +1199,28 @@ def test_root_is_authenticated_and_serves_live_page_without_echoing_identity(
     assert "sk-secret-value" not in authorized.text
 
 
+def test_root_serves_without_identity_header_when_platform_gates_at_the_edge(
+    manager_factory,
+):
+    """Basic mode trusts the platform's own HTTP Basic Auth, not an SSO header."""
+    manager = manager_factory(initial=_snapshot())
+    app = create_app(manager, settings=WebSettings("basic", IDENTITY_HEADER, "legacy"))
+
+    with TestClient(app) as client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/html")
+    assert "Hiệu quả CS Agent" in response.text
+
+
+def test_web_settings_accepts_basic_mode_with_an_approved_identity_header():
+    """Basic mode must still validate identity_header even though it goes unused."""
+    settings = WebSettings("basic", IDENTITY_HEADER)
+
+    assert settings.auth_mode == "basic"
+
+
 @pytest.mark.parametrize(
     ("auth_mode", "identity_header"),
     [
@@ -1266,7 +1288,7 @@ def test_help_exits_before_loading_environment(monkeypatch, capsys):
         (
             [],
             {"DASHBOARD_AUTH_MODE": "off"},
-            "production requires DASHBOARD_AUTH_MODE=proxy",
+            "production requires DASHBOARD_AUTH_MODE=proxy or basic",
         ),
     ],
 )

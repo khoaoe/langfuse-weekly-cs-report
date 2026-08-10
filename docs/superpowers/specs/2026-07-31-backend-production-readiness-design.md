@@ -4,6 +4,18 @@
 **Status:** Approved for implementation
 **Scope:** Backend production candidate only; deployment is deferred
 
+**Sửa 2026-08-10:** Dòng 34 ("Do not add a new user authentication method")
+giả định deployment thật luôn có reverse proxy SSO đứng trước, đúng cho hạ
+tầng production cuối cùng nhưng **không đúng** cho Zalopay Agent Base (PaaS
+nội bộ dùng để demo/thử nghiệm) — Traefik ở đó chỉ route/TLS, không chèn
+identity header, nên `auth_mode=proxy` khiến app crash-loop ngay khi khởi
+động (thiếu biến bắt buộc) hoặc 401 toàn bộ traffic nếu ép biến đó. Thêm
+`DASHBOARD_AUTH_MODE=basic` (xem `web.py` `_AUTH_MODES`): tin HTTP Basic Auth
+của platform ở edge làm identity authority thay vì header SSO, chỉ dùng khi
+platform đó **bắt buộc bật Basic Auth**. `proxy` vẫn nguyên vẹn, vẫn là chuẩn
+cho hạ tầng production thật có SSO. Đây là mở rộng phạm vi hẹp cho môi trường
+demo, không phải huỷ ràng buộc bảo mật của dòng 34 cho production.
+
 ## Verdict
 
 The existing backend is a strong protected-dashboard foundation, but it is not
