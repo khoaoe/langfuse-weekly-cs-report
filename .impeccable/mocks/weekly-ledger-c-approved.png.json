@@ -1,0 +1,18 @@
+{
+  "approved": true,
+  "viewport": "1440x900",
+  "composition": "table-led command sheet",
+  "carry_forward": [
+    "compact two-row application shell",
+    "title and narrative sharing one band with a four-cell decision ledger",
+    "single-line actionable alert rail",
+    "weekly report as the dominant first-screen object",
+    "aligned trend panels beginning immediately after the report"
+  ],
+  "must_not_literalize": [
+    "invented CSAT or agent metrics",
+    "agent rows instead of weekly rows",
+    "invented dates or claims",
+    "decorative navigation destinations outside the current product"
+  ]
+}

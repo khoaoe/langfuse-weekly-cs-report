@@ -1,0 +1,83 @@
+/* Shell disclosures and active-filter overflow are kept separate from the
+   report surface because their responsive behavior is independently bounded. */
+
+.filterChips {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-2) var(--gutter);
+  border-top: 1px solid var(--rule);
+}
+
+.filterChip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding-left: var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.filterChip button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.helpPanel {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: var(--space-2);
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-3) var(--gutter);
+  border-top: 1px solid var(--rule);
+  background: var(--surface-sunken);
+  font-size: 13px;
+}
+
+.helpPanel p {
+  max-width: 100ch;
+  color: var(--muted);
+}
+
+@media (max-width: 768px) {
+  .filterChips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .filterChip {
+    flex: 0 0 auto;
+  }
+
+  /* Bounded popover: remains keyboard-accessible without adding its height to
+     the sticky shell or hiding the report behind a full-viewport header. */
+  .helpPanel {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    left: 0;
+    max-height: min(320px, 45svh);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-bottom: 1px solid var(--rule-strong);
+    box-shadow: var(--shell-shadow);
+    -webkit-overflow-scrolling: touch;
+  }
+}

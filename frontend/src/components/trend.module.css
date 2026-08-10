@@ -1,0 +1,163 @@
+/* Trend-only chart layout and marks. Shared report/table primitives remain in
+   dashboard.module.css so the chart can evolve without growing the app shell. */
+
+.trendPanels {
+  position: relative;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.charts {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.chart {
+  position: relative;
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.chartTooltip {
+  position: absolute;
+  top: 3.25rem;
+  z-index: 4;
+  display: grid;
+  gap: 2px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  color: var(--text);
+  background: var(--surface-raised, var(--surface));
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--text) 14%, transparent);
+  font-size: 13px;
+  line-height: 1.35;
+  pointer-events: none;
+}
+
+.chartTooltip span {
+  display: block;
+  white-space: nowrap;
+}
+
+.chartTitle {
+  font-weight: 500;
+}
+
+.chartSvg {
+  display: block;
+  width: max(720px, 100%);
+  height: auto;
+}
+
+.chartViewport {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+}
+
+.gridLine {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+.axisLabel {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.wtdMarker {
+  stroke: var(--warning-text);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+}
+
+.wtdAxisLabel {
+  fill: var(--warning-text);
+  font-weight: 500;
+}
+
+.weekTarget {
+  cursor: pointer;
+}
+
+.weekHit {
+  fill: transparent;
+  stroke: transparent;
+  stroke-width: 2;
+}
+
+.weekHitActive {
+  fill: color-mix(in srgb, var(--interactive) 9%, transparent);
+  stroke: var(--interactive);
+}
+
+.weekTarget:focus-visible {
+  outline: none;
+}
+
+.weekTarget:focus-visible .weekHit {
+  stroke: var(--focus);
+}
+
+.seriesPrimaryFill {
+  fill: var(--series-primary);
+}
+
+.seriesSecondaryFill {
+  fill: var(--series-secondary);
+}
+
+.seriesPrimaryStroke {
+  fill: none;
+  stroke: var(--series-primary);
+  stroke-width: 2;
+}
+
+.seriesSecondaryStroke {
+  fill: none;
+  stroke: var(--series-secondary);
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.swatchPrimary,
+.swatchSecondary {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-tight);
+}
+
+.swatchPrimary {
+  background: var(--series-primary);
+}
+
+.swatchSecondary {
+  background: var(--series-secondary);
+}
+
+@media (min-width: 1500px) {
+  .charts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

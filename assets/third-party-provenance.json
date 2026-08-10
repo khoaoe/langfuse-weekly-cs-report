@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "files": [
+    {
+      "path": "icons/langfuse-icon.svg",
+      "provider": "Langfuse",
+      "source_url": "https://langfuse.com/brand-assets/icon/color/langfuse-icon.svg",
+      "source_sha256": "daeef880d58644fab4fd9ba5d292086c6d69756a39cff94d510f8ddc35312bf3",
+      "sha256": "daeef880d58644fab4fd9ba5d292086c6d69756a39cff94d510f8ddc35312bf3",
+      "browser": true,
+      "derivation": "exact-copy"
+    }
+  ]
+}

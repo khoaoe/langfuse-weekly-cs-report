@@ -45,12 +45,25 @@ def normalize_transfer_text(value: object) -> str | None:
     return "".join("".join(parser.parts).split())
 
 
-def is_transfer_response(output: object, canonical_text: str) -> bool:
+def is_transfer_response(
+    output: object, canonical_text: str | Sequence[str]
+) -> bool:
     if not isinstance(output, Mapping):
         return False
     response = normalize_transfer_text(output.get("response"))
-    canonical = normalize_transfer_text(canonical_text)
-    return response is not None and canonical is not None and response == canonical
+    templates = (
+        (canonical_text,)
+        if isinstance(canonical_text, str)
+        else canonical_text
+        if isinstance(canonical_text, Sequence)
+        else ()
+    )
+    normalized_templates = {
+        template
+        for value in templates
+        if (template := normalize_transfer_text(value)) is not None
+    }
+    return response is not None and response in normalized_templates
 
 
 def _is_guardrail_or_system_only_output(output: Mapping[str, object]) -> bool:
@@ -80,7 +93,9 @@ def _is_guardrail_or_system_only_output(output: Mapping[str, object]) -> bool:
     return bool(normalized_agents) and normalized_agents <= _SYSTEM_ONLY_AGENTS
 
 
-def is_substantive_ai_response(output: object, canonical_text: str) -> bool:
+def is_substantive_ai_response(
+    output: object, canonical_text: str | Sequence[str]
+) -> bool:
     if not isinstance(output, Mapping):
         return False
     response = output.get("response")
@@ -187,8 +202,27 @@ def _is_malformed_output(output: object) -> bool:
     return not isinstance(output, Mapping) or not isinstance(output.get("response"), str)
 
 
+def _first_classifiable_trace(
+    traces: Sequence[TraceRecord], canonical_text: str | Sequence[str]
+) -> tuple[int, TraceRecord, bool] | None:
+    """Find the first trace that establishes the ticket's handling path.
+
+    Guardrail/system-only and empty/technical outputs are not handling outcomes.
+    A later substantive AI response or canonical transfer must therefore still
+    be allowed to classify the ticket.
+    """
+    for index, trace in enumerate(traces):
+        if is_transfer_response(trace.output_data, canonical_text):
+            return index, trace, False
+        if is_substantive_ai_response(trace.output_data, canonical_text):
+            return index, trace, True
+    return None
+
+
 def classify_session(
-    traces: Sequence[TraceRecord], window: CohortWindow, canonical_text: str
+    traces: Sequence[TraceRecord],
+    window: CohortWindow,
+    canonical_text: str | Sequence[str],
 ) -> SessionMetrics | QualityIssue:
     if not traces:
         return QualityIssue("empty_session", None, None, None)
@@ -199,29 +233,35 @@ def classify_session(
         return QualityIssue("session_id_mismatch", None, None, None)
     first = ordered[0]
     turn_counts = Counter(item.turn for item in ordered)
-    malformed_followup = next(
-        (item for item in ordered[1:] if _is_malformed_output(item.output_data)),
-        None,
-    )
-    if malformed_followup is not None:
-        return QualityIssue(
-            "malformed_output",
-            malformed_followup.session_id,
-            malformed_followup.id,
-            malformed_followup.timestamp,
-        )
-
     transfer_traces = [
         item for item in ordered if is_transfer_response(item.output_data, canonical_text)
     ]
-    first_transfer = transfer_traces[0] if transfer_traces else None
-    first_is_ai = is_substantive_ai_response(first.output_data, canonical_text)
+    first_classifiable = _first_classifiable_trace(ordered, canonical_text)
+    first_classifiable_index = (
+        first_classifiable[0] if first_classifiable is not None else None
+    )
+    first_classifiable_trace = (
+        first_classifiable[1] if first_classifiable is not None else None
+    )
+    first_is_ai = first_classifiable[2] if first_classifiable is not None else False
+    first_transfer = (
+        transfer_traces[0]
+        if first_classifiable is not None and not first_is_ai
+        else next(
+            (
+                item
+                for item in ordered[(first_classifiable_index or 0) + 1 :]
+                if is_transfer_response(item.output_data, canonical_text)
+            ),
+            None,
+        )
+    )
     ai_reply_count = sum(
         is_substantive_ai_response(item.output_data, canonical_text) for item in ordered
     )
     cohort_status = _cohort_status(first, window)
 
-    if first_is_ai:
+    if first_classifiable is not None and first_is_ai:
         ai_first = True
         no_ai_first_reason = None
         outcome = (
@@ -230,7 +270,7 @@ def classify_session(
             else "ai_end_to_end"
         )
         data_quality = "valid"
-    elif is_transfer_response(first.output_data, canonical_text):
+    elif first_classifiable is not None:
         ai_first = False
         no_ai_first_reason = "direct_cs"
         outcome = "direct_cs"
@@ -240,9 +280,20 @@ def classify_session(
         no_ai_first_reason, data_quality = _output_quality(first.output_data)
         outcome = "unclassified"
 
+    malformed_trace = next(
+        (item for item in ordered if _is_malformed_output(item.output_data)),
+        None,
+    )
+    if malformed_trace is not None:
+        data_quality = "malformed_output"
+
     # ``turn`` is a Freshdesk message index, not a zero-based lifecycle index.
-    # The only safe meaning of a follow-up is a trace after canonical first.
-    followups = ordered[1:]
+    # A follow-up is measured after the first classifiable handling trace.
+    followups = (
+        ordered[(first_classifiable_index or 0) + 1 :]
+        if first_classifiable_trace is not None
+        else ordered[1:]
+    )
     if ai_first:
         reopen_lifetime = int(bool(followups))
         reopen_within_7d = int(

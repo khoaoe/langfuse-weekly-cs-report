@@ -1,0 +1,249 @@
+.tableScroll {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: var(--space-3);
+}
+
+.table {
+  min-width: 620px;
+}
+
+.breakdown {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+}
+
+.groupingField {
+  display: grid;
+  grid-template-columns: auto minmax(180px, 260px);
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.groupingField select {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.totalRow {
+  background: var(--surface-sunken);
+}
+
+.totalSupport,
+.sampleLabel {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.empty {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--rule-strong);
+  color: var(--muted);
+}
+
+.source {
+  max-width: none;
+  margin-top: var(--space-3);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+@media (min-width: 1100px) {
+  .source {
+    white-space: nowrap;
+  }
+}
+
+.staleInline {
+  color: var(--warning-text);
+  font-weight: 600;
+}
+
+.commentDisclosure {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.commentPanel {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.commentControls {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: var(--space-3);
+  width: min(100%, 960px);
+}
+
+.commentField {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.commentField select {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.commentResultCount {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  width: min(100%, 960px);
+}
+
+.paginationNumbers {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.paginationPage,
+.paginationStep {
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.paginationPage:hover,
+.paginationStep:hover {
+  background: var(--surface-sunken);
+}
+
+.paginationStep {
+  padding: 0 var(--space-3);
+}
+
+.paginationCurrent,
+.paginationCurrent:hover {
+  border-color: var(--interactive);
+  background: var(--interactive);
+  color: var(--interactive-ink);
+}
+
+.paginationGap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  min-height: 44px;
+  color: var(--muted);
+}
+
+.paginationCompact {
+  display: none;
+  min-height: 44px;
+  align-items: center;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.commentList {
+  display: grid;
+  gap: var(--space-3);
+  width: min(100%, 960px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.commentItem {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.commentMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.responseSequence {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ticketLink {
+  color: var(--interactive);
+  font-variant-numeric: tabular-nums;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.commentText {
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 700px) {
+  .groupingField {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .groupingField select {
+    width: 100%;
+  }
+
+  .commentControls {
+    grid-template-columns: 1fr;
+  }
+
+  .paginationNumbers {
+    display: none;
+  }
+
+  .paginationCompact {
+    display: inline-flex;
+  }
+
+  .pagination {
+    justify-content: space-between;
+  }
+}

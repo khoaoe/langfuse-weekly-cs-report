@@ -1,0 +1,60 @@
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 72px;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.toggle:hover {
+  background: var(--surface-sunken);
+  border-color: var(--interactive);
+}
+
+.indicator {
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--interactive);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: inset 4px 0 0 var(--interactive);
+}
+
+.toggle[aria-pressed="true"] .indicator {
+  background: var(--interactive);
+  box-shadow: inset -4px 0 0 var(--surface);
+}
+
+.themedAsset.lightAsset {
+  display: block;
+}
+
+.themedAsset.darkAsset {
+  display: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  :global(:root:not([data-theme])) .themedAsset.lightAsset {
+    display: none;
+  }
+
+  :global(:root:not([data-theme])) .themedAsset.darkAsset {
+    display: block;
+  }
+}
+
+:global(:root[data-theme="dark"]) .themedAsset.lightAsset {
+  display: none;
+}
+
+:global(:root[data-theme="dark"]) .themedAsset.darkAsset {
+  display: block;
+}

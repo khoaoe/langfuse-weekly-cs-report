@@ -17,7 +17,10 @@ from weekly_cs_report.dashboard_cache import (
     SnapshotManager,
 )
 from weekly_cs_report.dashboard_schema import DashboardSnapshot
-from weekly_cs_report.langfuse_client import LangfuseAPIError
+from weekly_cs_report.langfuse_client import (
+    LangfuseAPIError,
+    LangfuseRequestCancelled,
+)
 from weekly_cs_report.models import InvariantError
 
 
@@ -27,7 +30,9 @@ NOW = datetime(2026, 7, 29, 5, tzinfo=timezone.utc)
 def _empty_transfer_reasons() -> dict[str, object]:
     return {
         "observed_transfer_denominator": 0,
+        "triggers": [],
         "tpe": [],
+        "step_result_missing": {"count": 0, "denominator": 0},
         "guardrail": [],
         "escalation_guard_blocked": {"count": 0, "denominator": 0},
     }
@@ -42,6 +47,20 @@ class FakeClock:
 
     def advance(self, delta: timedelta) -> None:
         self.value += delta
+
+
+class FailOnCallClock:
+    def __init__(self, value: datetime, *, fail_call: int, error: Exception) -> None:
+        self.value = value
+        self.fail_call = fail_call
+        self.error = error
+        self.calls = 0
+
+    def __call__(self) -> datetime:
+        self.calls += 1
+        if self.calls == self.fail_call:
+            raise self.error
+        return self.value
 
 
 def _snapshot(generated_at: datetime) -> DashboardSnapshot:
@@ -66,9 +85,13 @@ def _snapshot(generated_at: datetime) -> DashboardSnapshot:
                     "ai_first": {"count": 0, "rate": 0.0},
                     "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
                     "weekly": [],
-                    "segments": {name: {"Không xác định": {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
+                    "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
                     "transfer_reasons": _empty_transfer_reasons(),
                     "by_week": {},
+                    "same_period": None,
+                    "csat": None,
+                    "outcome_reconciliation": None,
+                    "entry_coverage": None,
                     "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
                 }
                 for view in ("mon_sun", "mon_fri")
@@ -94,7 +117,31 @@ def test_storage_ignores_legacy_v2_without_attempting_a_metric_conversion(tmp_pa
     restored = ProtectedSnapshotStore(directory).load()
 
     assert restored is None
-    assert "incompatible or invalid schema" in caplog.text
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "weekly_cs_report.runtime"
+    ]
+    assert events == [{"event": "snapshot_load_ignored", "code": "invalid_snapshot"}]
+
+
+def test_strict_store_rejects_incomplete_enrichment_without_overwriting_snapshot(
+    tmp_path: Path,
+):
+    directory = tmp_path / "runtime"
+    regular_store = ProtectedSnapshotStore(directory)
+    partial = _snapshot(NOW)
+    regular_store.save(partial)
+
+    strict_store = ProtectedSnapshotStore(
+        directory,
+        require_complete_enrichment=True,
+    )
+    assert strict_store.load() is None
+    with pytest.raises(InvariantError, match="enrichment is incomplete"):
+        strict_store.save(partial)
+
+    assert regular_store.load() == partial
 
 
 @contextmanager
@@ -733,6 +780,403 @@ def test_secret_failure_is_not_persisted_and_automatic_retry_waits_60_seconds(
         assert calls == 2
 
 
+def test_loader_failure_logs_only_a_fixed_code(tmp_path: Path, caplog):
+    secret = "sk-secret-value 0901234567 trace-abc identity@example.test"
+
+    def loader() -> DashboardSnapshot:
+        raise RuntimeError(secret)
+
+    with _manager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        FakeClock(NOW),
+    ) as manager:
+        manager.get()
+        assert manager.wait_for_idle(2) is True
+
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "weekly_cs_report.runtime"
+    ]
+    assert {"event": "refresh_failure", "code": "refresh_failed"} in events
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+    assert "trace-abc" not in caplog.text
+    assert "identity@example.test" not in caplog.text
+
+
+def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path, caplog):
+    with _manager(
+        lambda: _snapshot(NOW),
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        FakeClock(NOW),
+    ) as manager:
+        manager.get()
+        assert manager.wait_for_idle(2) is True
+
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "weekly_cs_report.runtime"
+    ]
+    success = next(event for event in events if event["event"] == "refresh_success")
+    assert success.items() >= {
+        "event": "refresh_success",
+        "schema_version": 20,
+        "ticket_count": 0,
+        "trace_count": 0,
+        "observation_count": 0,
+        "coverage_issue_category": 0.0,
+        "coverage_app": 0.0,
+        "coverage_tpe": 0.0,
+        "coverage_intent": 0.0,
+        "coverage_skill": 0.0,
+    }.items()
+    assert isinstance(success["duration_ms"], int)
+    assert success["duration_ms"] >= 0
+
+
+def test_shutdown_cancellation_logs_cancelled_not_failure(tmp_path: Path, caplog):
+    started = threading.Event()
+    cancellation = threading.Event()
+
+    def loader() -> DashboardSnapshot:
+        started.set()
+        assert cancellation.wait(timeout=2)
+        raise LangfuseRequestCancelled("GET", "/api/public/traces")
+
+    manager = SnapshotManager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        clock=FakeClock(NOW),
+        cancel_event=cancellation,
+    )
+    manager.get()
+    assert started.wait(timeout=2)
+    manager.close()
+
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "weekly_cs_report.runtime"
+    ]
+    assert {"event": "refresh_cancelled", "code": "cancelled"} in events
+    assert not any(event["event"] == "refresh_failure" for event in events)
+
+
+@pytest.mark.parametrize(
+    ("stage", "loader"),
+    [
+        ("refresh_start", lambda: pytest.fail("loader must not run after start log failure")),
+        ("refresh_failure", lambda: (_ for _ in ()).throw(RuntimeError("sk-secret-value 0901234567"))),
+        ("refresh_cancelled", lambda: (_ for _ in ()).throw(LangfuseRequestCancelled("GET", "/api/public/traces"))),
+        ("refresh_success", lambda: _snapshot(NOW + timedelta(seconds=1))),
+    ],
+)
+def test_log_failure_never_leaves_refresh_active_or_replaces_last_good(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+    stage: str,
+    loader,
+):
+    initial = _snapshot(NOW)
+    store = ProtectedSnapshotStore(tmp_path / stage)
+    store.save(initial)
+    secret = "logger sk-secret-value 0901234567 trace-abc identity@example.test"
+
+    def fail_stage(event: str, **_fields: object) -> None:
+        if event == stage:
+            raise RuntimeError(secret)
+
+    monkeypatch.setattr(dashboard_cache, "emit_event", fail_stage)
+    with _manager(loader, store, FakeClock(NOW)) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert view.refreshing is False
+    assert view.status == "stale_error"
+    assert view.snapshot == initial
+    assert view.last_error_code in {
+        "langfuse_unavailable",
+        "data_validation_failed",
+        "refresh_failed",
+    }
+    assert secret not in repr(view)
+    assert "0901234567" not in repr(view)
+    assert "trace-abc" not in repr(view)
+    assert "identity@example.test" not in repr(view)
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+
+
+def test_success_log_failure_restores_the_previous_snapshot_on_disk(
+    tmp_path: Path,
+    monkeypatch,
+):
+    initial = _snapshot(NOW)
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    store.save(initial)
+
+    def fail_success(event: str, **_fields: object) -> None:
+        if event == "refresh_success":
+            raise RuntimeError("logger failure")
+
+    monkeypatch.setattr(dashboard_cache, "emit_event", fail_success)
+    with _manager(
+        lambda: _snapshot(NOW + timedelta(seconds=1)),
+        store,
+        FakeClock(NOW),
+    ) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        assert manager.peek().snapshot == initial
+
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == initial
+
+
+def test_success_log_failure_removes_an_unacknowledged_first_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+
+    def fail_success(event: str, **_fields: object) -> None:
+        if event == "refresh_success":
+            raise RuntimeError("logger failure")
+
+    monkeypatch.setattr(dashboard_cache, "emit_event", fail_success)
+    with _manager(lambda: _snapshot(NOW), store, FakeClock(NOW)) as manager:
+        manager.get()
+        assert manager.wait_for_idle(2) is True
+        assert manager.peek().snapshot is None
+
+    assert not (tmp_path / "cache" / "dashboard_snapshot.json").exists()
+
+
+def test_rollback_failure_keeps_the_committed_snapshot_in_memory_and_on_disk(
+    tmp_path: Path,
+    monkeypatch,
+):
+    initial = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    store.save(initial)
+
+    def fail_success(event: str, **_fields: object) -> None:
+        if event == "refresh_success":
+            raise RuntimeError("logger failure")
+
+    def fail_rollback(_snapshot: DashboardSnapshot | None) -> None:
+        raise OSError("restore failed")
+
+    monkeypatch.setattr(dashboard_cache, "emit_event", fail_success)
+    monkeypatch.setattr(store, "restore", fail_rollback, raising=False)
+    with _manager(lambda: replacement, store, FakeClock(NOW)) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert view.status == "stale_error"
+    assert view.last_error_code == "refresh_failed"
+    assert view.snapshot == replacement
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == replacement
+
+
+@pytest.mark.parametrize("has_previous", (False, True))
+def test_replace_that_commits_then_raises_is_reconciled_as_success(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+    has_previous: bool,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    previous = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    if has_previous:
+        store.save(previous)
+    real_replace = dashboard_cache.os.replace
+    secret = "late replace sk-secret-value 0901234567 trace-abc"
+
+    def replace_then_raise(source: str | Path, destination: str | Path) -> None:
+        real_replace(source, destination)
+        raise OSError(secret)
+
+    monkeypatch.setattr(dashboard_cache.os, "replace", replace_then_raise)
+    with _manager(lambda: replacement, store, FakeClock(NOW)) as manager:
+        if has_previous:
+            manager.request_refresh(force=True)
+        else:
+            manager.get()
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert view.status == "ready"
+    assert view.refreshing is False
+    assert view.last_error_code is None
+    assert view.snapshot == replacement
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == replacement
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+    assert "trace-abc" not in caplog.text
+
+
+@pytest.mark.parametrize("has_previous", (False, True))
+def test_post_save_clock_failure_rolls_back_durable_snapshot(
+    tmp_path: Path,
+    caplog,
+    has_previous: bool,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    previous = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    if has_previous:
+        store.save(previous)
+    secret = "clock sk-secret-value 0901234567 identity@example.test"
+    clock = FailOnCallClock(NOW, fail_call=2, error=RuntimeError(secret))
+
+    with _manager(lambda: replacement, store, clock) as manager:
+        if has_previous:
+            manager.request_refresh(force=True)
+        else:
+            manager.get()
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert view.status == "stale_error"
+    assert view.refreshing is False
+    assert view.last_error_code == "refresh_failed"
+    assert view.snapshot == (previous if has_previous else None)
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == (
+        previous if has_previous else None
+    )
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+    assert "identity@example.test" not in caplog.text
+
+
+def test_restore_that_commits_then_raises_preserves_prior_and_original_error(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    previous = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    store.save(previous)
+    secret = "late restore sk-secret-value 0901234567 trace-abc"
+    clock = FailOnCallClock(NOW, fail_call=2, error=ValueError(secret))
+    real_replace = dashboard_cache.os.replace
+    replace_calls = 0
+
+    def fail_after_restore_replace(
+        source: str | Path,
+        destination: str | Path,
+    ) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        real_replace(source, destination)
+        if replace_calls == 2:
+            raise OSError(secret)
+
+    monkeypatch.setattr(dashboard_cache.os, "replace", fail_after_restore_replace)
+    with _manager(lambda: replacement, store, clock) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert replace_calls == 2
+    assert view.status == "stale_error"
+    assert view.last_error_code == "data_validation_failed"
+    assert view.snapshot == previous
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == previous
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+    assert "trace-abc" not in caplog.text
+
+
+def test_restore_failure_before_replace_aligns_memory_to_committed_new_snapshot(
+    tmp_path: Path,
+    monkeypatch,
+    caplog,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    previous = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    store.save(previous)
+    secret = "early restore sk-secret-value 0901234567 trace-abc"
+    clock = FailOnCallClock(NOW, fail_call=2, error=ValueError(secret))
+    real_replace = dashboard_cache.os.replace
+    replace_calls = 0
+
+    def fail_before_restore_replace(
+        source: str | Path,
+        destination: str | Path,
+    ) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError(secret)
+        real_replace(source, destination)
+
+    monkeypatch.setattr(dashboard_cache.os, "replace", fail_before_restore_replace)
+    with _manager(lambda: replacement, store, clock) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert replace_calls == 2
+    assert view.status == "stale_error"
+    assert view.last_error_code == "refresh_failed"
+    assert view.snapshot == replacement
+    assert ProtectedSnapshotStore(tmp_path / "cache").load() == replacement
+    assert secret not in caplog.text
+    assert "0901234567" not in caplog.text
+    assert "trace-abc" not in caplog.text
+
+
+def test_unreadable_durable_state_uses_conservative_no_snapshot_fallback(
+    tmp_path: Path,
+    monkeypatch,
+):
+    store = ProtectedSnapshotStore(tmp_path / "cache")
+    previous = _snapshot(NOW)
+    replacement = _snapshot(NOW + timedelta(seconds=1))
+    store.save(previous)
+    clock = FailOnCallClock(NOW, fail_call=2, error=RuntimeError("clock failed"))
+    real_replace = dashboard_cache.os.replace
+    replace_calls = 0
+
+    def fail_before_restore_replace(
+        source: str | Path,
+        destination: str | Path,
+    ) -> None:
+        nonlocal replace_calls
+        replace_calls += 1
+        if replace_calls == 2:
+            raise OSError("restore failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(dashboard_cache.os, "replace", fail_before_restore_replace)
+    monkeypatch.setattr(
+        store,
+        "_read_snapshot_without_event",
+        lambda: (False, None),
+        raising=False,
+    )
+    with _manager(lambda: replacement, store, clock) as manager:
+        manager.request_refresh(force=True)
+        assert manager.wait_for_idle(2) is True
+        view = manager.peek()
+
+    assert view.status == "stale_error"
+    assert view.last_error_code == "refresh_failed"
+    assert view.snapshot is None
+    assert view.refreshing is False
+
+
 def test_close_is_idempotent(tmp_path: Path):
     """Repeated lifecycle shutdown must not fail."""
     clock = FakeClock(NOW)
@@ -743,4 +1187,32 @@ def test_close_is_idempotent(tmp_path: Path):
     )
 
     manager.close()
+    manager.close()
+
+
+def test_close_sets_process_cancellation_before_waiting_for_refresh(tmp_path: Path):
+    """Shutdown must signal an active loader before joining its executor thread."""
+    started = threading.Event()
+    observed_cancellation = threading.Event()
+    cancellation = threading.Event()
+
+    def loader() -> DashboardSnapshot:
+        started.set()
+        if cancellation.wait(timeout=2):
+            observed_cancellation.set()
+            return _snapshot(NOW)
+        raise TimeoutError("close did not signal cancellation")
+
+    manager = SnapshotManager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        clock=FakeClock(NOW),
+        cancel_event=cancellation,
+    )
+    manager.get()
+    assert started.wait(timeout=2)
+
+    manager.close()
+
+    assert observed_cancellation.is_set()
     manager.close()

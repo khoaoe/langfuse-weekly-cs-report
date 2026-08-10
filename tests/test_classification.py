@@ -18,6 +18,11 @@ from weekly_cs_report.models import QualityIssue, TraceRecord
 TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 WINDOW = build_cohort_window(datetime(2026, 7, 29, 12, tzinfo=TZ), weeks=12, include_wtd=True)
 TURN0 = "2026-07-20T02:00:00Z"
+OBSERVED_TRANSFER_TEXT = (
+    "Xin lỗi vì sự bất tiện. Yêu cầu của bạn đã được chuyển đến bộ phận phụ "
+    "trách để kiểm tra và xử lý. Vui lòng chờ trong giây lát, Zalopay sẽ phản "
+    "hồi bạn trong thời gian sớm nhất."
+)
 
 
 def normalized(*raw_traces: dict) -> list[TraceRecord]:
@@ -109,7 +114,7 @@ def test_guardrail_marker_alongside_an_ai_agent_does_not_hide_a_real_ai_reply():
     )
 
 
-def test_guardrail_only_turn0_is_unclassified_not_ai_first_or_ai_end_to_end():
+def test_guardrail_before_later_ai_reply_is_classified_from_later_trace():
     guardrail = trace(
         "t0",
         "session-1",
@@ -119,14 +124,32 @@ def test_guardrail_only_turn0_is_unclassified_not_ai_first_or_ai_end_to_end():
     )
     guardrail["output"]["agents_used"] = ["guardrail"]
 
-    result = classified(guardrail)
+    result = classified(
+        guardrail,
+        trace("t1", "session-1", 1, "2026-07-20T03:00:00Z", "Giao dịch đang xử lý"),
+    )
+
+    assert result.outcome == "ai_end_to_end"
+    assert result.ai_first is True
+    assert result.no_ai_first_reason is None
+    assert result.ai_reply_count == 1
+    assert result.reopen_lifetime == 0
+    assert result.reopen_within_7d == 0
+
+
+def test_unclassified_requires_all_traces_to_lack_a_classifiable_outcome():
+    first = trace("t0", "session-1", 0, TURN0, "")
+    later_guardrail = trace(
+        "t1", "session-1", 1, "2026-07-20T03:00:00Z", "ESCALATE_CS_MESSAGE"
+    )
+    later_guardrail["output"]["agents_used"] = ["guardrail"]
+
+    result = classified(first, later_guardrail)
 
     assert result.outcome == "unclassified"
     assert result.ai_first is False
-    assert result.no_ai_first_reason == "guardrail_rule"
+    assert result.no_ai_first_reason == "empty_or_technical"
     assert result.ai_reply_count == 0
-    assert result.reopen_lifetime is None
-    assert result.reopen_within_7d is None
 
 
 def test_canonical_transfer_from_a_system_guard_remains_direct_cs():
@@ -139,6 +162,18 @@ def test_canonical_transfer_from_a_system_guard_remains_direct_cs():
     assert result.ai_first is False
     assert result.no_ai_first_reason == "direct_cs"
     assert result.ai_reply_count == 0
+
+
+def test_later_transfer_after_non_classifiable_traces_is_direct_cs():
+    result = classified(
+        trace("t0", "session-1", 0, TURN0, ""),
+        trace("t1", "session-1", 1, "2026-07-20T03:00:00Z", "ESCALATE_CS_MESSAGE"),
+        trace("t2", "session-1", 2, "2026-07-20T04:00:00Z", TRANSFER_HTML),
+    )
+
+    assert result.outcome == "direct_cs"
+    assert result.ai_first is False
+    assert result.no_ai_first_reason == "direct_cs"
 
 
 def test_later_guardrail_only_response_does_not_increment_ai_reply_count():
@@ -190,6 +225,33 @@ def test_later_transfer_is_ai_then_cs_and_not_an_ai_reply():
     assert result.ai_first is True
     assert result.ai_reply_count == 1
     assert result.first_transfer_trace_id == "t1"
+
+
+def test_approved_transfer_variant_is_recognized_before_system_only_filter():
+    transfer = trace(
+        "t3",
+        "session-1",
+        3,
+        "2026-07-20T05:00:00Z",
+        OBSERVED_TRANSFER_TEXT,
+    )
+    transfer["output"]["agents_used"] = ["escalation_history_guard"]
+
+    result = classify_session(
+        normalized(
+            trace("t0", "session-1", 0, TURN0, "Đang kiểm tra giao dịch"),
+            trace("t1", "session-1", 1, "2026-07-20T03:00:00Z", "Đã kiểm tra"),
+            trace("t2", "session-1", 2, "2026-07-20T04:00:00Z", "Cần thêm thời gian"),
+            transfer,
+        ),
+        WINDOW,
+        (TRANSFER_TEXT, OBSERVED_TRANSFER_TEXT),
+    )
+
+    assert result.outcome == "ai_then_cs"
+    assert result.transferred is True
+    assert result.ai_reply_count == 3
+    assert result.first_transfer_trace_id == "t3"
 
 
 def test_friday_turn0_counts_weekend_followups_and_later_transfer():
@@ -318,16 +380,18 @@ def test_malformed_turn0_output_is_unclassified_not_direct_cs():
 
 
 @pytest.mark.parametrize("bad_output", [[], {"response": 7}])
-def test_malformed_followup_output_quarantines_the_session(bad_output: object):
+def test_malformed_followup_is_quality_warning_but_does_not_hide_a_valid_outcome(
+    bad_output: object,
+):
     followup = trace("t1", "session-1", 1, "2026-07-21T02:00:00Z", "unused")
     followup["output"] = bad_output
     result = classified(
         trace("t0", "session-1", 0, TURN0, "Giao dịch đang xử lý"),
         followup,
     )
-    assert isinstance(result, QualityIssue)
-    assert result.reason == "malformed_output"
-    assert result.trace_id == "t1"
+    assert result.outcome == "ai_end_to_end"
+    assert result.data_quality == "malformed_output"
+    assert result.ai_reply_count == 1
 
 
 def test_single_trace_starting_at_turn_three_is_not_a_false_reopen():

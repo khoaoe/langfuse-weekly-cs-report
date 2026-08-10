@@ -1,14 +1,39 @@
-# Default-deny the build context; only the four explicit Dockerfile inputs
-# and the Docker metadata below are re-included.
+# Default-deny the build context; only explicit Dockerfile inputs and the
+# Docker metadata below are re-included.
 *
 !Dockerfile
 !.dockerignore
 !pyproject.toml
+!uv.lock
 !README.md
 !src/
 !src/**
 !config/
 !config/**
+config/freshdesk_agents.v1.json
+config/freshdesk_reconciliation_agents.v1.json
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.app.json
+!vite.config.ts
+!playwright.config.ts
+!frontend/
+!frontend/**
+!assets/
+!assets/**
+
+# Preserve canonical font sources in the repository without sending unused
+# OTF binaries to the remote Docker builder or its cache.
+assets/brand/fonts/source/
+
+# Build inputs must never carry a host-built tree into the image.
+frontend/coverage/
+node_modules/
+**/node_modules/
+src/weekly_cs_report/static/spa/
+test-results/
+playwright-report/
 
 .env
 .env.*

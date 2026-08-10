@@ -1,0 +1,122 @@
+.fetchedAt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.flow {
+  display: grid;
+  gap: 0;
+  margin-top: var(--space-4);
+  border-top: 1px solid var(--rule-strong);
+}
+
+.flowRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 48px;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--rule);
+}
+
+.flowLabel {
+  min-width: 0;
+}
+
+.flowValue {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.flowShare {
+  min-width: 64px;
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.investigateButton,
+.sortButton,
+.pageButton {
+  min-height: 36px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.investigateButton:hover,
+.sortButton:hover,
+.pageButton:hover:not(:disabled) {
+  background: var(--surface-sunken);
+}
+
+.investigateButton[aria-pressed="true"] {
+  border-color: var(--interactive);
+  background: var(--interactive);
+  color: var(--interactive-ink);
+}
+
+.pageButton:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.subcounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.detail {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule-strong);
+}
+
+.detailTitle {
+  margin: 0;
+  font-size: 16px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.empty {
+  margin: var(--space-4) 0 0;
+  color: var(--muted);
+}
+
+@media (max-width: 640px) {
+  .flowRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .flowShare {
+    text-align: left;
+  }
+
+  .investigateButton {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .pagination {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

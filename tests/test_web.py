@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
-from dataclasses import asdict
+from dataclasses import asdict, replace
 import json
 from pathlib import Path
 import re
@@ -11,6 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
 
+from tests.fixtures.traces import trace
+from tests.test_dashboard_schema import _snapshot as schema_snapshot
 from weekly_cs_report.cli import (
     ConfigurationError,
     EnvironmentSettings,
@@ -18,7 +21,13 @@ from weekly_cs_report.cli import (
     TARGET_BASE_URL,
 )
 from weekly_cs_report.dashboard_cache import ProtectedSnapshotStore, SnapshotManager
-from weekly_cs_report.dashboard_schema import DashboardSnapshot, TicketRow
+from weekly_cs_report.dashboard_schema import (
+    DashboardSnapshot,
+    TicketRow,
+    project_dashboard,
+)
+from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
+from weekly_cs_report.report import compute_report
 from weekly_cs_report.web import (
     WebSettings,
     _parse_ticket_query,
@@ -36,7 +45,9 @@ REFRESH_ACTION_HEADERS = {"X-Dashboard-Action": "refresh"}
 def _empty_transfer_reasons() -> dict[str, object]:
     return {
         "observed_transfer_denominator": 0,
+        "triggers": [],
         "tpe": [],
+        "step_result_missing": {"count": 0, "denominator": 0},
         "guardrail": [],
         "escalation_guard_blocked": {"count": 0, "denominator": 0},
     }
@@ -58,9 +69,13 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
                 "ai_first": {"count": 0, "rate": 0.0},
                 "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
                 "weekly": [],
-                "segments": {name: {"Không xác định": {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
+                "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
                 "transfer_reasons": _empty_transfer_reasons(),
                 "by_week": {},
+                "same_period": None,
+                "csat": None,
+                "outcome_reconciliation": None,
+                "entry_coverage": None,
                 "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
             }
             for view in ("mon_sun", "mon_fri")
@@ -75,6 +90,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
 def _ticket(ticket_id: str, outcome: str) -> TicketRow:
     return TicketRow(
         ticket_id=ticket_id,
+        opened_at="2026-07-20T02:00:00Z",
         cohort_week="2026-07-20",
         cohort_status="complete",
         is_weekend_start=False,
@@ -92,9 +108,11 @@ def _ticket(ticket_id: str, outcome: str) -> TicketRow:
         skill=None,
         intent=None,
         tpe_code="-217",
-        tpe_status="Thất bại",
+        tpe_status=None,
         guardrail_rule=None,
+        transfer_reason=("unknown" if outcome != "ai_end_to_end" else None),
         escalation_guard_blocked=False,
+        csat_satisfaction=None,
         data_quality="valid",
     )
 
@@ -113,6 +131,148 @@ def _snapshot(
             for index, ticket_id in enumerate(ticket_ids)
         ),
     )
+
+
+def _entry_coverage_snapshot() -> DashboardSnapshot:
+    base = schema_snapshot()
+    records = (
+        EntryCoverageRecord(
+            ticket_id="700",
+            opened_at="2026-07-14T02:00:00Z",
+            cohort_week="2026-07-13",
+            status="ai_replied_only",
+            human_replied=None,
+        ),
+        EntryCoverageRecord(
+            ticket_id="701",
+            opened_at="2026-07-21T02:00:00Z",
+            cohort_week="2026-07-20",
+            status="not_observed_invoked",
+            human_replied=True,
+        ),
+        EntryCoverageRecord(
+            ticket_id="702",
+            opened_at="2026-07-24T18:00:00Z",
+            cohort_week="2026-07-20",
+            status="not_observed_invoked",
+            human_replied=False,
+        ),
+        EntryCoverageRecord(
+            ticket_id="703",
+            opened_at="2026-07-28T02:00:00Z",
+            cohort_week="2026-07-27",
+            status="unresolved",
+            human_replied=None,
+        ),
+    )
+    dashboard = deepcopy(base.dashboard)
+    counts = {
+        "2026-07-13": {
+            "freshdesk_ticket_count": 1,
+            "ai_replied_only": 1,
+            "ai_replied_then_transferred": 0,
+            "transferred_without_ai_reply": 0,
+            "invoked_no_result": 0,
+            "not_observed_invoked": 0,
+            "not_observed_human_replied": 0,
+            "not_observed_no_human_reply": 0,
+            "unresolved": 0,
+        },
+        "2026-07-20": {
+            "freshdesk_ticket_count": 2,
+            "ai_replied_only": 0,
+            "ai_replied_then_transferred": 0,
+            "transferred_without_ai_reply": 0,
+            "invoked_no_result": 0,
+            "not_observed_invoked": 2,
+            "not_observed_human_replied": 1,
+            "not_observed_no_human_reply": 1,
+            "unresolved": 0,
+        },
+        "2026-07-27": {
+            "freshdesk_ticket_count": 1,
+            "ai_replied_only": 0,
+            "ai_replied_then_transferred": 0,
+            "transferred_without_ai_reply": 0,
+            "invoked_no_result": 0,
+            "not_observed_invoked": 0,
+            "not_observed_human_replied": 0,
+            "not_observed_no_human_reply": 0,
+            "unresolved": 1,
+        },
+    }
+    for view in dashboard["views"].values():
+        view["entry_coverage"] = {
+            "source": "freshdesk",
+            "source_start_week": "2026-07-06",
+            "fetched_at": "2026-08-04T03:00:00Z",
+            "by_week": deepcopy(counts),
+        }
+    return DashboardSnapshot(
+        generated_at=base.generated_at,
+        dashboard=dashboard,
+        tickets=base.tickets,
+        entry_coverage_tickets=records,
+    )
+
+
+def _aggregate_only_snapshot() -> DashboardSnapshot:
+    class AggregateOnlyClient:
+        def iter_traces(
+            self,
+            _from: datetime,
+            _to: datetime,
+            *,
+            deadline: float | None = None,
+            cancel_event: threading.Event | None = None,
+            max_pages: int = 500,
+        ):
+            raw = trace(
+                "aggregate-only-trace",
+                "aggregate-only-session",
+                0,
+                "2026-07-21T02:00:00Z",
+                "AI reply",
+            )
+            raw["input"]["other_info"]["meta"] = {
+                "Thông tin thêm": {
+                    "category": "Thanh toán QR",
+                    "sub_source": "payment-detail",
+                },
+                "App": "Ứng dụng Zalopay",
+                "Product Code": "PAYMENT",
+                "Mã lỗi TPE": "-404 Đang xử lý",
+                "Step result": "-1|20|700212|mô tả không được xuất",
+            }
+            yield raw
+
+        def iter_observations_by_name(self, name, *_args, **_kwargs):
+            if name != "tool:get_transaction_processing_engine_data":
+                return iter(())
+            return iter(
+                (
+                    {
+                        "traceId": "aggregate-only-trace",
+                        "output": {
+                            "result": {
+                                "transstatus": "-404",
+                                "stepresult": "-1013",
+                            }
+                        },
+                    },
+                )
+            )
+
+    run = compute_report(
+        AggregateOnlyClient(),
+        as_of=NOW,
+        weeks=2,
+        include_current_wtd=True,
+        taxonomy_path=PROJECT_ROOT / "config" / "taxonomy.v2.json",
+    )
+    snapshot = project_dashboard(run)
+    assert snapshot.tickets == ()
+    return snapshot
 
 
 @pytest.fixture
@@ -228,6 +388,59 @@ def test_proxy_auth_rejects_missing_identity_and_never_echoes_identity(manager_f
     assert "person-secret@example.test" not in authorized.text
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [(IDENTITY_HEADER, "operator"), (IDENTITY_HEADER, "operator")],
+        {IDENTITY_HEADER: "operator,second"},
+        {IDENTITY_HEADER: " operator"},
+        {IDENTITY_HEADER: "operator "},
+        {IDENTITY_HEADER: "operator name"},
+        {IDENTITY_HEADER: "operator\x01"},
+        {IDENTITY_HEADER: ""},
+        {IDENTITY_HEADER: "x" * 257},
+    ],
+)
+def test_proxy_auth_rejects_ambiguous_or_invalid_identity_values(manager_factory, headers):
+    manager = manager_factory(initial=_snapshot())
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+
+    with TestClient(app) as client:
+        response = client.get("/api/dashboard", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "authentication_required"}}
+
+
+def test_one_valid_identity_authorizes_document_api_and_assets(manager_factory):
+    manager = manager_factory(initial=_snapshot())
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+    headers = {IDENTITY_HEADER: "operator-123"}
+
+    with TestClient(app) as client:
+        document = client.get("/", headers=headers)
+        api = client.get("/api/dashboard", headers=headers)
+        asset = client.get("/assets/langfuse-icon-BDc85awm.svg", headers=headers)
+
+    assert [response.status_code for response in (document, api, asset)] == [200, 200, 200]
+
+
+def test_application_lifecycle_emits_json_service_events(manager_factory, caplog):
+    manager = manager_factory(initial=_snapshot())
+    app = create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+
+    with TestClient(app):
+        pass
+
+    events = [
+        json.loads(record.getMessage())
+        for record in caplog.records
+        if record.name == "weekly_cs_report.runtime"
+    ]
+    assert {"event": "service_start"} in events
+    assert {"event": "service_stop"} in events
+
+
 def test_ticket_endpoint_uses_last_good_snapshot_and_paginates(manager_factory):
     """Ignoring server-side pagination can return the complete ticket population."""
     snapshot = _snapshot()
@@ -245,6 +458,157 @@ def test_ticket_endpoint_uses_last_good_snapshot_and_paginates(manager_factory):
         "page_size": 2,
         "total": 3,
     }
+
+
+def test_ticket_endpoint_applies_allowlisted_sort_before_pagination(manager_factory):
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(
+            "/api/tickets?sort_by=ticket_id&sort_direction=desc&page=1&page_size=2"
+        )
+
+    assert response.status_code == 200
+    assert [item["ticket_id"] for item in response.json()["items"]] == [
+        "300",
+        "200",
+    ]
+    assert set(response.json()) == {"items", "page", "page_size", "total"}
+
+
+def test_entry_coverage_endpoint_filters_multiple_weeks_and_keeps_safe_projection(
+    manager_factory,
+):
+    snapshot = _entry_coverage_snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(
+            "/api/freshdesk-entry-coverage/tickets",
+            params={
+                "week_definition": "mon_sun",
+                "cohort_weeks": "2026-07-13,2026-07-20",
+                "sort_by": "opened_at",
+                "sort_dir": "desc",
+                "page": 1,
+                "page_size": 10,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [item["ticket_id"] for item in payload["items"]] == ["702", "701", "700"]
+    assert payload["total"] == 3
+    assert set(payload["items"][0]) == {
+        "ticket_id",
+        "opened_at",
+        "cohort_week",
+        "status",
+        "human_replied",
+    }
+    assert "agent_id" not in response.text
+    assert "requester" not in response.text
+
+
+def test_entry_coverage_endpoint_filters_status_paginates_and_excludes_weekend_for_mon_fri(
+    manager_factory,
+):
+    manager = manager_factory(initial=_entry_coverage_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        status_page = client.get(
+            "/api/freshdesk-entry-coverage/tickets",
+            params={
+                "cohort_weeks": "2026-07-20",
+                "status": "not_observed_invoked",
+                "sort_by": "ticket_id",
+                "sort_dir": "asc",
+                "page": 1,
+                "page_size": 1,
+            },
+        )
+        friday_only = client.get(
+            "/api/freshdesk-entry-coverage/tickets",
+            params={
+                "week_definition": "mon_fri",
+                "cohort_weeks": "2026-07-20",
+                "status": "not_observed_invoked",
+            },
+        )
+
+    assert status_page.status_code == 200
+    assert status_page.json()["total"] == 2
+    assert [item["ticket_id"] for item in status_page.json()["items"]] == ["701"]
+    assert friday_only.status_code == 200
+    assert friday_only.json()["total"] == 1
+    assert [item["ticket_id"] for item in friday_only.json()["items"]] == ["701"]
+
+
+def test_entry_coverage_endpoint_has_same_auth_boundary_and_sanitized_queries(
+    manager_factory,
+):
+    manager = manager_factory(initial=_entry_coverage_snapshot())
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+
+    with TestClient(app) as client:
+        missing = client.get("/api/freshdesk-entry-coverage/tickets")
+        malformed = client.get(
+            "/api/freshdesk-entry-coverage/tickets?status=not-a-status",
+            headers={IDENTITY_HEADER: "operator"},
+        )
+
+    assert missing.status_code == 401
+    assert missing.json() == {"detail": {"code": "authentication_required"}}
+    assert malformed.status_code == 422
+    assert malformed.json() == {
+        "detail": {"code": "invalid_query", "parameter": "status"}
+    }
+
+
+def test_ticket_endpoint_filters_strict_csat_satisfaction_states(manager_factory):
+    snapshot = _snapshot()
+    snapshot = DashboardSnapshot(
+        generated_at=snapshot.generated_at,
+        dashboard=snapshot.dashboard,
+        tickets=(
+            replace(snapshot.tickets[0], csat_satisfaction="negative"),
+            replace(snapshot.tickets[1], csat_satisfaction="unrated"),
+            snapshot.tickets[2],
+        ),
+    )
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        negative = client.get("/api/tickets?csat_satisfaction=negative")
+        unrated = client.get("/api/tickets?csat_satisfaction=unrated")
+
+    assert [item["ticket_id"] for item in negative.json()["items"]] == ["300"]
+    assert [item["ticket_id"] for item in unrated.json()["items"]] == ["100"]
+
+
+def test_ticket_endpoint_filters_strict_transfer_reason(manager_factory):
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets?transfer_reason=unknown")
+
+    assert response.status_code == 200
+    assert [item["ticket_id"] for item in response.json()["items"]] == [
+        "200",
+        "300",
+    ]
 
 
 def test_browser_json_boundaries_recursively_exclude_pii_patterns_and_deny_keys(
@@ -319,9 +683,14 @@ def test_ticket_endpoint_is_fixed_503_before_first_snapshot(manager_factory):
     [
         ("page_size=101", "page_size"),
         ("cohort_week=sk-secret-value", "cohort_week"),
+        ("cohort_weeks=2026-07-20", "cohort_weeks"),
         ("outcome=sk-secret-value", "outcome"),
         ("ticket_id=0901234567%21", "ticket_id"),
         ("page=1&page=0901234567", "page"),
+        ("sort_by=sk-secret-value", "sort_by"),
+        ("sort_direction=sk-secret-value", "sort_direction"),
+        ("csat_satisfaction=" + ("x" * 129), "csat_satisfaction"),
+        ("csat_satisfaction=negative&csat_satisfaction=positive", "csat_satisfaction"),
         ("sk-secret-value=0901234567", "unknown"),
     ],
 )
@@ -353,10 +722,15 @@ def test_ticket_query_errors_are_fixed_sanitized_422(
         ("skill=not-in-snapshot", "skill"),
         ("intent=not-in-snapshot", "intent"),
         ("tpe_code=not-in-snapshot", "tpe_code"),
+        ("transfer_reason=not-in-snapshot", "transfer_reason"),
         ("gt4_turn=TRUE", "gt4_turn"),
         ("transferred=TRUE", "transferred"),
         ("is_weekend_start=yes", "is_weekend_start"),
         ("week_definition=weekend", "week_definition"),
+        ("sort_by=raw_payload", "sort_by"),
+        ("sort_direction=sideways", "sort_direction"),
+        ("sort_direction=desc", "sort_direction"),
+        ("csat_satisfaction=unknown", "csat_satisfaction"),
         ("skill=" + ("x" * 129), "skill"),
         ("intent=a&intent=b", "intent"),
     ],
@@ -372,6 +746,66 @@ def test_p5_ticket_filters_fail_closed_without_echoing_values(
     assert "not-in-snapshot" not in response.text
 
 
+@pytest.mark.parametrize(
+    ("query_parameter", "segment_dimension", "value"),
+    [
+        ("issue_category", "issue_category", "Thanh toán QR"),
+        ("app", "app", "Ứng dụng Zalopay"),
+        ("product_code", "product_code", "PAYMENT"),
+        ("skill", "skill", "Chưa ghi nhận"),
+        ("intent", "intent", "Không xác định"),
+        ("tpe_code", "tpe", "-404"),
+    ],
+)
+def test_p5_ticket_filters_accept_browser_visible_aggregate_values_without_ticket_rows(
+    manager_factory,
+    query_parameter: str,
+    segment_dimension: str,
+    value: str,
+):
+    """A visible aggregate filter can honestly return an empty safe ticket page."""
+    snapshot = _aggregate_only_snapshot()
+    mon_sun_segments = snapshot.dashboard["views"]["mon_sun"]["segments"]
+    assert value in mon_sun_segments[segment_dimension]
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets", params={query_parameter: value})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [],
+        "page": 1,
+        "page_size": 50,
+        "total": 0,
+    }
+
+
+def test_p5_intent_filter_does_not_accept_other_aggregate_dimensions(
+    manager_factory,
+):
+    """Only the privacy-approved intent segment may broaden the intent allowlist."""
+    snapshot = _aggregate_only_snapshot()
+    value = "Thanh toán QR"
+    assert value in snapshot.dashboard["views"]["mon_sun"]["segments"][
+        "issue_category"
+    ]
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets", params={"intent": value})
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "invalid_query", "parameter": "intent"}
+    }
+    assert value not in response.text
+
+
 def test_p5_ticket_filters_accept_strict_booleans_and_week_definition(manager_factory):
     manager = manager_factory(initial=_snapshot())
     with TestClient(create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))) as client:
@@ -380,7 +814,35 @@ def test_p5_ticket_filters_accept_strict_booleans_and_week_definition(manager_fa
     assert all(item["gt4_turn"] is False and item["transferred"] is True for item in response.json()["items"])
 
 
-def test_p5_accepts_the_full_15_unique_query_pair_contract(manager_factory):
+def test_ticket_endpoint_accepts_multiple_report_weeks(manager_factory):
+    base = _snapshot()
+    snapshot = replace(
+        base,
+        tickets=(
+            replace(base.tickets[0], cohort_week="2026-07-13"),
+            replace(base.tickets[1], cohort_week="2026-07-20"),
+            replace(base.tickets[2], cohort_week="2026-07-27"),
+        ),
+    )
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(
+            "/api/tickets",
+            params={"cohort_weeks": "2026-07-13,2026-07-20"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 2
+    assert {item["cohort_week"] for item in response.json()["items"]} == {
+        "2026-07-13",
+        "2026-07-20",
+    }
+
+
+def test_ticket_endpoint_accepts_the_full_18_unique_query_pair_contract(manager_factory):
     snapshot = _snapshot()
     selected = snapshot.tickets[0]
     params = [
@@ -390,13 +852,16 @@ def test_p5_accepts_the_full_15_unique_query_pair_contract(manager_factory):
         ("issue_category", selected.issue_category),
         ("app", selected.app),
         ("product_code", selected.product_code),
-        ("skill", selected.skill or "Không xác định"),
+        ("skill", selected.skill or "Chưa ghi nhận"),
         ("intent", selected.intent or "Không xác định"),
         ("tpe_code", selected.tpe_code or "Không xác định"),
+        ("transfer_reason", selected.transfer_reason or "unknown"),
         ("gt4_turn", str(selected.gt4_turn).lower()),
         ("transferred", str(selected.transferred).lower()),
         ("is_weekend_start", str(selected.is_weekend_start).lower()),
         ("week_definition", "mon_sun"),
+        ("sort_by", "ticket_id"),
+        ("sort_direction", "asc"),
         ("page", "1"),
         ("page_size", "100"),
     ]
@@ -414,7 +879,7 @@ def test_p5_accepts_the_full_15_unique_query_pair_contract(manager_factory):
     [
         ("page=" + ("9" * 5000), "page"),
         ("page=1234567890", "page"),
-        ("&".join(["page=1"] * 16), "unknown"),
+        ("&".join(["page=1"] * 21), "unknown"),
     ],
     ids=("five-thousand-digit-value", "ten-digit-number", "nine-pairs"),
 )
@@ -716,7 +1181,10 @@ def test_root_is_authenticated_and_serves_live_page_without_echoing_identity(
 ):
     """Serving the shell without proxy identity or reflecting it weakens deployment."""
     manager = manager_factory(initial=_snapshot())
-    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
+    # The shipped shell is the SPA; `legacy` pins the inline page this test was
+    # originally written against, so the assertion stays about authentication
+    # rather than about which frontend happens to be selected.
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER, "legacy"))
 
     with TestClient(app) as client:
         missing = client.get("/")
@@ -910,8 +1378,14 @@ def test_runtime_directory_allows_absent_default_and_dedicated_private_cache(
     (dedicated / ".dashboard_snapshot.recovery.tmp").write_text(
         "{}", encoding="utf-8"
     )
+    (dedicated / "csat_cache.json").write_text("{}", encoding="utf-8")
+    (dedicated / "outcome_reconciliation_cache.json").write_text(
+        "{}", encoding="utf-8"
+    )
     (dedicated / "dashboard_snapshot.json").chmod(0o600)
     (dedicated / ".dashboard_snapshot.recovery.tmp").chmod(0o600)
+    (dedicated / "csat_cache.json").chmod(0o600)
+    (dedicated / "outcome_reconciliation_cache.json").chmod(0o600)
 
     assert _validated_runtime_directory(default_runtime) == default_runtime
     assert default_runtime.is_dir()
@@ -919,7 +1393,26 @@ def test_runtime_directory_allows_absent_default_and_dedicated_private_cache(
     assert _validated_runtime_directory(dedicated) == dedicated
 
 
-def test_runtime_directory_allows_only_private_dimension_backfill_filename(
+def test_runtime_directory_rejects_permissive_or_linked_csat_cache(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    cache = runtime / "csat_cache.json"
+    cache.write_text("{}", encoding="utf-8")
+    cache.chmod(0o640)
+
+    with pytest.raises(ConfigurationError, match="runtime directory is unsafe"):
+        _validated_runtime_directory(runtime)
+
+    cache.unlink()
+    target = tmp_path / "private-cache.json"
+    target.write_text("{}", encoding="utf-8")
+    target.chmod(0o600)
+    cache.symlink_to(target)
+    with pytest.raises(ConfigurationError, match="runtime directory is unsafe"):
+        _validated_runtime_directory(runtime)
+
+
+def test_runtime_directory_rejects_retired_dimension_backfill_filename(
     tmp_path: Path,
 ):
     runtime = tmp_path / "runtime"
@@ -928,17 +1421,6 @@ def test_runtime_directory_allows_only_private_dimension_backfill_filename(
     backfill.write_text("{}", encoding="utf-8")
     backfill.chmod(0o600)
 
-    assert _validated_runtime_directory(runtime) == runtime
-
-    wrong_name = runtime / "dimension_backfill.json.bak"
-    wrong_name.write_text("{}", encoding="utf-8")
-    wrong_name.chmod(0o600)
-    with pytest.raises(ConfigurationError) as error:
-        _validated_runtime_directory(runtime)
-    assert str(error.value) == "dashboard runtime directory is unsafe"
-
-    wrong_name.unlink()
-    backfill.chmod(0o640)
     with pytest.raises(ConfigurationError) as error:
         _validated_runtime_directory(runtime)
     assert str(error.value) == "dashboard runtime directory is unsafe"
@@ -1120,7 +1602,8 @@ def test_main_composes_fresh_vietnam_time_loader_and_one_worker(
         "weekly_cs_report.web.compute_report", fake_compute_report
     )
     monkeypatch.setattr(
-        "weekly_cs_report.web.project_dashboard", lambda _run: _snapshot()
+        "weekly_cs_report.web.project_dashboard",
+        lambda _run, **_kwargs: _snapshot(),
     )
     monkeypatch.setattr("weekly_cs_report.web.uvicorn.run", fake_uvicorn_run)
     monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
@@ -1146,8 +1629,102 @@ def test_main_composes_fresh_vietnam_time_loader_and_one_worker(
         and getattr(call["as_of"].tzinfo, "key", None) == "Asia/Ho_Chi_Minh"
         for call in report_calls
     )
+    assert all(call.get("refresh_timeout_seconds") == 120.0 for call in report_calls)
+    assert all(call.get("max_trace_pages") == 500 for call in report_calls)
+    assert all(
+        isinstance(call.get("cancel_event"), threading.Event)
+        for call in report_calls
+    )
     assert len(uvicorn_calls) == 1
     assert uvicorn_calls[0]["host"] == "0.0.0.0"
     assert uvicorn_calls[0]["port"] == 8080
     assert uvicorn_calls[0]["workers"] == 1
     assert uvicorn_calls[0]["access_log"] is False
+    assert uvicorn_calls[0]["timeout_graceful_shutdown"] == 45
+
+
+def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch):
+    """Production startup must apply valid non-default refresh controls."""
+    report_calls: list[dict[str, object]] = []
+
+    class FakeLangfuseClient:
+        def __init__(self, *_args):
+            pass
+
+        def close(self):
+            pass
+
+    def fake_compute_report(_client, **kwargs):
+        report_calls.append(kwargs)
+        return object()
+
+    def fake_uvicorn_run(app, **_kwargs):
+        with TestClient(app) as browser:
+            assert browser.get(
+                "/api/dashboard",
+                headers={IDENTITY_HEADER: "authorized-user"},
+            ).status_code == 202
+            assert app.state.snapshot_manager.wait_for_idle(2)
+
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: EnvironmentSettings("pk-test", "sk-test", TARGET_BASE_URL),
+    )
+    monkeypatch.setattr("weekly_cs_report.web.LangfuseClient", FakeLangfuseClient)
+    monkeypatch.setattr("weekly_cs_report.web.compute_report", fake_compute_report)
+    monkeypatch.setattr(
+        "weekly_cs_report.web.project_dashboard",
+        lambda _run, **_kwargs: _snapshot(),
+    )
+    monkeypatch.setattr("weekly_cs_report.web.uvicorn.run", fake_uvicorn_run)
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_IDENTITY_HEADER", IDENTITY_HEADER)
+    monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("DASHBOARD_REFRESH_DEADLINE_SECONDS", "30")
+    monkeypatch.setenv("DASHBOARD_MAX_TRACE_PAGES", "7")
+
+    assert main([]) == 0
+    assert len(report_calls) == 1
+    assert report_calls[0]["refresh_timeout_seconds"] == 30.0
+    assert report_calls[0]["max_trace_pages"] == 7
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS",
+            "29",
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300",
+        ),
+        (
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS",
+            "301",
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300",
+        ),
+        (
+            "DASHBOARD_MAX_TRACE_PAGES",
+            "0",
+            "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500",
+        ),
+        (
+            "DASHBOARD_MAX_TRACE_PAGES",
+            "501",
+            "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500",
+        ),
+    ],
+)
+def test_main_rejects_out_of_range_refresh_controls_before_loading_secrets(
+    monkeypatch, capsys, name: str, value: str, message: str,
+):
+    """Invalid refresh settings must fail startup without reading any credentials."""
+    monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
+    monkeypatch.setenv("DASHBOARD_FRONTEND_MODE", "legacy")
+    monkeypatch.setenv(name, value)
+    monkeypatch.setattr(
+        "weekly_cs_report.web.load_environment",
+        lambda: pytest.fail("startup read credentials after invalid refresh setting"),
+    )
+
+    assert main([]) == 2
+    assert capsys.readouterr().err == f"{message}\n"

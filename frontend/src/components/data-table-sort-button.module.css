@@ -1,0 +1,53 @@
+.button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 44px;
+  margin: calc(var(--space-2) * -1) calc(var(--space-3) * -1);
+  padding: 0 var(--space-3);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.button.end {
+  width: calc(100% + (2 * var(--space-3)));
+  justify-content: flex-end;
+}
+
+.indicator {
+  display: inline-block;
+  min-width: 1em;
+  color: var(--muted);
+  text-align: center;
+}
+
+.indicator::before {
+  content: "↕";
+}
+
+.indicator.active {
+  color: var(--interactive);
+}
+
+.indicator.asc::before {
+  content: "↑";
+}
+
+.indicator.desc::before {
+  content: "↓";
+}
+
+.indicator.unsorted::before {
+  content: "↕";
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .indicator {
+    transition: color 140ms ease;
+  }
+}

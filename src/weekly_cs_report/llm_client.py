@@ -2,20 +2,21 @@ from __future__ import annotations
 
 """PII-gated, no-logging client boundary for reopen-labeling models.
 
-The production client intentionally has no default model or endpoint.  A
-caller must provide gateway-approved values and explicitly approve the PII
-route before any request can leave this process.  Prompt, response, and
-credential values are never logged or included in raised errors.
+The production client requires separate Gemma-label and Hugging Face-embedding
+configuration and explicit PII approval before any request can leave this
+process. Prompt, response, and credential values are never logged or included
+in raised errors.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+import math
 import os
 import time
 from types import TracebackType
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 import httpx
 
@@ -41,12 +42,15 @@ class LLMServiceError(RuntimeError):
         super().__init__("llm api unavailable")
 
 
-_EMBED_PROVIDERS = ("hf", "openai")
+@dataclass(frozen=True)
+class LabelSettings:
+    base_url: str
+    model: str
+    api_key: str
 
 
 @dataclass(frozen=True)
 class EmbedSettings:
-    provider: str
     base_url: str
     model: str
     api_key: str
@@ -54,21 +58,8 @@ class EmbedSettings:
 
 @dataclass(frozen=True)
 class LLMSettings:
-    api_key: str
-    base_url: str
-    label_model: str
-    embed_model: str
-    embed: EmbedSettings | None = None
-
-    def resolved_embed(self) -> EmbedSettings:
-        if self.embed is not None:
-            return self.embed
-        return EmbedSettings(
-            provider="openai",
-            base_url=self.base_url,
-            model=self.embed_model,
-            api_key=self.api_key,
-        )
+    label: LabelSettings
+    embed: EmbedSettings
 
     @classmethod
     def from_environment(
@@ -76,63 +67,102 @@ class LLMSettings:
     ) -> LLMSettings:
         values = os.environ if environment is None else environment
         required = (
-            "OPENAI_API_KEY",
-            "OPENAI_BASE_URL",
-            "OPENAI_LABEL_MODEL",
-            "OPENAI_EMBED_MODEL",
+            "LABEL_API_KEY",
+            "LABEL_BASE_URL",
+            "LABEL_MODEL",
+            "EMBED_BASE_URL",
+            "EMBED_MODEL",
+            "EMBED_API_KEY",
         )
-        configured = {key: values.get(key) for key in required}
-        if any(not isinstance(value, str) or not value.strip() for value in configured.values()):
-            raise LLMConfigurationError()
-        api_key = configured["OPENAI_API_KEY"].strip()  # type: ignore[union-attr]
-        base_url = configured["OPENAI_BASE_URL"].strip()  # type: ignore[union-attr]
-        label_model = configured["OPENAI_LABEL_MODEL"].strip()  # type: ignore[union-attr]
-        embed_model = configured["OPENAI_EMBED_MODEL"].strip()  # type: ignore[union-attr]
-        return cls(
-            api_key=api_key,
-            base_url=base_url,
-            label_model=label_model,
-            embed_model=embed_model,
-            embed=_embed_settings_from_environment(
-                values,
-                fallback=EmbedSettings(
-                    provider="openai",
-                    base_url=base_url,
-                    model=embed_model,
-                    api_key=api_key,
-                ),
+
+        def required_value(key: str) -> str:
+            value = values.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise LLMConfigurationError()
+            return value.strip()
+
+        configured = {key: required_value(key) for key in required}
+        settings = cls(
+            label=LabelSettings(
+                api_key=configured["LABEL_API_KEY"],
+                base_url=configured["LABEL_BASE_URL"],
+                model=configured["LABEL_MODEL"],
+            ),
+            embed=EmbedSettings(
+                base_url=configured["EMBED_BASE_URL"],
+                model=configured["EMBED_MODEL"],
+                api_key=configured["EMBED_API_KEY"],
             ),
         )
-
-
-def _embed_settings_from_environment(
-    values: Mapping[str, str], *, fallback: EmbedSettings
-) -> EmbedSettings:
-    raw_provider = values.get("EMBED_PROVIDER")
-    provider = raw_provider.strip() if isinstance(raw_provider, str) else ""
-    if not provider:
-        provider = "openai"
-    if provider not in _EMBED_PROVIDERS:
-        raise LLMConfigurationError()
-
-    def value_of(key: str) -> str:
-        raw = values.get(key)
-        return raw.strip() if isinstance(raw, str) else ""
-
-    base_url = value_of("EMBED_BASE_URL")
-    model = value_of("EMBED_MODEL")
-    api_key = value_of("EMBED_API_KEY")
-    if provider == "hf":
-        if not (base_url and model and api_key):
+        if not _settings_are_valid(settings):
             raise LLMConfigurationError()
-        return EmbedSettings(
-            provider="hf", base_url=base_url, model=model, api_key=api_key
+        return settings
+
+
+_HF_REPO_ID_CHARACTERS = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-/"
+)
+
+
+def _is_safe_base_url(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(character.isspace() for character in value)
+        or "?" in value
+        or "#" in value
+    ):
+        return False
+    try:
+        parsed = httpx.URL(value)
+    except (TypeError, httpx.InvalidURL):
+        return False
+    return (
+        parsed.is_absolute_url
+        and parsed.scheme == "https"
+        and bool(parsed.host)
+        and "%" not in parsed.host
+        and not parsed.userinfo
+        and not parsed.query
+        and not parsed.fragment
+    )
+
+
+def _is_safe_hf_repo_id(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(character not in _HF_REPO_ID_CHARACTERS for character in value)
+    ):
+        return False
+    segments = value.split("/")
+    return (
+        len(segments) in {1, 2}
+        and all(segment and segment not in {".", ".."} for segment in segments)
+    )
+
+
+def _settings_are_valid(settings: object) -> bool:
+    if (
+        not isinstance(settings, LLMSettings)
+        or not isinstance(settings.label, LabelSettings)
+        or not isinstance(settings.embed, EmbedSettings)
+    ):
+        return False
+    return (
+        _is_safe_base_url(settings.label.base_url)
+        and _is_safe_base_url(settings.embed.base_url)
+        and _is_safe_hf_repo_id(settings.embed.model)
+        and all(
+            isinstance(value, str) and bool(value.strip())
+            for value in (
+                settings.label.api_key,
+                settings.label.model,
+                settings.embed.api_key,
+            )
         )
-    return EmbedSettings(
-        provider="openai",
-        base_url=base_url or fallback.base_url,
-        model=model or fallback.model,
-        api_key=api_key or fallback.api_key,
     )
 
 
@@ -187,6 +217,15 @@ def _token_count(value: object) -> int:
     return 0
 
 
+def _is_text_sequence(value: object) -> bool:
+    return (
+        isinstance(value, Sequence)
+        and not isinstance(value, Mapping)
+        and not isinstance(value, (str, bytes, bytearray))
+        and all(isinstance(item, str) for item in value)
+    )
+
+
 def _usage_from_payload(payload: Mapping[str, object]) -> LLMUsage:
     raw_usage = payload.get("usage")
     usage = raw_usage if isinstance(raw_usage, Mapping) else {}
@@ -209,9 +248,21 @@ def _default_structured_request(
     messages: Sequence[Mapping[str, object]],
     response_schema: Mapping[str, object],
 ) -> Mapping[str, object]:
+    normalized_messages: list[dict[str, object]] = []
+    for message in messages:
+        normalized = dict(message)
+        content = normalized.get("content")
+        if isinstance(content, Mapping):
+            normalized["content"] = json.dumps(
+                content,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        normalized_messages.append(normalized)
     return {
         "model": model,
-        "messages": list(messages),
+        "messages": normalized_messages,
         "response_format": dict(response_schema),
     }
 
@@ -277,7 +328,7 @@ class FakeLLMClient:
         )
 
     def embed(self, texts: Sequence[str]) -> EmbeddingResult:
-        if not all(isinstance(text, str) for text in texts):
+        if not _is_text_sequence(texts):
             raise TypeError("texts must contain only strings")
         vectors = tuple(
             tuple(byte / 255 for byte in sha256(text.encode("utf-8")).digest()[: self._embedding_dimensions])
@@ -290,8 +341,37 @@ class FakeLLMClient:
         )
 
 
-class OpenAICompatibleLLMClient:
-    """Explicitly configured HTTP client for an approved internal gateway."""
+class GemmaHFLLMClient:
+    """PII-gated client for the Gemma label and Hugging Face embed routes."""
+
+    @classmethod
+    def from_environment(
+        cls,
+        environment: Mapping[str, str] | None = None,
+        *,
+        pii_approved: bool,
+        label_transport: httpx.BaseTransport | None = None,
+        embed_transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+        timeout_s: float = 30.0,
+        max_attempts: int = 3,
+        backoff_base_s: float = 0.5,
+    ) -> GemmaHFLLMClient:
+        settings = LLMSettings.from_environment(environment)
+        return cls(
+            settings,
+            structured_endpoint="/chat/completions",
+            embedding_endpoint=(
+                f"/{settings.embed.model}/pipeline/feature-extraction"
+            ),
+            pii_approved=pii_approved,
+            label_transport=label_transport,
+            embed_transport=embed_transport,
+            sleep=sleep,
+            timeout_s=timeout_s,
+            max_attempts=max_attempts,
+            backoff_base_s=backoff_base_s,
+        )
 
     def __init__(
         self,
@@ -300,7 +380,8 @@ class OpenAICompatibleLLMClient:
         structured_endpoint: str,
         embedding_endpoint: str,
         pii_approved: bool,
-        transport: httpx.BaseTransport | None = None,
+        label_transport: httpx.BaseTransport | None = None,
+        embed_transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
         timeout_s: float = 30.0,
         max_attempts: int = 3,
@@ -308,24 +389,11 @@ class OpenAICompatibleLLMClient:
         structured_request_builder: StructuredRequestBuilder = _default_structured_request,
         structured_response_parser: StructuredResponseParser = _default_structured_response,
     ) -> None:
-        if not isinstance(settings, LLMSettings) or not all(
-            isinstance(value, str) and value.strip()
-            for value in (
-                settings.api_key,
-                settings.base_url,
-                settings.label_model,
-                settings.embed_model,
-            )
-        ):
+        if not _settings_are_valid(settings):
             raise LLMConfigurationError()
-        embed_settings = settings.resolved_embed()
-        if embed_settings.provider not in _EMBED_PROVIDERS or not all(
+        if not all(
             isinstance(value, str) and value.strip()
-            for value in (
-                embed_settings.base_url,
-                embed_settings.model,
-                embed_settings.api_key,
-            )
+            for value in (structured_endpoint, embedding_endpoint)
         ):
             raise LLMConfigurationError()
         if not _is_relative_endpoint(structured_endpoint) or not _is_relative_endpoint(
@@ -340,6 +408,11 @@ class OpenAICompatibleLLMClient:
             raise ValueError("max_attempts must be between 1 and 3")
         if backoff_base_s < 0:
             raise ValueError("backoff_base_s must not be negative")
+        if (
+            label_transport is not None
+            and label_transport is embed_transport
+        ):
+            raise ValueError("label and embed transports must be distinct")
 
         self._settings = settings
         self._structured_endpoint = structured_endpoint
@@ -350,33 +423,34 @@ class OpenAICompatibleLLMClient:
         self._backoff_base_s = backoff_base_s
         self._structured_request_builder = structured_request_builder
         self._structured_response_parser = structured_response_parser
-        self._client = httpx.Client(
-            base_url=settings.base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {settings.api_key}"},
+        self._label_client = httpx.Client(
+            base_url=settings.label.base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {settings.label.api_key}"},
             timeout=httpx.Timeout(timeout_s),
             verify=True,
             follow_redirects=False,
-            transport=transport,
+            transport=label_transport,
         )
-        self._embed_settings = embed_settings
-        if embed_settings.provider == "hf":
-            self._embed_client = httpx.Client(
-                base_url=embed_settings.base_url.rstrip("/"),
-                headers={"Authorization": f"Bearer {embed_settings.api_key}"},
-                timeout=httpx.Timeout(timeout_s),
-                verify=True,
-                follow_redirects=False,
-                transport=transport,
-            )
-        else:
-            self._embed_client = self._client
+        self._embed_client = httpx.Client(
+            base_url=settings.embed.base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {settings.embed.api_key}"},
+            timeout=httpx.Timeout(timeout_s),
+            verify=True,
+            follow_redirects=False,
+            transport=embed_transport,
+        )
+        self._closed = False
 
     def close(self) -> None:
-        if self._embed_client is not self._client:
+        if self._closed:
+            return
+        self._closed = True
+        try:
             self._embed_client.close()
-        self._client.close()
+        finally:
+            self._label_client.close()
 
-    def __enter__(self) -> OpenAICompatibleLLMClient:
+    def __enter__(self) -> GemmaHFLLMClient:
         return self
 
     def __exit__(
@@ -393,10 +467,11 @@ class OpenAICompatibleLLMClient:
         messages: Sequence[Mapping[str, object]],
         response_schema: Mapping[str, object],
     ) -> StructuredGeneration:
+        self._require_open()
         self._require_pii_approval()
         try:
             request_payload = self._structured_request_builder(
-                self._settings.label_model, messages, response_schema
+                self._settings.label.model, messages, response_schema
             )
         except Exception:
             raise LLMServiceError() from None
@@ -410,22 +485,16 @@ class OpenAICompatibleLLMClient:
         return StructuredGeneration(value=dict(value), usage=_usage_from_payload(payload))
 
     def embed(self, texts: Sequence[str]) -> EmbeddingResult:
-        """Embed texts through the configured embed route.
+        """Embed texts through the configured Hugging Face route.
 
         HuggingFace does not report token counts, so usage is reported as zeros
-        for that provider rather than guessed.
+        rather than guessed.
         """
+        self._require_open()
         self._require_pii_approval()
-        if not all(isinstance(text, str) for text in texts):
+        if not _is_text_sequence(texts):
             raise TypeError("texts must contain only strings")
-        if self._embed_settings.provider == "hf":
-            return self._embed_via_hf(texts)
-        payload = self._post(
-            self._embedding_endpoint,
-            {"model": self._settings.embed_model, "input": list(texts)},
-        )
-        vectors = _embedding_vectors(payload, expected_count=len(texts))
-        return EmbeddingResult(vectors=vectors, usage=_usage_from_payload(payload))
+        return self._embed_via_hf(texts)
 
     def _embed_via_hf(self, texts: Sequence[str]) -> EmbeddingResult:
         ordered = list(texts)
@@ -438,7 +507,7 @@ class OpenAICompatibleLLMClient:
                 self._embed_client,
                 self._embedding_endpoint,
                 {
-                    "inputs": _hf_prefixed(self._embed_settings.model, batch),
+                    "inputs": _hf_prefixed(self._settings.embed.model, batch),
                     "options": {"wait_for_model": True},
                 },
             )
@@ -454,8 +523,12 @@ class OpenAICompatibleLLMClient:
         if not self._pii_approved:
             raise PIIApprovalRequiredError()
 
+    def _require_open(self) -> None:
+        if self._closed:
+            raise LLMServiceError()
+
     def _post(self, endpoint: str, payload: Mapping[str, object]) -> Mapping[str, object]:
-        decoded = self._post_decoded(self._client, endpoint, payload)
+        decoded = self._post_decoded(self._label_client, endpoint, payload)
         if isinstance(decoded, Mapping):
             return dict(decoded)
         raise LLMServiceError()
@@ -488,35 +561,15 @@ class OpenAICompatibleLLMClient:
 
 
 def _is_relative_endpoint(value: object) -> bool:
-    return (
-        isinstance(value, str)
-        and value.startswith("/")
-        and not value.startswith("//")
-        and "?" not in value
-        and "#" not in value
-    )
-
-
-def _embedding_vectors(
-    payload: Mapping[str, object], *, expected_count: int
-) -> tuple[tuple[float, ...], ...]:
-    data = payload.get("data")
-    if not isinstance(data, list) or len(data) != expected_count:
-        raise LLMServiceError()
-    vectors: list[tuple[float, ...]] = []
-    for item in data:
-        if not isinstance(item, Mapping):
-            raise LLMServiceError()
-        embedding = item.get("embedding")
-        if not isinstance(embedding, list) or not embedding:
-            raise LLMServiceError()
-        if not all(
-            isinstance(value, (int, float)) and not isinstance(value, bool)
-            for value in embedding
-        ):
-            raise LLMServiceError()
-        vectors.append(tuple(float(value) for value in embedding))
-    return tuple(vectors)
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or value.startswith("//")
+        or any(marker in value for marker in ("\\", "%", "?", "#"))
+    ):
+        return False
+    segments = value[1:].split("/")
+    return all(segment and segment not in {".", ".."} for segment in segments)
 
 
 _HF_MAX_BATCH = 64
@@ -529,7 +582,12 @@ def _hf_prefixed(model: str, texts: Sequence[str]) -> list[str]:
 
 
 def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _hf_single_vector(item: object) -> tuple[float, ...]:

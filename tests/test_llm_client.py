@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 import json
 
 import httpx
@@ -8,40 +9,56 @@ import pytest
 from weekly_cs_report.llm_client import (
     EmbedSettings,
     FakeLLMClient,
+    GemmaHFLLMClient,
+    LabelSettings,
     LLMClient,
     LLMConfigurationError,
     LLMSettings,
     LLMServiceError,
-    OpenAICompatibleLLMClient,
     PIIApprovalRequiredError,
 )
 
 
-def _settings() -> LLMSettings:
+def _settings(
+    embed_model: str = "intfloat/multilingual-e5-base",
+    *,
+    label_base_url: str = "https://gemma-gateway.invalid/v1",
+    embed_base_url: str = "https://hf-router.invalid/hf-inference/models",
+) -> LLMSettings:
     return LLMSettings(
-        api_key="test-secret-that-must-not-appear-in-errors",
-        base_url="https://gateway.example.internal",
-        label_model="approved-label-model",
-        embed_model="approved-embed-model",
-    )
-
-
-def _hf_settings(model: str = "intfloat/multilingual-e5-base") -> LLMSettings:
-    return LLMSettings(
-        "key",
-        "https://gateway.invalid/v1",
-        "label",
-        "unused-see-EMBED_MODEL",
-        EmbedSettings(
-            provider="hf",
-            base_url="https://router.invalid/models",
-            model=model,
+        label=LabelSettings(
+            base_url=label_base_url,
+            model="gemma-3-27b",
+            api_key="test-secret-that-must-not-appear-in-errors",
+        ),
+        embed=EmbedSettings(
+            base_url=embed_base_url,
+            model=embed_model,
             api_key="hf-token",
         ),
     )
 
 
 _HF_ENDPOINT = "/intfloat/multilingual-e5-base/pipeline/feature-extraction"
+_ENVIRONMENT = {
+    "LABEL_API_KEY": "gemma-key",
+    "LABEL_BASE_URL": "https://gemma-gateway.invalid/v1",
+    "LABEL_MODEL": "gemma-3-27b",
+    "EMBED_BASE_URL": "https://hf-router.invalid/hf-inference/models",
+    "EMBED_MODEL": "intfloat/multilingual-e5-base",
+    "EMBED_API_KEY": "hf-token",
+}
+
+
+class _MappingSequence(dict, Sequence):
+    pass
+
+
+def _transport_args(handler):
+    return {
+        "label_transport": httpx.MockTransport(handler),
+        "embed_transport": httpx.MockTransport(handler),
+    }
 
 
 def test_fake_client_is_deterministic_and_never_uses_a_network_transport():
@@ -65,117 +82,159 @@ def test_fake_client_is_deterministic_and_never_uses_a_network_transport():
 
 
 @pytest.mark.parametrize(
-    "environment",
-    [
-        {},
-        {
-            "OPENAI_API_KEY": "secret",
-            "OPENAI_BASE_URL": "https://gateway.example.internal",
-            "OPENAI_LABEL_MODEL": "label",
-        },
-    ],
+    "texts",
+    (
+        "abc",
+        b"abc",
+        bytearray(b"abc"),
+        {"text": "actual"},
+        _MappingSequence({"text": "actual"}),
+        iter(("abc",)),
+        ["abc", 1],
+    ),
 )
-def test_llm_settings_missing_required_values_fails_with_fixed_safe_code(environment):
+def test_fake_embed_rejects_invalid_top_level_text_containers(texts):
+    with pytest.raises(TypeError):
+        FakeLLMClient().embed(texts)
+
+
+@pytest.mark.parametrize("missing_key", tuple(_ENVIRONMENT))
+def test_llm_settings_missing_required_values_fails_with_fixed_safe_code(missing_key):
+    environment = {key: value for key, value in _ENVIRONMENT.items() if key != missing_key}
+
     with pytest.raises(LLMConfigurationError) as raised:
         LLMSettings.from_environment(environment)
 
     assert raised.value.code == "llm_configuration_unavailable"
     assert str(raised.value) == "llm configuration unavailable"
-    assert "secret" not in str(raised.value)
+    assert _ENVIRONMENT[missing_key] not in str(raised.value)
 
 
-def test_embed_settings_default_to_the_openai_route_when_provider_is_absent():
-    """Tương thích ngược: cấu hình cũ không có EMBED_* vẫn phải chạy y như trước."""
+@pytest.mark.parametrize("blank_key", tuple(_ENVIRONMENT))
+def test_llm_settings_rejects_blank_active_values(blank_key):
+    environment = {**_ENVIRONMENT, blank_key: " \t "}
+
+    with pytest.raises(LLMConfigurationError):
+        LLMSettings.from_environment(environment)
+
+
+def test_llm_settings_reads_only_the_required_gemma_and_hf_routes():
     settings = LLMSettings.from_environment(
-        {
-            "OPENAI_API_KEY": "key",
-            "OPENAI_BASE_URL": "https://gateway.invalid/v1",
-            "OPENAI_LABEL_MODEL": "label",
-            "OPENAI_EMBED_MODEL": "embed",
-        }
+        {key: f"  {value}  " for key, value in _ENVIRONMENT.items()}
     )
-    embed = settings.resolved_embed()
-    assert embed.provider == "openai"
-    assert embed.base_url == "https://gateway.invalid/v1"
-    assert embed.model == "embed"
-    assert embed.api_key == "key"
 
-
-def test_embed_settings_read_the_hf_route_from_its_own_variables():
-    settings = LLMSettings.from_environment(
-        {
-            "OPENAI_API_KEY": "key",
-            "OPENAI_BASE_URL": "https://gateway.invalid/v1",
-            "OPENAI_LABEL_MODEL": "label",
-            "OPENAI_EMBED_MODEL": "unused-see-EMBED_MODEL",
-            "EMBED_PROVIDER": "hf",
-            "EMBED_BASE_URL": "https://router.invalid/models",
-            "EMBED_MODEL": "intfloat/multilingual-e5-base",
-            "EMBED_API_KEY": "hf-token",
-        }
+    assert settings == LLMSettings(
+        label=LabelSettings(
+            base_url="https://gemma-gateway.invalid/v1",
+            model="gemma-3-27b",
+            api_key="gemma-key",
+        ),
+        embed=EmbedSettings(
+            base_url="https://hf-router.invalid/hf-inference/models",
+            model="intfloat/multilingual-e5-base",
+            api_key="hf-token",
+        ),
     )
-    embed = settings.resolved_embed()
-    assert (embed.provider, embed.base_url, embed.model, embed.api_key) == (
-        "hf",
-        "https://router.invalid/models",
-        "intfloat/multilingual-e5-base",
-        "hf-token",
-    )
-    assert settings.embed_model == "unused-see-EMBED_MODEL", "giữ để không phá kiểm tra 4 biến"
 
 
+@pytest.mark.parametrize("base_url_key", ("LABEL_BASE_URL", "EMBED_BASE_URL"))
 @pytest.mark.parametrize(
-    "overrides",
-    [
-        {"EMBED_PROVIDER": "gemini"},
-        {"EMBED_PROVIDER": "HF"},
-        {"EMBED_PROVIDER": "hf"},
-        {"EMBED_PROVIDER": "hf", "EMBED_BASE_URL": "https://router.invalid/models"},
-        {
-            "EMBED_PROVIDER": "hf",
-            "EMBED_BASE_URL": "https://router.invalid/models",
-            "EMBED_MODEL": "intfloat/multilingual-e5-base",
-        },
-        {
-            "EMBED_PROVIDER": "hf",
-            "EMBED_BASE_URL": "https://router.invalid/models",
-            "EMBED_MODEL": "intfloat/multilingual-e5-base",
-            "EMBED_API_KEY": "   ",
-        },
-    ],
+    "unsafe_base_url",
+    (
+        "http://plaintext.invalid/v1",
+        "ftp://files.invalid/models",
+        "/relative/path",
+        "https:///missing-host",
+        "https://user:password@gateway.invalid/v1",
+        "https://gateway.invalid/v1?debug=true",
+        "https://gateway.invalid/v1#fragment",
+    ),
 )
-def test_embed_settings_reject_unknown_provider_or_incomplete_hf_route(overrides):
-    """Cấu hình nửa vời phải chết lúc đọc, không phải lúc gọi API."""
+def test_environment_rejects_unsafe_label_and_embed_base_urls(
+    base_url_key, unsafe_base_url
+):
     with pytest.raises(LLMConfigurationError):
         LLMSettings.from_environment(
-            {
-                "OPENAI_API_KEY": "key",
-                "OPENAI_BASE_URL": "https://gateway.invalid/v1",
-                "OPENAI_LABEL_MODEL": "label",
-                "OPENAI_EMBED_MODEL": "embed",
-                **overrides,
-            }
+            {**_ENVIRONMENT, base_url_key: unsafe_base_url}
         )
 
 
-def test_blank_embed_provider_falls_back_to_the_openai_route():
-    settings = LLMSettings.from_environment(
-        {
-            "OPENAI_API_KEY": "key",
-            "OPENAI_BASE_URL": "https://gateway.invalid/v1",
-            "OPENAI_LABEL_MODEL": "label",
-            "OPENAI_EMBED_MODEL": "embed",
-            "EMBED_PROVIDER": "",
-        }
-    )
-    assert settings.resolved_embed().provider == "openai"
+@pytest.mark.parametrize(
+    ("label_base_url", "embed_base_url"),
+    (
+        (
+            "http://gemma-gateway.invalid/v1",
+            "https://hf-router.invalid/hf-inference/models",
+        ),
+        (
+            "https://gemma-gateway.invalid/v1",
+            "https://user@hf-router.invalid/hf-inference/models",
+        ),
+    ),
+)
+def test_direct_client_rejects_unsafe_label_and_embed_base_urls(
+    label_base_url, embed_base_url
+):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid configuration must fail before HTTP")
+
+    with pytest.raises(LLMConfigurationError):
+        GemmaHFLLMClient(
+            _settings(
+                label_base_url=label_base_url,
+                embed_base_url=embed_base_url,
+            ),
+            structured_endpoint="/chat/completions",
+            embedding_endpoint=_HF_ENDPOINT,
+            pii_approved=True,
+            **_transport_args(handler),
+        )
 
 
-def test_llm_settings_stays_constructible_with_four_positional_fields():
-    """Test cũ dựng LLMSettings 4 tham số; field mới phải có default."""
-    settings = LLMSettings("key", "https://gateway.invalid/v1", "label", "embed")
-    assert settings.embed is None
-    assert settings.resolved_embed().provider == "openai"
+@pytest.mark.parametrize(
+    "unsafe_model",
+    (
+        "",
+        "/intfloat/multilingual-e5-base",
+        "intfloat/multilingual-e5-base/",
+        "intfloat//multilingual-e5-base",
+        "intfloat/./multilingual-e5-base",
+        "intfloat/../multilingual-e5-base",
+        r"intfloat\multilingual-e5-base",
+        "intfloat/multilingual-e5-base?revision=main",
+        "intfloat/multilingual-e5-base#fragment",
+        "intfloat/%2e%2e/multilingual-e5-base",
+        "intfloat/%2Fmultilingual-e5-base",
+        "organization/model/extra-path",
+    ),
+)
+def test_environment_rejects_unsafe_hf_repo_ids(unsafe_model):
+    with pytest.raises(LLMConfigurationError):
+        LLMSettings.from_environment(
+            {**_ENVIRONMENT, "EMBED_MODEL": unsafe_model}
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_model",
+    (
+        "../multilingual-e5-base",
+        "intfloat/%2e%2e/secret",
+        r"intfloat\multilingual-e5-base",
+    ),
+)
+def test_direct_client_rejects_unsafe_hf_repo_ids(unsafe_model):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid configuration must fail before HTTP")
+
+    with pytest.raises(LLMConfigurationError):
+        GemmaHFLLMClient(
+            _settings(unsafe_model),
+            structured_endpoint="/chat/completions",
+            embedding_endpoint=_HF_ENDPOINT,
+            pii_approved=True,
+            **_transport_args(handler),
+        )
 
 
 def test_post_wrapper_still_rejects_a_non_object_json_body():
@@ -186,12 +245,12 @@ def test_post_wrapper_still_rejects_a_non_object_json_body():
         calls.append(1)
         return httpx.Response(200, json=[1, 2, 3])
 
-    client = OpenAICompatibleLLMClient(
+    client = GemmaHFLLMClient(
         _settings(),
         structured_endpoint="/chat/completions",
-        embedding_endpoint="/embeddings",
+        embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
         sleep=lambda _seconds: None,
     )
     with client:
@@ -210,12 +269,12 @@ def test_hf_embed_route_uses_its_own_host_and_token_not_the_label_credentials():
         seen.append((str(request.url), request.headers.get("authorization")))
         return httpx.Response(200, json=[[0.1, 0.2], [0.3, 0.4]])
 
-    client = OpenAICompatibleLLMClient(
-        _hf_settings(),
+    client = GemmaHFLLMClient(
+        _settings(),
         structured_endpoint="/chat/completions",
         embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
         sleep=lambda _seconds: None,
     )
     with client:
@@ -223,29 +282,78 @@ def test_hf_embed_route_uses_its_own_host_and_token_not_the_label_credentials():
 
     assert len(seen) == 1
     url, authorization = seen[0]
-    assert url.startswith("https://router.invalid/models/")
-    assert "gateway.invalid" not in url
+    assert url.startswith("https://hf-router.invalid/hf-inference/models/")
+    assert "gemma-gateway.invalid" not in url
     assert authorization == "Bearer hf-token", "không được dùng key của label route"
     assert result.vectors == ((0.1, 0.2), (0.3, 0.4))
 
 
-def test_openai_embed_route_reuses_the_single_client_and_closes_once():
-    """provider openai không được tạo client thứ hai — đóng hai lần là bug."""
-
+def test_label_and_embed_clients_are_distinct_and_close_is_idempotent():
     def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": [{"embedding": [0.5]}]})
+        return httpx.Response(200, json=[[0.5]])
 
-    client = OpenAICompatibleLLMClient(
+    client = GemmaHFLLMClient(
         _settings(),
         structured_endpoint="/chat/completions",
-        embedding_endpoint="/embeddings",
+        embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
         sleep=lambda _seconds: None,
     )
-    with client:
-        assert client.embed(["x"]).vectors == ((0.5,),)
-    client.close()  # gọi lần hai phải không nổ
+
+    assert client._label_client is not client._embed_client
+    client.close()
+    client.close()
+
+
+def test_client_rejects_a_shared_non_default_transport():
+    shared_transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json={})
+    )
+
+    with pytest.raises(ValueError) as raised:
+        GemmaHFLLMClient(
+            _settings(),
+            structured_endpoint="/chat/completions",
+            embedding_endpoint=_HF_ENDPOINT,
+            pii_approved=True,
+            label_transport=shared_transport,
+            embed_transport=shared_transport,
+        )
+
+    assert str(raised.value) == "label and embed transports must be distinct"
+
+
+@pytest.mark.parametrize("pii_approved", (True, False))
+def test_calls_after_close_fail_with_the_safe_service_error_without_http(
+    pii_approved
+):
+    calls: list[int] = []
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return httpx.Response(200, json={})
+
+    client = GemmaHFLLMClient(
+        _settings(),
+        structured_endpoint="/chat/completions",
+        embedding_endpoint=_HF_ENDPOINT,
+        pii_approved=pii_approved,
+        **_transport_args(handler),
+    )
+    client.close()
+
+    with pytest.raises(LLMServiceError) as structured_error:
+        client.generate_structured(
+            messages=({"role": "user", "content": "đã mask"},),
+            response_schema={"type": "object"},
+        )
+    with pytest.raises(LLMServiceError) as embed_error:
+        client.embed(("đã mask",))
+
+    assert str(structured_error.value) == "llm api unavailable"
+    assert str(embed_error.value) == "llm api unavailable"
+    assert calls == []
 
 
 def test_hf_embed_route_still_blocked_without_pii_approval():
@@ -254,12 +362,12 @@ def test_hf_embed_route_still_blocked_without_pii_approval():
     def handler(_request: httpx.Request) -> httpx.Response:
         raise AssertionError("không được gọi mạng khi chưa duyệt PII")
 
-    client = OpenAICompatibleLLMClient(
-        _hf_settings(),
+    client = GemmaHFLLMClient(
+        _settings(),
         structured_endpoint="/chat/completions",
         embedding_endpoint=_HF_ENDPOINT,
         pii_approved=False,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
         sleep=lambda _seconds: None,
     )
     with client:
@@ -267,33 +375,144 @@ def test_hf_embed_route_still_blocked_without_pii_approval():
             client.embed(["x"])
 
 
+@pytest.mark.parametrize(
+    "texts",
+    (
+        "abc",
+        b"abc",
+        bytearray(b"abc"),
+        {"text": "actual"},
+        _MappingSequence({"text": "actual"}),
+        iter(("abc",)),
+        ["abc", 1],
+    ),
+)
+def test_hf_embed_rejects_invalid_top_level_text_containers_without_http(texts):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid input must fail before HTTP")
+
+    with GemmaHFLLMClient(
+        _settings(),
+        structured_endpoint="/chat/completions",
+        embedding_endpoint=_HF_ENDPOINT,
+        pii_approved=True,
+        **_transport_args(handler),
+    ) as client:
+        with pytest.raises(TypeError):
+            client.embed(texts)
+
+
 def test_client_rejects_an_incomplete_embed_settings_at_construction():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[[0.1]])
+
     with pytest.raises(LLMConfigurationError):
-        OpenAICompatibleLLMClient(
+        GemmaHFLLMClient(
             LLMSettings(
-                "key",
-                "https://gateway.invalid/v1",
-                "label",
-                "embed",
-                EmbedSettings("hf", "https://router.invalid/models", "model", "  "),
+                label=LabelSettings(
+                    base_url="https://gemma-gateway.invalid/v1",
+                    model="gemma-3-27b",
+                    api_key="label-key",
+                ),
+                embed=EmbedSettings(
+                    base_url="https://hf-router.invalid/hf-inference/models",
+                    model="intfloat/multilingual-e5-base",
+                    api_key="  ",
+                ),
             ),
             structured_endpoint="/chat/completions",
             embedding_endpoint=_HF_ENDPOINT,
             pii_approved=True,
-            transport=httpx.MockTransport(
-                lambda _request: httpx.Response(200, json=[[0.1]])
-            ),
+            **_transport_args(handler),
             sleep=lambda _seconds: None,
         )
 
 
-def _hf_client(handler, *, settings: LLMSettings | None = None) -> OpenAICompatibleLLMClient:
-    return OpenAICompatibleLLMClient(
-        settings or _hf_settings(),
+@pytest.mark.parametrize(
+    ("structured_endpoint", "embedding_endpoint"),
+    [
+        ("https://unexpected.invalid/chat", _HF_ENDPOINT),
+        ("/chat/completions", "https://unexpected.invalid/embed"),
+        ("/../chat/completions", _HF_ENDPOINT),
+        ("/chat/completions", "/model/%2e%2e/embed"),
+    ],
+)
+def test_client_rejects_non_relative_endpoints(
+    structured_endpoint, embedding_endpoint
+):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={})
+
+    with pytest.raises(LLMConfigurationError):
+        GemmaHFLLMClient(
+            _settings(),
+            structured_endpoint=structured_endpoint,
+            embedding_endpoint=embedding_endpoint,
+            pii_approved=True,
+            **_transport_args(handler),
+        )
+
+
+def test_factory_wires_gemma_and_hf_routes_with_separate_credentials():
+    seen: list[tuple[str, str | None, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append((str(request.url), request.headers.get("authorization"), body))
+        if request.url.host == "gemma-gateway.invalid":
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": json.dumps({"label": "other"})}}
+                    ],
+                    "usage": {
+                        "prompt_tokens": 2,
+                        "completion_tokens": 1,
+                        "total_tokens": 3,
+                    },
+                },
+            )
+        return httpx.Response(200, json=[[0.1, 0.2]])
+
+    with GemmaHFLLMClient.from_environment(
+        _ENVIRONMENT,
+        pii_approved=True,
+        **_transport_args(handler),
+        sleep=lambda _seconds: None,
+    ) as client:
+        generated = client.generate_structured(
+            messages=({"role": "user", "content": "đã mask"},),
+            response_schema={"type": "object"},
+        )
+        embedded = client.embed(("đã mask",))
+
+    assert generated.value == {"label": "other"}
+    assert embedded.vectors == ((0.1, 0.2),)
+    assert len(seen) == 2
+    label_url, label_authorization, label_body = seen[0]
+    embed_url, embed_authorization, embed_body = seen[1]
+    assert label_url == "https://gemma-gateway.invalid/v1/chat/completions"
+    assert label_authorization == "Bearer gemma-key"
+    assert label_body["model"] == "gemma-3-27b"
+    assert embed_url == (
+        "https://hf-router.invalid/hf-inference/models/"
+        "intfloat/multilingual-e5-base/pipeline/feature-extraction"
+    )
+    assert embed_authorization == "Bearer hf-token"
+    assert embed_body == {
+        "inputs": ["query: đã mask"],
+        "options": {"wait_for_model": True},
+    }
+
+
+def _hf_client(handler, *, settings: LLMSettings | None = None) -> GemmaHFLLMClient:
+    return GemmaHFLLMClient(
+        settings or _settings(),
         structured_endpoint="/chat/completions",
         embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
         sleep=lambda _seconds: None,
     )
 
@@ -352,6 +571,37 @@ def test_hf_rejects_malformed_response_shapes(body, count):
             client.embed([f"text {index}" for index in range(count)])
 
 
+@pytest.mark.parametrize(
+    "non_finite_literal",
+    ("NaN", "Infinity", "-Infinity"),
+    ids=("nan", "positive-infinity", "negative-infinity"),
+)
+@pytest.mark.parametrize(
+    "token_level",
+    (False, True),
+    ids=("direct-vector", "token-level-vector"),
+)
+def test_hf_rejects_non_finite_direct_and_token_vector_values(
+    non_finite_literal, token_level
+):
+    body = (
+        f"[[[{non_finite_literal}, 0.2], [0.3, 0.4]]]"
+        if token_level
+        else f"[[{non_finite_literal}, 0.2]]"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=body.encode("ascii"),
+            headers={"Content-Type": "application/json"},
+        )
+
+    with _hf_client(handler) as client:
+        with pytest.raises(LLMServiceError):
+            client.embed(["text"])
+
+
 def test_hf_batches_at_sixty_four_and_preserves_input_order():
     """130 input -> 64 + 64 + 2, ghép theo đúng thứ tự đầu vào."""
     sizes: list[int] = []
@@ -407,7 +657,7 @@ def test_non_e5_model_gets_no_prefix():
         bodies.append(json.loads(request.content))
         return httpx.Response(200, json=[[0.1]])
 
-    with _hf_client(handler, settings=_hf_settings("BAAI/bge-m3")) as client:
+    with _hf_client(handler, settings=_settings("BAAI/bge-m3")) as client:
         client.embed(["một"])
     assert bodies[0]["inputs"] == ["một"]
 
@@ -431,12 +681,12 @@ def test_real_client_cannot_call_network_without_explicit_pii_approval():
         calls += 1
         return httpx.Response(200, json={"data": []})
 
-    with OpenAICompatibleLLMClient(
+    with GemmaHFLLMClient(
         _settings(),
         structured_endpoint="/structured",
-        embedding_endpoint="/embeddings",
+        embedding_endpoint=_HF_ENDPOINT,
         pii_approved=False,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
     ) as client:
         with pytest.raises(PIIApprovalRequiredError) as raised:
             client.embed(("đã mask",))
@@ -446,6 +696,60 @@ def test_real_client_cannot_call_network_without_explicit_pii_approval():
     assert calls == 0
 
 
+def test_structured_request_serializes_mapping_content_without_mutating_messages():
+    seen_payloads: list[dict] = []
+    mapping_content = {
+        "z": "đã mask",
+        "a": {"second": 2, "first": "một"},
+    }
+    messages = [
+        {"role": "system", "content": "giữ nguyên"},
+        {"role": "user", "content": mapping_content, "name": "masked-user"},
+    ]
+
+    def label_handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": json.dumps({"label": "other"})}}
+                ]
+            },
+        )
+
+    def embed_handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("structured generation must not use the embed route")
+
+    with GemmaHFLLMClient(
+        _settings(),
+        structured_endpoint="/chat/completions",
+        embedding_endpoint=_HF_ENDPOINT,
+        pii_approved=True,
+        label_transport=httpx.MockTransport(label_handler),
+        embed_transport=httpx.MockTransport(embed_handler),
+    ) as client:
+        client.generate_structured(
+            messages=messages,
+            response_schema={"type": "object"},
+        )
+
+    assert seen_payloads[0]["messages"] == [
+        {"role": "system", "content": "giữ nguyên"},
+        {
+            "role": "user",
+            "content": '{"a":{"first":"một","second":2},"z":"đã mask"}',
+            "name": "masked-user",
+        },
+    ]
+    assert messages[0]["content"] == "giữ nguyên"
+    assert messages[1]["content"] is mapping_content
+    assert mapping_content == {
+        "z": "đã mask",
+        "a": {"second": 2, "first": "một"},
+    }
+
+
 def test_real_structured_client_retries_boundedly_uses_timeout_and_reports_token_usage():
     attempts = 0
     sleeps: list[float] = []
@@ -453,11 +757,11 @@ def test_real_structured_client_retries_boundedly_uses_timeout_and_reports_token
     def handler(request: httpx.Request) -> httpx.Response:
         nonlocal attempts
         attempts += 1
-        assert request.url.path == "/structured"
+        assert request.url.path == "/v1/structured"
         assert request.extensions["timeout"]["connect"] == 2.5
         assert request.headers["authorization"] == "Bearer test-secret-that-must-not-appear-in-errors"
         assert json.loads(request.content) == {
-            "model": "approved-label-model",
+            "model": "gemma-3-27b",
             "messages": [{"role": "user", "content": "đã mask"}],
             "response_format": {"type": "json_schema", "json_schema": {"name": "label"}},
         }
@@ -471,16 +775,16 @@ def test_real_structured_client_retries_boundedly_uses_timeout_and_reports_token
             },
         )
 
-    with OpenAICompatibleLLMClient(
+    with GemmaHFLLMClient(
         _settings(),
         structured_endpoint="/structured",
-        embedding_endpoint="/embeddings",
+        embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
         timeout_s=2.5,
         max_attempts=2,
         backoff_base_s=0.25,
         sleep=sleeps.append,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
     ) as client:
         generated = client.generate_structured(
             messages=({"role": "user", "content": "đã mask"},),
@@ -495,47 +799,17 @@ def test_real_structured_client_retries_boundedly_uses_timeout_and_reports_token
     assert generated.usage.total_tokens == 10
 
 
-def test_real_embedding_client_uses_configured_model_and_parses_usage():
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/embeddings"
-        assert json.loads(request.content) == {
-            "model": "approved-embed-model",
-            "input": ["masked one", "masked two"],
-        }
-        return httpx.Response(
-            200,
-            json={
-                "data": [{"embedding": [0.1, 0.2]}, {"embedding": [0.3, 0.4]}],
-                "usage": {"prompt_tokens": 5, "total_tokens": 5},
-            },
-        )
-
-    with OpenAICompatibleLLMClient(
-        _settings(),
-        structured_endpoint="/structured",
-        embedding_endpoint="/embeddings",
-        pii_approved=True,
-        transport=httpx.MockTransport(handler),
-    ) as client:
-        embeddings = client.embed(("masked one", "masked two"))
-
-    assert embeddings.vectors == ((0.1, 0.2), (0.3, 0.4))
-    assert embeddings.usage.input_tokens == 5
-    assert embeddings.usage.output_tokens == 0
-    assert embeddings.usage.total_tokens == 5
-
-
 def test_real_client_failure_has_no_secret_or_payload_in_the_error():
     def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="response text must never be exposed")
 
-    with OpenAICompatibleLLMClient(
+    with GemmaHFLLMClient(
         _settings(),
         structured_endpoint="/structured",
-        embedding_endpoint="/embeddings",
+        embedding_endpoint=_HF_ENDPOINT,
         pii_approved=True,
         max_attempts=1,
-        transport=httpx.MockTransport(handler),
+        **_transport_args(handler),
     ) as client:
         with pytest.raises(LLMServiceError) as raised:
             client.generate_structured(

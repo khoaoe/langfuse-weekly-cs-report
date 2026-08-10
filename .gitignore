@@ -10,5 +10,19 @@ build/
 *.egg-info/
 artifacts/
 runtime/
+config/freshdesk_agents.v1.json
+config/freshdesk_reconciliation_agents.v1.json
+.private-quarantine/
 .superpowers/
 .DS_Store
+ZLP_AgentBase_Skills/
+logs/
+
+# Frontend build output; produced by `npm run build` and by the Docker build stage.
+src/weekly_cs_report/static/spa/
+node_modules/
+test-results/
+playwright-report/
+/frontend/coverage/
+/coverage.json
+/coverage-*.json

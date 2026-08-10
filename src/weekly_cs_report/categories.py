@@ -15,6 +15,7 @@ from .models import CategoryResult, TicketDimensions, TraceRecord, TransferCateg
 class Taxonomy:
     version: str
     transfer_text: str
+    transfer_texts: tuple[str, ...]
     business_precedence: tuple[str, ...]
     business_meta_keys: frozenset[str]
     business_patterns: dict[str, tuple[str, ...]]
@@ -115,9 +116,13 @@ def _load_v1_taxonomy(root: Mapping[str, object]) -> Taxonomy:
     _string_list(guardrail.get("value_fields"), "guardrail.value_fields")
     _string_list(guardrail.get("allowed_values"), "guardrail.allowed_values")
 
+    transfer_text = _required_string(
+        transfer.get("semantic_text"), "transfer.semantic_text"
+    )
     return Taxonomy(
         version="v1",
-        transfer_text=_required_string(transfer.get("semantic_text"), "transfer.semantic_text"),
+        transfer_text=transfer_text,
+        transfer_texts=(transfer_text,),
         business_precedence=precedence,
         business_meta_keys=frozenset(meta_keys),
         business_patterns=patterns,
@@ -160,7 +165,12 @@ def _load_v2_taxonomy(root: Mapping[str, object]) -> Taxonomy:
         "root",
     )
     transfer = _required_mapping(root.get("transfer"), "transfer")
-    _exact_keys(transfer, {"semantic_text"}, "transfer")
+    _exact_keys(transfer, {"semantic_texts"}, "transfer")
+    transfer_texts = _string_list(
+        transfer.get("semantic_texts"), "transfer.semantic_texts"
+    )
+    if len(set(transfer_texts)) != len(transfer_texts):
+        raise ValueError("taxonomy transfer.semantic_texts must not contain duplicates")
 
     dimensions = _required_mapping(root.get("dimensions"), "dimensions")
     _exact_keys(dimensions, set(_DIMENSION_PATHS), "dimensions")
@@ -286,7 +296,8 @@ def _load_v2_taxonomy(root: Mapping[str, object]) -> Taxonomy:
 
     return Taxonomy(
         version="v2",
-        transfer_text=_required_string(transfer.get("semantic_text"), "transfer.semantic_text"),
+        transfer_text=transfer_texts[0],
+        transfer_texts=transfer_texts,
         business_precedence=(),
         business_meta_keys=frozenset(),
         business_patterns={},
@@ -367,6 +378,12 @@ def _contains_vietnam_phone(value: str) -> bool:
 def _parse_tpe(
     meta: Mapping[str, object], taxonomy: Taxonomy
 ) -> tuple[str | None, str | None, str | None]:
+    """Keep only the legacy meta code/status used by private backfill tools.
+
+    ``meta["Step result"]`` is a pipe-encoded support field, not the
+    transaction-processing-engine ``stepresult`` contract. It must never be
+    interpreted as a dashboard Step result.
+    """
     raw_value = meta.get(taxonomy.tpe_code_meta_key)
     if not isinstance(raw_value, str):
         return None, None, None
@@ -382,42 +399,7 @@ def _parse_tpe(
     status_raw = code_and_status[1].strip() if len(code_and_status) == 2 else None
     if not status_raw:
         status_raw = None
-
-    raw_step = meta.get(taxonomy.tpe_step_meta_key)
-    step: str | None = None
-    if isinstance(raw_step, str):
-        parts = raw_step.split("|")
-        pipe_index = taxonomy.tpe_step_pipe_index
-        candidate_index = pipe_index if pipe_index is not None and len(parts) > pipe_index else 0
-        candidate = parts[candidate_index].strip()
-        if _NUMERIC_CODE.fullmatch(candidate) is not None:
-            step = candidate
-    return code, status_raw, step
-
-
-def _v2_tpe_mapping(
-    code: str, step: str | None, taxonomy: Taxonomy
-) -> Mapping[str, object] | None:
-    exact = next(
-        (
-            mapping
-            for mapping in taxonomy.tpe_mappings
-            if mapping["code"] == code
-            and step is not None
-            and step in mapping["steps"]
-        ),
-        None,
-    )
-    if exact is not None:
-        return exact
-    return next(
-        (
-            mapping
-            for mapping in taxonomy.tpe_mappings
-            if mapping["code"] == code and not mapping["steps"]
-        ),
-        None,
-    )
+    return code, status_raw, None
 
 
 def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDimensions:
@@ -430,12 +412,7 @@ def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDi
     entry_point = _dimension_value(meta, "entry_point", taxonomy)
     payment_channel = _dimension_value(meta, "payment_channel", taxonomy)
 
-    tpe_code, tpe_status_raw, tpe_step = _parse_tpe(meta, taxonomy)
-    mapping = (
-        _v2_tpe_mapping(tpe_code, tpe_step, taxonomy)
-        if tpe_code is not None
-        else None
-    )
+    tpe_code, tpe_status_raw, _legacy_step = _parse_tpe(meta, taxonomy)
     return TicketDimensions(
         issue_category=issue_category,
         app=app,
@@ -445,19 +422,14 @@ def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDi
         payment_channel=payment_channel,
         tpe_code=tpe_code,
         tpe_status_raw=tpe_status_raw,
-        tpe_status_canonical=(
-            str(mapping["status"]) if mapping is not None else None
-        ),
-        tpe_step=tpe_step,
-        tpe_case=(
-            int(mapping["case"])
-            if mapping is not None and isinstance(mapping["case"], int)
-            else None
-        ),
+        tpe_status_canonical=None,
+        tpe_step=None,
+        tpe_case=None,
         skill=None,
         intent=None,
         guardrail_rule=None,
         escalation_guard_blocked=False,
+        tpe_signals=(),
     )
 
 

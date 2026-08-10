@@ -1,7 +1,50 @@
 {
   "version": "v1",
-  "created_at": "2026-07-30",
-  "labels": [],
+  "created_at": "2026-07-31",
+  "labels": [
+    {
+      "key": "fraud_or_unauthorized",
+      "display": "Nghi gian lận hoặc giao dịch không được phép",
+      "definition": "Lý do hành động khiến khách quay lại là cần bảo vệ tài khoản hoặc tra soát vì nghi giao dịch/hoạt động không do mình thực hiện hay cho phép, tài khoản bị chiếm dụng, mạo danh, lừa đảo hoặc gian lận; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 1/7 và thắng mọi nhãn còn lại, kể cả khi khách đồng thời nhắc hoàn tiền, người nhận chưa nhận, giao dịch lỗi hoặc hỏi trạng thái. Chỉ chuyển sang wrong_transfer_recovery khi khách nói rõ chính mình đã chủ động thực hiện nhưng chuyển nhầm; nếu việc tự thực hiện không rõ, giữ nhãn này.",
+      "po_action": "Risk/Fraud Operations: chuẩn hóa luồng khóa bảo vệ, tiếp nhận tranh chấp giao dịch không được phép, chuyển tuyến fraud và SLA phản hồi an toàn."
+    },
+    {
+      "key": "wrong_transfer_recovery",
+      "display": "Chuyển nhầm, cần hỗ trợ thu hồi",
+      "definition": "Lý do hành động khiến khách quay lại là cần chặn, thu hồi hoặc xử lý hậu quả của giao dịch mà khách nói rõ chính mình đã chủ động thực hiện nhưng chuyển/chi nhầm đích, người nhận, thông tin nhận, số tiền hoặc giao dịch; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 2/7: chỉ gán khi cả việc tự thực hiện và nhầm lẫn đều rõ; nếu không rõ khách có tự thực hiện, gán fraud_or_unauthorized. Kể cả khi khách gọi mục tiêu là hoàn hoặc đảo tiền, vẫn gán nhãn này nếu nhu cầu hiện tại là phục hồi từ chuyển nhầm. Không gán cho giao dịch đúng ý nhưng người nhận chưa được ghi có, giao dịch lỗi chung, hoặc câu hỏi trạng thái chung. Khi cả thu hồi chuyển nhầm và blocker tài khoản/xác minh đều là nhu cầu hiện tại, nhãn này vẫn đứng trước; chỉ gán account_or_verification_blocked khi chuyển nhầm là bối cảnh còn nhu cầu khiến khách quay lại chỉ là tháo gỡ blocker gần nhất về tài khoản/xác minh.",
+      "po_action": "Transfer Recovery Operations: xây playbook chặn/thu hồi chuyển nhầm, điều kiện hỗ trợ, trạng thái hồ sơ và SLA phối hợp bên nhận hoặc ngân hàng."
+    },
+    {
+      "key": "account_or_verification_blocked",
+      "display": "Bị chặn ở tài khoản hoặc xác minh",
+      "definition": "Lý do hành động khiến khách quay lại là blocker gần nhất về truy cập/mở khóa tài khoản, xác minh danh tính/KYC, OTP, sinh trắc học, thiết bị, hạn chế bảo mật cấp tài khoản hoặc hồ sơ xác minh còn thiếu; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 3/7 và gán khi việc tháo gỡ blocker đó là bước kế tiếp khách thực sự cần, thay vì xử lý gian lận hoặc thu hồi một giao dịch tự chuyển nhầm thuộc hai ưu tiên cao hơn. Không gán cho từ chối do rủi ro/chính sách gắn riêng với một giao dịch mà không cần hành động tài khoản/xác minh; trường hợp đó vào transaction_failed_or_debited. Bất định chính sách hoặc trạng thái chung không có blocker cụ thể vào status_or_next_step_unclear.",
+      "po_action": "Identity & Account Access: sửa luồng KYC/xác thực/mở khóa, hiển thị yêu cầu còn thiếu và thiết kế đường chuyển CS khi khách bị kẹt."
+    },
+    {
+      "key": "refund_or_reversal_pending",
+      "display": "Đang chờ hoàn tiền hoặc đảo giao dịch",
+      "definition": "Lý do hành động khiến khách quay lại là vòng đời khoản tiền dự kiến quay về người gửi sau hoàn/đảo giao dịch: khoản hoàn đã được hứa hẹn, chấp thuận, khởi tạo hoặc đến hạn nhưng chưa về, hoặc khách cần biết tiến độ/thời hạn hoàn; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 4/7 sau fraud_or_unauthorized, wrong_transfer_recovery và blocker tài khoản/xác minh gần nhất. Khi nhu cầu hiện tại là khoản hoàn/đảo dự kiến, gán nhãn này trước recipient_not_credited và transaction_failed_or_debited, kể cả giao dịch ban đầu lỗi hoặc đã trừ tiền. Không gán khi tiền được gửi đúng ý và vấn đề là đích nhận chưa được ghi có mà không có vòng đời hoàn/đảo.",
+      "po_action": "Refund & Reversal Operations: quản lý SLA hoàn/đảo theo trạng thái, nguồn tiền về, cập nhật end-to-end và cảnh báo khoản hoàn quá hạn."
+    },
+    {
+      "key": "recipient_not_credited",
+      "display": "Người nhận chưa được ghi có",
+      "definition": "Lý do hành động khiến khách quay lại là đích nhận dự kiến—người thụ hưởng, tài khoản, ví, ngân hàng, đối tác hoặc merchant—chưa được ghi có/ghi nhận, trong khi phía gửi đã bị trừ tiền hoặc giao dịch được hiểu/báo là đã gửi, thành công hay hoàn tất; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 5/7, sau các nhãn fraud, tự chuyển nhầm, blocker tài khoản/xác minh và hoàn/đảo. Nếu nhu cầu là tiền dự kiến quay lại người gửi, refund_or_reversal_pending luôn thắng. Khi thiếu ghi có ở đích nhận đã được hỗ trợ bởi nội dung, gán nhãn này trước transaction_failed_or_debited; không gán cho giao dịch gửi nhầm đích.",
+      "po_action": "Beneficiary Settlement / Partner Operations: đối soát đường ghi có phía nhận, trạng thái ngân hàng/đối tác, bằng chứng tra soát và SLA xử lý non-credit."
+    },
+    {
+      "key": "transaction_failed_or_debited",
+      "display": "Giao dịch lỗi hoặc trừ tiền bất thường",
+      "definition": "Lý do hành động khiến khách quay lại là một giao dịch cụ thể lỗi, thất bại, bị từ chối, treo/đang xử lý bất thường, bị trừ tiền hoặc sai lệch số dư/kết quả mà không đủ điều kiện cho năm nhóm ưu tiên cao hơn; đây không phải kết luận nguyên nhân gốc. Đây là ưu tiên 6/7. Bao gồm từ chối do rủi ro/chính sách gắn với chính giao dịch đó nhưng không mô tả hay suy đoán quy tắc nội bộ. Không gán khi có dấu hiệu gian lận/không được phép; tự chuyển nhầm rõ ràng; blocker gần nhất là tài khoản/xác minh; nhu cầu hiện tại là hoàn/đảo; hoặc phía gửi đã bị trừ hay giao dịch được hiểu là hoàn tất nhưng đích nhận chưa được ghi có. Bất định chính sách/trạng thái chung không gắn với một giao dịch lỗi hoặc bị từ chối cụ thể vào status_or_next_step_unclear.",
+      "po_action": "Payments Reliability: giảm lỗi/từ chối/treo và debit inconsistency, chuẩn hóa trạng thái giao dịch cùng đường tự phục hồi hoặc chuyển CS."
+    },
+    {
+      "key": "status_or_next_step_unclear",
+      "display": "Chưa rõ trạng thái hoặc bước tiếp theo",
+      "definition": "Lý do hành động khiến khách quay lại chỉ là cần biết trạng thái, tiến độ, thời gian chờ, bước tiếp theo, điều kiện/chính sách chung hoặc hướng xử lý chưa rõ; đây không phải kết luận nguyên nhân gốc. Đây là fallback hẹp ở ưu tiên 7/7 và chỉ gán khi không có đủ tín hiệu cho bất kỳ nhóm cụ thể nào: fraud/không được phép, tự chuyển nhầm cần thu hồi, blocker tài khoản/xác minh, hoàn/đảo đang chờ, đích nhận chưa được ghi có, hoặc giao dịch lỗi/trừ tiền bất thường. Một câu hỏi trạng thái đi kèm nhóm cụ thể vẫn phải vào nhóm cụ thể. Từ chối rủi ro/chính sách gắn với một giao dịch cụ thể vào transaction_failed_or_debited; bất định chính sách/rủi ro chung không có sự kiện cụ thể ở lại nhãn này. Nếu nội dung không đủ để xác lập ngay cả nhu cầu trạng thái/bước tiếp theo hoặc nằm ngoài bảy nhóm, dùng other và kèm trích dẫn.",
+      "po_action": "CS Journey / Product Operations: chuẩn hóa trạng thái, SLA, hướng dẫn bước tiếp theo và điều kiện escalation cho các trường hợp chung chưa có luồng cụ thể."
+    }
+  ],
   "abstain_label": "other",
   "requires_quote": [
     "other"

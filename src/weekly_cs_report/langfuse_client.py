@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import time
 import threading
 from collections.abc import Callable, Iterator, Sequence
@@ -8,7 +7,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import Any
-from urllib.parse import quote
 
 import httpx
 
@@ -37,40 +35,23 @@ class ReadOnlyOperationError(RuntimeError):
         super().__init__("Langfuse client permits read-only reporting")
 
 
-class IngestionPartialFailure(LangfuseAPIError):
-    def __init__(
-        self,
-        *,
-        requested_ids: tuple[str, ...],
-        success_ids: tuple[str, ...],
-        error_ids: tuple[str, ...],
-        status_code: int,
-    ) -> None:
-        self.requested_ids = requested_ids
-        self.success_ids = success_ids
-        self.error_ids = error_ids
-        self.status_code = status_code
-        RuntimeError.__init__(
-            self,
-            "status="
-            f"{status_code} requested_ids={requested_ids!r} "
-            f"success_ids={success_ids!r} error_ids={error_ids!r}",
+class LangfuseTracePageLimitExceeded(LangfuseAPIError):
+    def __init__(self) -> None:
+        super().__init__(
+            "GET",
+            "/api/public/traces",
+            "page_limit_exceeded",
         )
 
 
-class ScoreReadbackTimeout(LangfuseAPIError):
-    def __init__(self, score_id: str) -> None:
-        self.score_id = score_id
-        self.status_code = "timeout"
-        RuntimeError.__init__(self, f"score_id={score_id} status=timeout")
+class LangfuseDeadlineExceeded(LangfuseAPIError):
+    def __init__(self, method: str, path: str) -> None:
+        super().__init__(method, path, "deadline_exceeded")
 
 
-class _DeadlineExceeded(RuntimeError):
-    pass
-
-
-class _RequestCancelled(RuntimeError):
-    pass
+class LangfuseRequestCancelled(LangfuseAPIError):
+    def __init__(self, method: str, path: str) -> None:
+        super().__init__(method, path, "cancelled")
 
 
 class LangfuseClient:
@@ -125,12 +106,23 @@ class LangfuseClient:
         self,
         from_timestamp: datetime,
         to_timestamp: datetime,
+        *,
+        deadline: float | None = None,
+        cancel_event: threading.Event | None = None,
+        max_pages: int = 500,
     ) -> Iterator[dict]:
+        if (
+            not isinstance(max_pages, int)
+            or isinstance(max_pages, bool)
+            or not 1 <= max_pages <= 500
+        ):
+            raise ValueError("max_pages must be an integer between 1 and 500")
         from_utc = _serialize_utc(from_timestamp, "from_timestamp")
         to_utc = _serialize_utc(to_timestamp, "to_timestamp")
         page_number = 1
 
         while True:
+            _raise_if_cancelled(cancel_event, "GET", "/api/public/traces")
             params = {
                 "page": page_number,
                 "limit": 100,
@@ -144,11 +136,16 @@ class LangfuseClient:
                 "/api/public/traces",
                 params=params,
                 expected_status=200,
+                deadline=deadline,
+                cancel_event=cancel_event,
             )
             data, total_pages = self._parse_page(
                 response, "GET", "/api/public/traces"
             )
+            if total_pages > max_pages:
+                raise LangfuseTracePageLimitExceeded
             yield from data
+            _raise_if_cancelled(cancel_event, "GET", "/api/public/traces")
             if page_number >= total_pages:
                 return
             page_number += 1
@@ -188,7 +185,11 @@ class LangfuseClient:
         to_utc = _serialize_utc(to_start_time, "to_start_time")
         page_number = 1
         while True:
-            _raise_if_cancelled(cancel_event)
+            _raise_if_cancelled(
+                cancel_event,
+                "GET",
+                "/api/public/observations",
+            )
             response = self._request(
                 "GET",
                 "/api/public/observations",
@@ -207,7 +208,11 @@ class LangfuseClient:
                 response, "GET", "/api/public/observations"
             )
             yield from data
-            _raise_if_cancelled(cancel_event)
+            _raise_if_cancelled(
+                cancel_event,
+                "GET",
+                "/api/public/observations",
+            )
             if page_number >= total_pages:
                 return
             page_number += 1
@@ -217,19 +222,6 @@ class LangfuseClient:
 
     def get_score(self, score_id: str) -> dict:
         raise ReadOnlyOperationError
-
-    def _get_score(self, score_id: str, *, deadline: float | None = None) -> dict:
-        path = f"/api/public/v2/scores/{_score_id_segment(score_id)}"
-        response = self._request(
-            "GET",
-            path,
-            expected_status=200,
-            deadline=deadline,
-        )
-        payload = self._parse_object(response, "GET", path)
-        if not isinstance(payload.get("id"), str) or not payload["id"]:
-            raise LangfuseAPIError("GET", path, response.status_code)
-        return payload
 
     def wait_for_score(
         self,
@@ -258,34 +250,46 @@ class LangfuseClient:
         }:
             raise ReadOnlyOperationError
         for attempt in range(self._max_attempts):
-            _raise_if_cancelled(cancel_event)
+            _raise_if_cancelled(cancel_event, method, path)
             request_kwargs = dict(kwargs)
             if deadline is not None:
                 remaining = deadline - self._monotonic()
                 if remaining <= 0:
-                    raise _DeadlineExceeded
+                    raise LangfuseDeadlineExceeded(method, path)
                 request_kwargs["timeout"] = httpx.Timeout(min(30.0, remaining))
             try:
                 response = self._client.request(method, path, **request_kwargs)
             except httpx.TransportError:
-                _raise_if_cancelled(cancel_event)
+                _raise_if_cancelled(cancel_event, method, path)
                 if deadline is not None and self._monotonic() >= deadline:
-                    raise _DeadlineExceeded from None
+                    raise LangfuseDeadlineExceeded(method, path) from None
                 if attempt + 1 == self._max_attempts:
                     raise LangfuseAPIError(method, path, "transport_error") from None
-                self._sleep_before_retry(attempt, deadline, cancel_event)
+                self._sleep_before_retry(
+                    attempt,
+                    deadline,
+                    cancel_event,
+                    method,
+                    path,
+                )
                 continue
 
             if deadline is not None and self._monotonic() >= deadline:
-                raise _DeadlineExceeded
-            _raise_if_cancelled(cancel_event)
+                raise LangfuseDeadlineExceeded(method, path)
+            _raise_if_cancelled(cancel_event, method, path)
             if response.status_code == expected_status:
                 return response
             if (
                 response.status_code == 429
                 or 500 <= response.status_code < 600
             ) and attempt + 1 < self._max_attempts:
-                self._sleep_before_retry(attempt, deadline, cancel_event)
+                self._sleep_before_retry(
+                    attempt,
+                    deadline,
+                    cancel_event,
+                    method,
+                    path,
+                )
                 continue
             raise LangfuseAPIError(method, path, response.status_code)
 
@@ -296,18 +300,20 @@ class LangfuseClient:
         attempt: int,
         deadline: float | None,
         cancel_event: threading.Event | None,
+        method: str,
+        path: str,
     ) -> None:
-        _raise_if_cancelled(cancel_event)
+        _raise_if_cancelled(cancel_event, method, path)
         delay = self._backoff_base_s * (2**attempt)
         if deadline is not None:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
-                raise _DeadlineExceeded
+                raise LangfuseDeadlineExceeded(method, path)
             delay = min(delay, remaining)
         self._sleep(delay)
-        _raise_if_cancelled(cancel_event)
+        _raise_if_cancelled(cancel_event, method, path)
         if deadline is not None and self._monotonic() >= deadline:
-            raise _DeadlineExceeded
+            raise LangfuseDeadlineExceeded(method, path)
 
     @staticmethod
     def _parse_object(
@@ -353,38 +359,10 @@ def _serialize_utc(value: datetime, field_name: str) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
-    if cancel_event is not None and cancel_event.is_set():
-        raise _RequestCancelled
-
-
-def _score_id_segment(score_id: str) -> str:
-    if not isinstance(score_id, str) or not score_id:
-        raise ValueError("score_id must be a non-empty string")
-    return quote(score_id, safe="")
-
-
-def _event_id(event: dict) -> str:
-    if not isinstance(event, dict):
-        raise ValueError("every event must be an object with a non-empty string id")
-    event_id = event.get("id")
-    if not isinstance(event_id, str) or not event_id:
-        raise ValueError("every event must be an object with a non-empty string id")
-    return event_id
-
-
-def _result_ids(
-    results: list[Any],
+def _raise_if_cancelled(
+    cancel_event: threading.Event | None,
     method: str,
     path: str,
-    status_code: int,
-) -> tuple[str, ...]:
-    ids: list[str] = []
-    for result in results:
-        if not isinstance(result, dict):
-            raise LangfuseAPIError(method, path, status_code)
-        event_id = result.get("id")
-        if not isinstance(event_id, str) or not event_id:
-            raise LangfuseAPIError(method, path, status_code)
-        ids.append(event_id)
-    return tuple(ids)
+) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise LangfuseRequestCancelled(method, path)

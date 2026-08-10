@@ -9,7 +9,25 @@ import json
 import pytest
 
 from tests.fixtures.traces import TRANSFER_HTML, TRANSFER_TEXT, trace
-from weekly_cs_report.dashboard_schema import DashboardSnapshot, TicketRow, project_dashboard, ticket_page
+from weekly_cs_report.dashboard_schema import (
+    DashboardSnapshot,
+    TicketRow,
+    _safe_string,
+    _ticket_sort_value,
+    project_dashboard,
+    ticket_page,
+)
+from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
+from weekly_cs_report.csat_cache import (
+    CSATCache,
+    CSATCacheStats,
+    CachedCSATResponse,
+)
+from weekly_cs_report.reconciliation_cache import (
+    ReconciliationCache,
+    ReconciliationRecord,
+)
+from weekly_cs_report.models import TransferTrigger
 from weekly_cs_report.report import compute_report
 
 
@@ -23,7 +41,7 @@ class FakeClient:
         self.traces = traces
         self.observation_calls: list[str] = []
 
-    def iter_traces(self, _from: datetime, _to: datetime):
+    def iter_traces(self, _from: datetime, _to: datetime, **_controls):
         yield from self.traces
 
     def list_observations(self, trace_id: str) -> list[dict]:
@@ -52,13 +70,63 @@ def _snapshot() -> DashboardSnapshot:
     # Saturday Vietnam: only mon_sun includes this row.
     weekend = _meta(trace("weekend", "145666", 3, "2026-07-24T18:00:00Z", "AI reply"))
     transfer = _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML))
-    return project_dashboard(_run([monday, weekend, transfer]))
+    run = _run([monday, weekend, transfer])
+    sessions = tuple(
+        replace(
+            session,
+            dimensions=replace(
+                session.dimensions,
+                tpe_signals=(("-365", "-1013"),),
+            ),
+        )
+        for session in run.result.sessions
+    )
+    return project_dashboard(
+        replace(run, result=replace(run.result, sessions=sessions))
+    )
 
 
-def test_v3_has_exact_top_level_contract_and_22_ticket_allowlist():
+def _same_period_snapshot() -> DashboardSnapshot:
+    return project_dashboard(
+        _run(
+            [
+                _meta(
+                    trace(
+                        "baseline-a",
+                        "145701",
+                        0,
+                        "2026-07-14T02:00:00Z",
+                        "AI reply",
+                    )
+                ),
+                _meta(
+                    trace(
+                        "baseline-b",
+                        "145702",
+                        0,
+                        "2026-07-21T02:00:00Z",
+                        TRANSFER_HTML,
+                    )
+                ),
+                _meta(
+                    trace(
+                        "current",
+                        "145703",
+                        0,
+                        "2026-07-28T02:00:00Z",
+                        "AI reply",
+                    )
+                ),
+            ]
+        )
+    )
+
+
+def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
+    assert snapshot.storage_dict()["schema_version"] == 20
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -66,13 +134,563 @@ def test_v3_has_exact_top_level_contract_and_22_ticket_allowlist():
     assert dashboard["source"]["observations_fetched"] == 0
     assert dashboard["enrichment_status"] == "partial"
     assert set(asdict(snapshot.tickets[0])) == {
-        "ticket_id", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
+        "ticket_id", "opened_at", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
         "ai_first", "transferred", "reopen_lifetime", "reopen_within_7d",
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
-        "guardrail_rule", "escalation_guard_blocked", "data_quality",
+        "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
+        "data_quality",
+    }
+    assert {
+        ticket.ticket_id: getattr(ticket, "opened_at", None)
+        for ticket in snapshot.tickets
+    } == {
+        "145665": "2026-07-20T02:00:00Z",
+        "145666": "2026-07-24T18:00:00Z",
+        "145667": "2026-07-22T02:00:00Z",
     }
     assert "mô tả tuyệt đối" not in json.dumps(snapshot.storage_dict(), ensure_ascii=False)
+
+
+def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields():
+    snapshot = _snapshot()
+    record = EntryCoverageRecord(
+        ticket_id="7043723",
+        opened_at="2026-07-20T02:00:00Z",
+        cohort_week="2026-07-20",
+        status="not_observed_invoked",
+        human_replied=True,
+    )
+    value = snapshot.storage_dict()
+    value["entry_coverage_tickets"] = [asdict(record)]
+
+    restored = DashboardSnapshot.from_storage_dict(value)
+    assert restored.entry_coverage_tickets == (record,)
+
+    value["schema_version"] = 16
+    with pytest.raises(ValueError, match="unsupported dashboard storage"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value["schema_version"] = 20
+    value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
+    with pytest.raises(ValueError, match="unsupported or missing fields"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_same_period_storage_is_per_view_and_rejects_top_level_placement():
+    value = _same_period_snapshot().storage_dict()
+    same_period = value["dashboard"]["views"]["mon_sun"]["same_period"]
+
+    assert same_period["current"]["cohort_week"] == "2026-07-27"
+    assert same_period["current"] == same_period["by_week"]["2026-07-27"]
+    assert set(same_period["by_week"]) == set(
+        value["dashboard"]["views"]["mon_sun"]["by_week"]
+    )
+    value["dashboard"]["same_period"] = same_period
+    with pytest.raises(ValueError, match="unsupported or missing fields"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def _csat_v11_snapshot(
+    reconciliation_cache: ReconciliationCache | None = None,
+) -> DashboardSnapshot:
+    raw_sessions = [
+        _meta(trace("ai-negative", "145665", 0, "2026-07-21T02:00:00Z", "AI reply")),
+        _meta(trace("ai-neutral", "145666", 0, "2026-07-22T02:00:00Z", "AI reply")),
+        _meta(
+            trace(
+                "direct-positive",
+                "145667",
+                0,
+                "2026-07-23T02:00:00Z",
+                TRANSFER_HTML,
+            )
+        ),
+        _meta(trace("unrated", "145668", 0, "2026-07-24T02:00:00Z", "AI reply")),
+        _meta(trace("unfetched", "145669", 0, "2026-07-14T02:00:00Z", "AI reply")),
+        _meta(trace("weekend", "145670", 0, "2026-07-24T18:00:00Z", "AI reply")),
+    ]
+    run = _run(raw_sessions)
+    dimensions = {
+        "145665": {
+            "issue_category": "Chuyển tiền",
+            "skill": "interbank-fund-transfer",
+            "skill_count": 1,
+            "skill_set": ("interbank-fund-transfer",),
+        },
+        "145666": {
+            "issue_category": "",
+            "skill": None,
+            "skill_count": 2,
+            "skill_set": ("topup", "withdraw"),
+        },
+        "145667": {
+            "issue_category": "Rút tiền",
+            "skill": "withdraw",
+            "skill_count": 1,
+            "skill_set": ("withdraw",),
+        },
+    }
+    sessions = []
+    for session in run.result.sessions:
+        overrides = dimensions.get(session.session_id, {})
+        outcome = "direct_cs" if session.session_id == "145667" else "ai_end_to_end"
+        sessions.append(
+            replace(
+                session,
+                outcome=outcome,
+                ai_first=outcome != "direct_cs",
+                transferred=outcome == "direct_cs",
+                dimensions=replace(session.dimensions, **overrides),
+            )
+        )
+    cache = CSATCache(
+        fetched_weeks={"2026-07-20": "2026-08-02T01:00:00Z"},
+        fetch_stats=CSATCacheStats(6, 6, 0, 0),
+        responses=(
+            CachedCSATResponse(
+                response_key=f"sha256:{'a' * 64}",
+                ticket_id="145665",
+                survey_id=43000076179,
+                responded_at="2026-07-21T01:00:00Z",
+                rating_raw=103,
+                satisfaction_bucket="positive",
+                comment_present=True,
+                comment_redacted="Nhanh và rõ ràng",
+            ),
+            CachedCSATResponse(
+                response_key=f"sha256:{'b' * 64}",
+                ticket_id="145665",
+                survey_id=43000076179,
+                responded_at="2026-07-22T01:00:00Z",
+                rating_raw=-103,
+                satisfaction_bucket="negative",
+                comment_present=True,
+                comment_redacted="Chưa giải quyết được",
+            ),
+            CachedCSATResponse(
+                response_key=f"sha256:{'c' * 64}",
+                ticket_id="145666",
+                survey_id=43000076179,
+                responded_at="2026-07-23T01:00:00Z",
+                rating_raw=103,
+                satisfaction_bucket="positive",
+                comment_present=True,
+                comment_redacted="Đã hỗ trợ",
+            ),
+            CachedCSATResponse(
+                response_key=f"sha256:{'d' * 64}",
+                ticket_id="145666",
+                survey_id=43000076179,
+                responded_at="2026-07-23T01:00:00Z",
+                rating_raw=100,
+                satisfaction_bucket="neutral",
+                comment_present=False,
+                comment_redacted=None,
+            ),
+            CachedCSATResponse(
+                response_key=f"sha256:{'e' * 64}",
+                ticket_id="145667",
+                survey_id=43000076179,
+                responded_at="2026-07-24T01:00:00Z",
+                rating_raw=103,
+                satisfaction_bucket="positive",
+                comment_present=True,
+                comment_redacted="Rất hài lòng",
+            ),
+            CachedCSATResponse(
+                response_key=f"sha256:{'f' * 64}",
+                ticket_id="145670",
+                survey_id=43000076179,
+                responded_at="2026-07-25T03:00:00Z",
+                rating_raw=103,
+                satisfaction_bucket="positive",
+                comment_present=False,
+                comment_redacted=None,
+            ),
+        ),
+    )
+    return project_dashboard(
+        replace(run, result=replace(run.result, sessions=tuple(sessions))),
+        csat_cache=cache,
+        reconciliation_cache=reconciliation_cache,
+    )
+
+
+def _reconciliation_cache() -> ReconciliationCache:
+    return ReconciliationCache(
+        fetched_weeks={"2026-07-20": "2026-08-03T01:00:00Z"},
+        records=(
+            ReconciliationRecord("145665", "2026-07-20", True),
+            ReconciliationRecord("145666", "2026-07-20", False),
+            ReconciliationRecord("145668", "2026-07-20", None),
+            ReconciliationRecord("145670", "2026-07-20", True),
+        ),
+    )
+
+
+def test_v12_projects_reconciliation_per_view_without_rewriting_langfuse_outcome():
+    snapshot = _csat_v11_snapshot(_reconciliation_cache())
+    dashboard = snapshot.dashboard_dict()
+
+    mon_fri = dashboard["views"]["mon_fri"]["outcome_reconciliation"]
+    mon_sun = dashboard["views"]["mon_sun"]["outcome_reconciliation"]
+    assert mon_fri["fetched_at"] == "2026-08-03T01:00:00Z"
+    assert mon_fri["by_week"]["2026-07-20"] == {
+        "langfuse_ai_end_to_end": 3,
+        "checked_ticket_count": 2,
+        "human_replied_after_ai": 1,
+        "unresolved_ticket_count": 1,
+        "mismatch_rate": 0.5,
+    }
+    assert mon_sun["by_week"]["2026-07-20"] == {
+        "langfuse_ai_end_to_end": 4,
+        "checked_ticket_count": 3,
+        "human_replied_after_ai": 2,
+        "unresolved_ticket_count": 1,
+        "mismatch_rate": pytest.approx(2 / 3),
+    }
+    assert dashboard["views"]["mon_fri"]["outcomes"]["ai_end_to_end"] == 4
+
+
+def test_v12_reconciliation_denominator_excludes_unfetchable_session_ids():
+    safe = _meta(
+        trace(
+            "safe-trace",
+            "145665",
+            0,
+            "2026-07-21T02:00:00Z",
+            "AI reply",
+        )
+    )
+    unsafe = _meta(
+        trace(
+            "unsafe-trace",
+            "8490123456",
+            0,
+            "2026-07-21T03:00:00Z",
+            "AI reply",
+        )
+    )
+    cache = ReconciliationCache(
+        fetched_weeks={"2026-07-20": "2026-08-03T01:00:00Z"},
+        records=(ReconciliationRecord("145665", "2026-07-20", False),),
+    )
+
+    dashboard = project_dashboard(
+        _run([safe, unsafe]),
+        reconciliation_cache=cache,
+    ).dashboard_dict()
+    row = dashboard["views"]["mon_sun"]["outcome_reconciliation"]["by_week"][
+        "2026-07-20"
+    ]
+
+    # The Langfuse outcome remains unchanged, while the Freshdesk denominator
+    # contains only identifiers the reconciliation job is allowed to fetch.
+    assert dashboard["views"]["mon_sun"]["outcomes"]["ai_end_to_end"] == 2
+    assert row == {
+        "langfuse_ai_end_to_end": 1,
+        "checked_ticket_count": 1,
+        "human_replied_after_ai": 0,
+        "unresolved_ticket_count": 0,
+        "mismatch_rate": 0.0,
+    }
+
+
+def test_v12_reconciliation_is_null_when_private_cache_is_unavailable():
+    dashboard = _csat_v11_snapshot().dashboard_dict()
+
+    assert dashboard["views"]["mon_fri"]["outcome_reconciliation"] is None
+    assert dashboard["views"]["mon_sun"]["outcome_reconciliation"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda row: row.__setitem__("checked_ticket_count", 99),
+            "reconciliation",
+        ),
+        (
+            lambda row: row.__setitem__("mismatch_rate", None),
+            "reconciliation",
+        ),
+        (
+            lambda row: row.__setitem__("agent_id", 42),
+            "unsupported or missing fields",
+        ),
+    ],
+)
+def test_v12_rejects_invalid_reconciliation_rollups(mutate, message):
+    value = _csat_v11_snapshot(_reconciliation_cache()).storage_dict()
+    row = value["dashboard"]["views"]["mon_fri"]["outcome_reconciliation"][
+        "by_week"
+    ]["2026-07-20"]
+    mutate(row)
+
+    with pytest.raises(ValueError, match=message):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_csat_v11_projects_latest_ticket_rating_outcomes_dimensions_and_feedback():
+    snapshot = _csat_v11_snapshot()
+    dashboard = snapshot.dashboard_dict()
+
+    mon_sun = dashboard["views"]["mon_sun"]["csat"]
+    mon_fri = dashboard["views"]["mon_fri"]["csat"]
+    assert mon_sun is not None
+    assert mon_fri is not None
+    week = mon_fri["by_week"]["2026-07-20"]
+    assert week["response_count"] == 5
+    assert week["ticket_count"] == 3
+    assert week["ticket_count"] == (
+        week["positive"] + week["neutral"] + week["negative"]
+    )
+    assert sum(row["ticket_count"] for row in week["by_outcome"].values()) == 3
+    assert week["by_outcome"]["ai_end_to_end"] == {
+        "ticket_count": 2,
+        "positive": 0,
+        "neutral": 1,
+        "negative": 1,
+    }
+    assert week["response_by_outcome"]["ai_end_to_end"] == {
+        "ticket_count": 4,
+        "positive": 2,
+        "neutral": 1,
+        "negative": 1,
+    }
+    assert week["response_by_outcome"]["direct_cs"] == {
+        "ticket_count": 1,
+        "positive": 1,
+        "neutral": 0,
+        "negative": 0,
+    }
+    assert next(
+        row
+        for row in week["response_by_dimension"]["skill"]
+        if row["value"] == "interbank-fund-transfer"
+    )["ticket_count"] == 2
+    assert sum(row["ticket_count"] for row in week["by_dimension"]["skill"]) == 3
+    assert sum(
+        row["ticket_count"] for row in week["by_dimension"]["issue_category"]
+    ) == 3
+    assert next(
+        row
+        for row in week["by_dimension"]["skill"]
+        if row["value"] == "Nhiều skill"
+    )["ticket_count"] == 1
+    assert [
+        (
+            item["ticket_id"],
+            item["response_number"],
+            item["response_total"],
+            item["is_latest_for_ticket"],
+            item["outcome"],
+            item["skill"],
+            item["issue_category"],
+        )
+        for item in week["feedback_entries"]
+    ] == [
+        ("145665", 1, 2, False, "ai_end_to_end", "interbank-fund-transfer", "Chuyển tiền"),
+        ("145665", 2, 2, True, "ai_end_to_end", "interbank-fund-transfer", "Chuyển tiền"),
+        ("145666", 1, 2, False, "ai_end_to_end", "Nhiều skill", "Không xác định"),
+        ("145667", 1, 1, True, "direct_cs", "withdraw", "Rút tiền"),
+    ]
+    assert mon_sun["by_week"]["2026-07-20"]["ticket_count"] == 4
+
+    rows = {row.ticket_id: row for row in snapshot.tickets}
+    assert rows["145665"].csat_satisfaction == "negative"
+    assert rows["145666"].csat_satisfaction == "neutral"
+    assert rows["145666"].skill == "Nhiều skill"
+    assert rows["145667"].csat_satisfaction == "positive"
+    assert rows["145668"].csat_satisfaction == "unrated"
+    assert rows["145669"].csat_satisfaction is None
+    assert ticket_page(snapshot, skill="Nhiều skill")["items"] == [
+        asdict(rows["145666"])
+    ]
+    assert ticket_page(snapshot, skill="Chưa ghi nhận")["total"] == 3
+    assert ticket_page(snapshot, csat_satisfaction="negative")["total"] == 1
+    assert ticket_page(snapshot, csat_satisfaction="unrated")["total"] == 1
+    serialized = json.dumps(dashboard)
+    for forbidden in ("agent_id", "agent_name", "survey_id", "rating_raw", "response_key", "body_text"):
+        assert forbidden not in serialized
+
+
+def test_missing_csat_cache_projects_explicit_null_in_both_views():
+    dashboard = _snapshot().dashboard_dict()
+
+    assert dashboard["views"]["mon_sun"]["csat"] is None
+    assert dashboard["views"]["mon_fri"]["csat"] is None
+
+
+def test_safe_dashboard_label_allows_a_dotted_product_name():
+    assert _safe_string("19 - TIX.VN", "segments.app label") == "19 - TIX.VN"
+
+
+@pytest.mark.parametrize(
+    "unsafe_text",
+    [
+        "email private@example.test",
+        "Xem example.test/help?token=private",
+        "Xem vídụ.vn/help?token=private",
+        "Xem 192.168.1.1/help?token=private",
+        "Xem [2001:db8::1]/help?token=private",
+        "Xem 2001:db8::1/help?token=private",
+        "Xem zalo://open/ticket/12345",
+        "Xem zalo:open/ticket/12345",
+    ],
+)
+def test_csat_payload_rejects_unredacted_comment_text(unsafe_text: str):
+    value = _csat_v11_snapshot().storage_dict()
+    entry = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
+        "2026-07-20"
+    ]["feedback_entries"][0]
+    entry["text"] = unsafe_text
+
+    with pytest.raises(ValueError, match="unsafe"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda week: week.__setitem__("ticket_count", 999), "ticket count"),
+        (
+            lambda week: week["by_outcome"]["ai_end_to_end"].__setitem__(
+                "positive", 999
+            ),
+            "outcome",
+        ),
+        (
+            lambda week: week["feedback_entries"][0].__setitem__(
+                "response_number", 0
+            ),
+            "response number",
+        ),
+        (
+            lambda week: week["by_dimension"]["skill"][0].__setitem__(
+                "ticket_count", 999
+            ),
+            "dimension",
+        ),
+        (
+            lambda week: week["feedback_entries"][0].__setitem__("agent_id", 42),
+            "unsupported or missing fields",
+        ),
+    ],
+)
+def test_csat_v11_rejects_nonreconciling_or_extra_fields(mutate, message):
+    value = _csat_v11_snapshot().storage_dict()
+    week = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
+        "2026-07-20"
+    ]
+    mutate(week)
+
+    with pytest.raises(ValueError, match=message):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+@pytest.mark.parametrize(
+    "private_field",
+    ["survey_id", "rating_raw", "comment_present", "response_key"],
+)
+def test_csat_feedback_rejects_private_cache_fields(private_field: str):
+    value = _csat_v11_snapshot().storage_dict()
+    entry = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
+        "2026-07-20"
+    ]["feedback_entries"][0]
+    entry[private_field] = "private"
+
+    with pytest.raises(ValueError, match="unsupported or missing fields"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_csat_satisfaction_is_required_and_strict_in_v11_storage():
+    value = _csat_v11_snapshot().storage_dict()
+    value["tickets"][0]["csat_satisfaction"] = "unknown"
+    with pytest.raises(ValueError, match="csat_satisfaction"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _csat_v11_snapshot().storage_dict()
+    del value["tickets"][0]["csat_satisfaction"]
+    with pytest.raises(ValueError, match="unsupported or missing fields"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_v14_snapshot_is_rejected_after_v15_storage_bump():
+    value = _csat_v11_snapshot().storage_dict()
+    value["schema_version"] = 14
+    with pytest.raises(ValueError, match="unsupported dashboard storage schema_version"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_v15_rejects_noncanonical_ticket_opened_at():
+    value = _snapshot().storage_dict()
+    value["tickets"][0]["opened_at"] = "2026-07-20T09:00:00+07:00"
+
+    with pytest.raises(ValueError, match="opened_at.*UTC ISO"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_csat_payload_rejects_noncanonical_utc_timestamp():
+    value = _csat_v11_snapshot().storage_dict()
+    value["dashboard"]["views"]["mon_sun"]["csat"]["fetched_at"] = (
+        "2026-08-02 01:00:00Z"
+    )
+
+    with pytest.raises(ValueError, match="UTC ISO"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_same_period_rejects_current_row_drift_from_by_week():
+    value = _same_period_snapshot().storage_dict()
+    current = value["dashboard"]["views"]["mon_sun"]["same_period"]["current"]
+    current["total_tickets"] = 2
+    current["ai_first_count"] = 1
+    current["ai_first_rate"] = 0.5
+
+    with pytest.raises(ValueError, match="current"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_same_period_rejects_more_than_four_baseline_weeks():
+    value = _same_period_snapshot().storage_dict()
+    value["dashboard"]["views"]["mon_sun"]["same_period"]["baseline"][
+        "weeks_used"
+    ] = 5
+
+    with pytest.raises(ValueError, match="weeks_used"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_same_period_rejects_current_week_that_is_not_running():
+    value = _same_period_snapshot().storage_dict()
+    view = value["dashboard"]["views"]["mon_sun"]
+    current_week = view["same_period"]["current"]["cohort_week"]
+    current = next(
+        row for row in view["weekly"] if row["cohort_week"] == current_week
+    )
+    current["cohort_status"] = "complete"
+
+    with pytest.raises(ValueError, match="running"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_same_period_rejects_cutoff_weekday_drift_and_unknown_week():
+    value = _same_period_snapshot().storage_dict()
+    same_period = value["dashboard"]["views"]["mon_sun"]["same_period"]
+    same_period["cutoff_weekday"] = 7
+    with pytest.raises(ValueError, match="cutoff weekday"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _same_period_snapshot().storage_dict()
+    same_period = value["dashboard"]["views"]["mon_sun"]["same_period"]
+    same_period["by_week"]["2026-06-29"] = {
+        **same_period["current"],
+        "cohort_week": "2026-06-29",
+    }
+    with pytest.raises(ValueError, match="outside view.by_week"):
+        DashboardSnapshot.from_storage_dict(value)
 
 
 def test_v3_dual_views_are_closed_and_mon_fri_excludes_only_weekend_starts():
@@ -89,17 +707,20 @@ def test_v3_dual_views_are_closed_and_mon_fri_excludes_only_weekend_starts():
         assert view["totals"]["transfer_total"] == view["outcomes"]["ai_then_cs"] + view["outcomes"]["direct_cs"]
         assert view["rule_gt4"]["gt4_turn_total"] == view["rule_gt4"]["gt4_turn_with_cs"] + view["rule_gt4"]["gt4_turn_without_cs"]
         assert sum(row["total_tickets"] for row in view["weekly"]) == view["totals"]["eligible_ticket_count"]
+        assert "same_period" in view
         assert set(view["by_week"]) == {
             row["cohort_week"] for row in view["weekly"]
         }
         assert set(view["segments"]) == {"issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point"}
-        for buckets in view["segments"].values():
-            assert "Không xác định" in buckets
+        for dimension, buckets in view["segments"].items():
+            expected_label = "Chưa ghi nhận" if dimension == "skill" else "Không xác định"
+            assert expected_label in buckets
             assert sum(bucket["total"] for bucket in buckets.values()) == view["totals"]["eligible_ticket_count"]
         for row in view["weekly"]:
             weekly_detail = view["by_week"][row["cohort_week"]]
-            for buckets in weekly_detail["segments"].values():
-                assert "Không xác định" in buckets
+            for dimension, buckets in weekly_detail["segments"].items():
+                expected_label = "Chưa ghi nhận" if dimension == "skill" else "Không xác định"
+                assert expected_label in buckets
                 assert sum(bucket["total"] for bucket in buckets.values()) == row["total_tickets"]
             assert (
                 weekly_detail["transfer_reasons"]["observed_transfer_denominator"]
@@ -108,6 +729,41 @@ def test_v3_dual_views_are_closed_and_mon_fri_excludes_only_weekend_starts():
                     for bucket in weekly_detail["segments"]["issue_category"].values()
                 )
             )
+
+
+def test_skill_segment_splits_named_multi_and_unrecorded():
+    """A named single skill, a triple-skill ticket, and a ticket with no
+    `execute` observation used to collapse into one "Không xác định" bucket.
+    They must now land in three distinct, honestly labelled buckets."""
+    monday = _meta(trace("zero-skill", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))
+    single = _meta(trace("single-skill", "145666", 0, "2026-07-20T03:00:00Z", "AI reply"))
+    multi = _meta(trace("multi-skill", "145667", 0, "2026-07-20T04:00:00Z", "AI reply"))
+    run = _run([monday, single, multi])
+    sessions = []
+    for session in run.result.sessions:
+        if session.session_id == "145666":
+            sessions.append(replace(session, dimensions=replace(
+                session.dimensions, skill="topup", skill_count=1, skill_set=("topup",),
+            )))
+        elif session.session_id == "145667":
+            sessions.append(replace(session, dimensions=replace(
+                session.dimensions, skill=None, skill_count=2, skill_set=("topup", "withdraw"),
+            )))
+        else:
+            sessions.append(session)
+
+    dashboard = project_dashboard(
+        replace(run, result=replace(run.result, sessions=tuple(sessions)))
+    ).dashboard_dict()
+    skill_buckets = dashboard["views"]["mon_sun"]["segments"]["skill"]
+
+    assert skill_buckets["topup"]["total"] == 1
+    assert skill_buckets["Nhiều skill"]["total"] == 1
+    assert skill_buckets["Chưa ghi nhận"]["total"] == 1
+    assert "Không xác định" not in skill_buckets
+    # Coverage counts both the one-skill and multi-skill ticket as recorded;
+    # only the zero-skill ticket is missing.
+    assert dashboard["coverage"]["skill"] == pytest.approx(2 / 3)
 
 
 def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_causal_top_reason():
@@ -136,6 +792,13 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
             enriched.append(
                 replace(
                     session,
+                    dimensions=replace(
+                        session.dimensions,
+                        tpe_signals=(
+                            ("-365", "-1013"),
+                            ("-365", "-1006"),
+                        ),
+                    ),
                     guardrail_rules=("missing_transaction_id", "off_topic"),
                 )
             )
@@ -146,8 +809,22 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
                     dimensions=replace(
                         session.dimensions,
                         escalation_guard_blocked=True,
+                        tpe_signals=(("-365", "-1013"),),
                     ),
                     guardrail_rules=("missing_transaction_id",),
+                )
+            )
+        elif session.session_id == "145667":
+            enriched.append(
+                replace(
+                    session,
+                    dimensions=replace(
+                        session.dimensions,
+                        tpe_signals=(
+                            ("-383", None),
+                            ("-365", None),
+                        ),
+                    ),
                 )
             )
         else:
@@ -159,55 +836,62 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
 
     assert reasons == {
         "observed_transfer_denominator": 4,
+        "triggers": [
+            {
+                "reason": "unknown",
+                "rule": None,
+                "source": None,
+                "stage": None,
+                "skill": None,
+                "count": 4,
+            }
+        ],
         "tpe": [
             {
-                "code": "-217",
-                "status": "Thất bại",
-                "case": None,
-                "mapped": False,
+                "transstatus": "-365",
+                "step_result": "-1013",
+                "count": 2,
+            },
+            {
+                "transstatus": "-365",
+                "step_result": "-1006",
                 "count": 1,
             },
             {
-                "code": "-217",
-                "status": "Đang xử lý",
-                "case": None,
-                "mapped": False,
+                "transstatus": "-365",
+                "step_result": None,
                 "count": 1,
             },
             {
-                "code": "-383",
-                "status": "Đang xử lý",
-                "case": 2,
-                "mapped": True,
+                "transstatus": "-383",
+                "step_result": None,
                 "count": 1,
             },
         ],
+        "step_result_missing": {"count": 2, "denominator": 4},
         "guardrail": [
             {"rule": "missing_transaction_id", "count": 2},
             {"rule": "off_topic", "count": 1},
         ],
         "escalation_guard_blocked": {"count": 1, "denominator": 4},
     }
+    assert sum(row["count"] for row in reasons["tpe"]) == 5
     assert "top_reason" not in reasons
     week_reasons = view["by_week"]["2026-07-20"]["transfer_reasons"]
     assert week_reasons == reasons
     empty_week = view["by_week"]["2026-07-13"]
     assert empty_week["transfer_reasons"] == {
         "observed_transfer_denominator": 0,
+        "triggers": [],
         "tpe": [],
+        "step_result_missing": {"count": 0, "denominator": 0},
         "guardrail": [],
         "escalation_guard_blocked": {"count": 0, "denominator": 0},
     }
+    zero_bucket = {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}
     assert all(
-        buckets == {
-            "Không xác định": {
-                "total": 0,
-                "ai_first": 0,
-                "transferred": 0,
-                "reopen": 0,
-            }
-        }
-        for buckets in empty_week["segments"].values()
+        buckets == {("Chưa ghi nhận" if dimension == "skill" else "Không xác định"): zero_bucket}
+        for dimension, buckets in empty_week["segments"].items()
     )
 
 
@@ -238,6 +922,90 @@ def test_guardrail_reason_counts_are_overlapping_not_a_partition():
     assert sum(row["count"] for row in reasons["guardrail"]) == 4
 
 
+def test_transfer_triggers_are_an_exclusive_partition_and_keep_both_cs_escalation_sources():
+    traces = [
+        _meta(
+            trace(
+                f"transfer-{index}",
+                str(145665 + index),
+                0,
+                f"2026-07-21T0{index + 2}:00:00Z",
+                TRANSFER_HTML,
+            )
+        )
+        for index in range(4)
+    ]
+    run = _run(traces)
+    skill_trigger = TransferTrigger(
+        reason="skill_suggested_transfer",
+        rule="cs_escalation",
+        source="skill_guardrail_checked",
+        stage="output",
+        skill="interbank-fund-transfer",
+    )
+    response_trigger = TransferTrigger(
+        reason="ai_response_requires_transfer",
+        rule="cs_escalation",
+        source="output_guardrail",
+    )
+    sessions = tuple(
+        replace(
+            session,
+            transfer_trigger=(
+                skill_trigger
+                if session.session_id in {"145665", "145666"}
+                else response_trigger
+                if session.session_id == "145667"
+                else None
+            ),
+        )
+        for session in run.result.sessions
+    )
+
+    snapshot = project_dashboard(
+        replace(run, result=replace(run.result, sessions=sessions))
+    )
+    reasons = snapshot.dashboard_dict()["views"]["mon_sun"]["transfer_reasons"]
+
+    assert reasons["triggers"] == [
+        {
+            "reason": "skill_suggested_transfer",
+            "rule": "cs_escalation",
+            "source": "skill_guardrail_checked",
+            "stage": "output",
+            "skill": "interbank-fund-transfer",
+            "count": 2,
+        },
+        {
+            "reason": "ai_response_requires_transfer",
+            "rule": "cs_escalation",
+            "source": "output_guardrail",
+            "stage": None,
+            "skill": None,
+            "count": 1,
+        },
+        {
+            "reason": "unknown",
+            "rule": None,
+            "source": None,
+            "stage": None,
+            "skill": None,
+            "count": 1,
+        },
+    ]
+    assert sum(row["count"] for row in reasons["triggers"]) == 4
+    assert reasons["observed_transfer_denominator"] == 4
+    assert {
+        ticket.ticket_id: ticket.transfer_reason
+        for ticket in snapshot.tickets
+    } == {
+        "145665": "skill_suggested_transfer",
+        "145666": "skill_suggested_transfer",
+        "145667": "ai_response_requires_transfer",
+        "145668": "unknown",
+    }
+
+
 def test_by_week_intents_are_revalidated_against_global_frequency():
     value = _snapshot().storage_dict()
     detail = value["dashboard"]["views"]["mon_sun"]["by_week"]["2026-07-20"]
@@ -265,15 +1033,40 @@ def test_storage_rejects_transfer_reason_tpe_contract_drift_and_pii():
     value = _snapshot().storage_dict()
     row = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
     row["case"] = 1
-    row["mapped"] = False
 
-    with pytest.raises(ValueError, match="mapped is invalid"):
+    with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
 
     value = _snapshot().storage_dict()
     row = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
-    row["status"] = "gọi 0901234567"
-    with pytest.raises(ValueError, match="status"):
+    row["transstatus"] = "gọi 0901234567"
+    with pytest.raises(ValueError, match="transstatus"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _snapshot().storage_dict()
+    row = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
+    row["transstatus"] = "-365\n"
+    with pytest.raises(ValueError, match="transstatus"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _snapshot().storage_dict()
+    row = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
+    row["step_result"] = "700212|raw"
+    with pytest.raises(ValueError, match="step_result"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _snapshot().storage_dict()
+    row = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
+    row["step_result"] = "-1013\n"
+    with pytest.raises(ValueError, match="step_result"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _snapshot().storage_dict()
+    missing = value["dashboard"]["views"]["mon_sun"]["transfer_reasons"][
+        "step_result_missing"
+    ]
+    missing["count"] = missing["denominator"] + 1
+    with pytest.raises(ValueError, match="step_result_missing"):
         DashboardSnapshot.from_storage_dict(value)
 
 
@@ -283,6 +1076,17 @@ def test_storage_rejects_transfer_reason_weekly_rollup_drift_and_new_fields():
     view["by_week"]["2026-07-20"]["transfer_reasons"]["tpe"] = []
 
     with pytest.raises(ValueError, match="weekly rows do not reconcile"):
+        DashboardSnapshot.from_storage_dict(value)
+
+    value = _snapshot().storage_dict()
+    view = value["dashboard"]["views"]["mon_sun"]
+    view["by_week"]["2026-07-20"]["transfer_reasons"][
+        "step_result_missing"
+    ]["count"] += 1
+    with pytest.raises(
+        ValueError,
+        match="weekly step_result_missing does not reconcile",
+    ):
         DashboardSnapshot.from_storage_dict(value)
 
     value = _snapshot().storage_dict()
@@ -374,6 +1178,33 @@ def test_projection_is_allowlisted_and_never_serializes_pii_or_trace_id():
         assert forbidden not in encoded
 
 
+def test_meta_tpe_and_pipe_step_never_enter_public_transfer_diagnostics():
+    transfer = _meta(
+        trace(
+            "transfer",
+            "145665",
+            0,
+            "2026-07-21T02:00:00Z",
+            TRANSFER_HTML,
+        ),
+        tpe="-217 Thất bại",
+    )
+    snapshot = project_dashboard(_run([transfer]))
+    dashboard = snapshot.dashboard_dict()
+    reasons = dashboard["views"]["mon_sun"]["transfer_reasons"]
+
+    assert reasons["tpe"] == []
+    assert reasons["step_result_missing"] == {"count": 1, "denominator": 1}
+    assert dashboard["coverage"]["tpe"] == 0.0
+    assert dashboard["unmapped_tpe_codes"] == []
+    assert snapshot.tickets[0].tpe_code is None
+    assert snapshot.tickets[0].tpe_status is None
+    encoded = json.dumps(snapshot.storage_dict(), ensure_ascii=False)
+    assert "700212" not in encoded
+    assert "-217" not in encoded
+    assert "Thất bại" not in encoded
+
+
 def test_phone_shaped_numeric_session_id_is_not_exposed_as_a_ticket_id():
     unsafe_id = "8490123456"
     unsafe = _meta(
@@ -408,13 +1239,21 @@ def test_pii_shaped_meta_values_are_replaced_by_missing_bucket_before_browser_pr
         assert forbidden not in encoded
 
 
-def test_unmapped_tpe_is_passthrough_without_unknown_keyword_bucket():
+def test_public_dashboard_does_not_project_meta_tpe_taxonomy_mapping():
     dashboard = _snapshot().dashboard_dict()
-    assert dashboard["unmapped_tpe_codes"] == [{"code": "-217", "status": "Thất bại", "count": 3}]
-    assert "unknown" not in json.dumps(dashboard, ensure_ascii=False).casefold()
+    assert dashboard["unmapped_tpe_codes"] == []
+    tpe_row = dashboard["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
+    assert set(tpe_row) == {"transstatus", "step_result", "count"}
+
+    value = _snapshot().storage_dict()
+    value["dashboard"]["unmapped_tpe_codes"] = [
+        {"code": "-217", "status": "Thất bại", "count": 1}
+    ]
+    with pytest.raises(ValueError, match="unmapped_tpe_codes must be empty"):
+        DashboardSnapshot.from_storage_dict(value)
 
 
-def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_22_fields():
+def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_24_fields():
     snapshot = _snapshot()
     page = ticket_page(snapshot, cohort_week="2026-07-20", page_size=2)
     assert page["total"] == 3
@@ -425,8 +1264,8 @@ def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_22_
     assert ticket_page(snapshot, issue_category="Thanh toán-IBFT")["total"] == 3
     assert ticket_page(snapshot, app="241 - Chuyển Tiền ATM")["total"] == 3
     assert ticket_page(snapshot, product_code="TF007 - IBFT")["total"] == 3
-    assert ticket_page(snapshot, tpe_code="-217")["total"] == 3
-    assert ticket_page(snapshot, skill="Không xác định")["total"] == 3
+    assert ticket_page(snapshot, tpe_code="-365")["total"] == 3
+    assert ticket_page(snapshot, skill="Chưa ghi nhận")["total"] == 3
     assert ticket_page(snapshot, intent="Không xác định")["total"] == 3
     assert ticket_page(snapshot, is_weekend_start=True)["total"] == 1
     assert ticket_page(snapshot, week_definition="mon_fri")["total"] == 2
@@ -439,7 +1278,7 @@ def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_22_
         issue_category=selected.issue_category,
         app=selected.app,
         product_code=selected.product_code,
-        skill=selected.skill or "Không xác định",
+        skill=selected.skill or "Chưa ghi nhận",
         intent=selected.intent or "Không xác định",
         tpe_code=selected.tpe_code or "Không xác định",
         gt4_turn=selected.gt4_turn,
@@ -457,13 +1296,307 @@ def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_22_
         ticket_page(snapshot, transferred="true")  # type: ignore[arg-type]
 
 
-def test_storage_rejects_phone_in_a_new_dimension_field_and_schema_v2():
+def test_ticket_page_filters_an_explicit_set_of_report_weeks():
+    snapshot = _same_period_snapshot()
+    selected_weeks = {"2026-07-13", "2026-07-20"}
+
+    page = ticket_page(
+        snapshot,
+        cohort_weeks=",".join(sorted(selected_weeks)),
+        page_size=100,
+    )
+
+    assert page["total"] == sum(
+        row.cohort_week in selected_weeks for row in snapshot.tickets
+    )
+    assert {item["cohort_week"] for item in page["items"]} == selected_weeks
+
+
+@pytest.mark.parametrize(
+    "cohort_weeks",
+    [
+        "2026-07-13",
+        "2026-07-13,2026-07-13",
+        "2026-07-14,2026-07-20",
+        "invalid,2026-07-20",
+    ],
+)
+def test_ticket_page_rejects_invalid_multi_week_filters(cohort_weeks: str):
+    with pytest.raises(ValueError, match="cohort_weeks"):
+        ticket_page(_same_period_snapshot(), cohort_weeks=cohort_weeks)
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        ticket_page(
+            _same_period_snapshot(),
+            cohort_week="2026-07-20",
+            cohort_weeks="2026-07-13,2026-07-20",
+        )
+
+
+def test_ticket_page_filters_by_strict_transfer_reason_enum():
+    snapshot = _snapshot()
+    expected = [
+        row.ticket_id
+        for row in snapshot.tickets
+        if row.transfer_reason == "unknown"
+    ]
+
+    page = ticket_page(snapshot, transfer_reason="unknown", page_size=100)
+
+    assert [item["ticket_id"] for item in page["items"]] == sorted(expected)
+    assert page["total"] == len(expected)
+    with pytest.raises(ValueError, match="transfer_reason is invalid"):
+        ticket_page(snapshot, transfer_reason="invented_reason")
+
+
+def test_ticket_page_sorts_globally_before_pagination_with_nulls_last_and_ticket_id_ties():
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    sorted_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(
+                base,
+                ticket_id="40",
+                opened_at="2026-07-20T02:00:00Z",
+                turn_count=2,
+                gt4_turn=False,
+                skill=None,
+                tpe_code=None,
+                reopen_lifetime=None,
+                csat_satisfaction=None,
+            ),
+            replace(
+                base,
+                ticket_id="30",
+                opened_at="2026-07-20T02:00:00.500000Z",
+                turn_count=99,
+                gt4_turn=True,
+                skill="beta",
+                tpe_code="-383",
+                reopen_lifetime=1,
+                csat_satisfaction="positive",
+            ),
+            replace(
+                base,
+                ticket_id="20",
+                opened_at="2026-07-20T02:00:01Z",
+                turn_count=5,
+                gt4_turn=True,
+                skill="alpha",
+                reopen_lifetime=0,
+                csat_satisfaction="neutral",
+            ),
+            replace(
+                base,
+                ticket_id="10",
+                opened_at="2026-07-20T01:59:59Z",
+                turn_count=5,
+                gt4_turn=True,
+                skill="alpha",
+                reopen_lifetime=0,
+                csat_satisfaction="negative",
+            ),
+            replace(
+                base,
+                ticket_id="50",
+                opened_at="2026-07-21T02:00:00Z",
+                skill="gamma",
+                csat_satisfaction="unrated",
+            ),
+        ),
+    )
+
+    first_page = ticket_page(
+        sorted_snapshot,
+        sort_by="turn_count",
+        sort_direction="desc",
+        page=1,
+        page_size=2,
+    )
+    second_page = ticket_page(
+        sorted_snapshot,
+        sort_by="turn_count",
+        sort_direction="desc",
+        page=2,
+        page_size=2,
+    )
+    skill_ascending = ticket_page(
+        sorted_snapshot,
+        sort_by="skill",
+        sort_direction="asc",
+        page_size=100,
+    )
+    skill_descending = ticket_page(
+        sorted_snapshot,
+        sort_by="skill",
+        sort_direction="desc",
+        page_size=100,
+    )
+    tpe_ascending = ticket_page(
+        sorted_snapshot,
+        sort_by="tpe_code",
+        sort_direction="asc",
+        page_size=100,
+    )
+    tpe_descending = ticket_page(
+        sorted_snapshot,
+        sort_by="tpe_code",
+        sort_direction="desc",
+        page_size=100,
+    )
+    reopen_ascending = ticket_page(
+        sorted_snapshot,
+        sort_by="reopen_lifetime",
+        sort_direction="asc",
+        page_size=100,
+    )
+    reopen_descending = ticket_page(
+        sorted_snapshot,
+        sort_by="reopen_lifetime",
+        sort_direction="desc",
+        page_size=100,
+    )
+    csat_ascending = ticket_page(
+        sorted_snapshot,
+        sort_by="csat_satisfaction",
+        sort_direction="asc",
+        page_size=100,
+    )
+    csat_descending = ticket_page(
+        sorted_snapshot,
+        sort_by="csat_satisfaction",
+        sort_direction="desc",
+        page_size=100,
+    )
+    opened_ascending = ticket_page(
+        sorted_snapshot,
+        sort_by="opened_at",
+        sort_direction="asc",
+        page_size=100,
+    )
+    opened_descending = ticket_page(
+        sorted_snapshot,
+        sort_by="opened_at",
+        sort_direction="desc",
+        page_size=100,
+    )
+
+    # The largest value starts beyond the default first page but must become the
+    # first globally sorted row. Equal values use numeric Ticket ID ascending.
+    assert [item["ticket_id"] for item in first_page["items"]] == ["30", "10"]
+    assert [item["ticket_id"] for item in second_page["items"]] == ["20", "40"]
+    # Nullable columns keep missing values last in both directions.
+    assert [item["ticket_id"] for item in skill_ascending["items"]] == [
+        "10",
+        "20",
+        "30",
+        "50",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in skill_descending["items"]] == [
+        "50",
+        "30",
+        "10",
+        "20",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in tpe_ascending["items"]] == [
+        "30",
+        "10",
+        "20",
+        "50",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in tpe_descending["items"]] == [
+        "10",
+        "20",
+        "50",
+        "30",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in reopen_ascending["items"]] == [
+        "10",
+        "20",
+        "50",
+        "30",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in reopen_descending["items"]] == [
+        "30",
+        "10",
+        "20",
+        "50",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in csat_ascending["items"]] == [
+        "10",
+        "20",
+        "30",
+        "50",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in csat_descending["items"]] == [
+        "30",
+        "20",
+        "10",
+        "50",
+        "40",
+    ]
+    assert [item["ticket_id"] for item in opened_ascending["items"]] == [
+        "10",
+        "40",
+        "30",
+        "20",
+        "50",
+    ]
+    assert [item["ticket_id"] for item in opened_descending["items"]] == [
+        "50",
+        "20",
+        "30",
+        "40",
+        "10",
+    ]
+
+
+def test_ticket_page_sort_contract_rejects_unknown_field_direction_and_orphan_direction():
+    snapshot = _snapshot()
+    projected_fields = set(asdict(snapshot.tickets[0]))
+
+    assert len(projected_fields) == 25
+    for sort_by in projected_fields:
+        page = ticket_page(snapshot, sort_by=sort_by, sort_direction="asc")
+        assert page["total"] == len(snapshot.tickets)
+    assert [
+        item["ticket_id"]
+        for item in ticket_page(snapshot, sort_by="ticket_id")["items"]
+    ] == ["145665", "145666", "145667"]
+
+    with pytest.raises(ValueError, match="sort_by is invalid"):
+        ticket_page(snapshot, sort_by="raw_payload", sort_direction="asc")
+    with pytest.raises(ValueError, match="sort_direction is invalid"):
+        ticket_page(snapshot, sort_by="turn_count", sort_direction="sideways")
+    with pytest.raises(ValueError, match="sort_direction is invalid"):
+        ticket_page(snapshot, sort_direction="desc")
+
+
+def test_ticket_sort_value_falls_back_safely_for_alphanumeric_tpe_code():
+    class ProjectedTicket:
+        tpe_code = "ERR42"
+
+    assert _ticket_sort_value(  # type: ignore[arg-type]
+        ProjectedTicket(),
+        "tpe_code",
+    ) == ((1, "err"), (0, 42))
+
+
+def test_storage_rejects_phone_in_a_new_dimension_field_and_schema_v5():
     value = _snapshot().storage_dict()
     value["tickets"][0]["issue_category"] = "gọi 0901234567"
     with pytest.raises(ValueError):
         DashboardSnapshot.from_storage_dict(value)
     value = _snapshot().storage_dict()
-    value["schema_version"] = 2
+    value["schema_version"] = 5
     with pytest.raises(ValueError, match="unsupported dashboard storage schema_version"):
         DashboardSnapshot.from_storage_dict(value)
 
@@ -480,7 +1613,26 @@ def test_ticket_row_reopen_is_binary_and_gt4_is_cross_field_checked():
         TicketRow(**fields)
 
 
-def test_weekly_ai_mean_excludes_direct_cs_and_gt4_uses_strictly_more_than_four():
+def test_ticket_row_transfer_reason_is_required_for_transfers_and_absent_otherwise():
+    transferred = asdict(_snapshot().tickets[1])
+    transferred["transferred"] = True
+    transferred["transfer_reason"] = None
+    with pytest.raises(ValueError, match="transfer_reason"):
+        TicketRow(**transferred)
+
+    not_transferred = asdict(_snapshot().tickets[0])
+    not_transferred["transferred"] = False
+    not_transferred["transfer_reason"] = "unknown"
+    with pytest.raises(ValueError, match="transfer_reason"):
+        TicketRow(**not_transferred)
+
+    invalid = asdict(_snapshot().tickets[1])
+    invalid["transfer_reason"] = "invented_reason"
+    with pytest.raises(ValueError, match="transfer_reason"):
+        TicketRow(**invalid)
+
+
+def test_weekly_ai_mean_excludes_direct_cs_and_long_turns_use_strictly_more_than_three():
     four = [_meta(trace(f"four-{turn}", "145665", turn, f"2026-07-21T0{turn}:00:00Z", "AI reply")) for turn in range(4)]
     five = [_meta(trace(f"five-{turn}", "145666", turn, f"2026-07-22T0{turn}:00:00Z", "AI reply")) for turn in range(5)]
     direct = [_meta(trace("direct", "145667", 0, "2026-07-23T02:00:00Z", TRANSFER_TEXT))]
@@ -489,7 +1641,7 @@ def test_weekly_ai_mean_excludes_direct_cs_and_gt4_uses_strictly_more_than_four(
 
     assert week["ai_reply_mean_ai_first"] == pytest.approx((4 + 5) / 2)
     assert week["gt4_turn_with_cs"] == 0
-    assert week["gt4_turn_without_cs"] == 1
+    assert week["gt4_turn_without_cs"] == 2
 
 
 def _snapshot_with_intents(
@@ -556,6 +1708,10 @@ def test_ticket_row_requires_positive_turn_count_and_signed_short_tpe_code():
     fields["tpe_code"] = "1234567"
     with pytest.raises(ValueError, match="tpe_code"):
         TicketRow(**fields)
+    fields = asdict(_snapshot().tickets[0])
+    fields["tpe_status"] = "Thất bại"
+    with pytest.raises(ValueError, match="tpe_status"):
+        TicketRow(**fields)
 
 
 @pytest.mark.parametrize(
@@ -603,17 +1759,16 @@ def test_global_mon_sun_intent_count_allows_explorer_to_omit_one_nonnumeric_sess
     assert DashboardSnapshot.from_storage_dict(snapshot.storage_dict()) == snapshot
 
 
-def test_later_transfer_on_an_unclassified_ticket_does_not_inflate_outcome_transfer_total():
+def test_later_transfer_without_prior_ai_is_direct_cs_and_counts_as_transfer():
     first = _meta(trace("empty-first", "145665", 0, "2026-07-21T02:00:00Z", ""))
     later_transfer = _meta(trace("later-transfer", "145665", 1, "2026-07-21T03:00:00Z", TRANSFER_TEXT))
     snapshot = project_dashboard(_run([first, later_transfer]))
 
     row = snapshot.tickets[0]
-    assert row.outcome == "unclassified"
+    assert row.outcome == "direct_cs"
     assert row.transferred is True
     dashboard = snapshot.dashboard_dict()
     for view in dashboard["views"].values():
-        assert view["totals"]["transfer_total"] == (
-            view["outcomes"]["ai_then_cs"] + view["outcomes"]["direct_cs"]
-        )
+        assert view["totals"]["transfer_total"] == 1
+        assert view["outcomes"]["direct_cs"] == 1
     assert DashboardSnapshot.from_storage_dict(snapshot.storage_dict()) == snapshot
