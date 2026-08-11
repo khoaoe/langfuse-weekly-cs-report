@@ -48,8 +48,7 @@ COPY config/ ./config/
 
 RUN groupadd --gid 10001 dashboard \
     && useradd --uid 10001 --gid dashboard --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin dashboard \
-    && install -d -o dashboard -g dashboard -m 700 /app/runtime \
-    && echo "10.30.94.60 langfuse.zalopay.vn" >> /etc/hosts
+    && install -d -o dashboard -g dashboard -m 700 /app/runtime
 
 USER 10001:10001
 
