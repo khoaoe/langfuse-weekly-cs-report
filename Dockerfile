@@ -45,13 +45,21 @@ WORKDIR /app
 COPY --from=python-deps /opt/venv/ /opt/venv/
 COPY --from=python-deps /app/src/ ./src/
 COPY config/ ./config/
+COPY entrypoint.sh /app/entrypoint.sh
 
 RUN groupadd --gid 10001 dashboard \
     && useradd --uid 10001 --gid dashboard --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin dashboard \
-    && install -d -o dashboard -g dashboard -m 700 /app/runtime
+    && install -d -o dashboard -g dashboard -m 700 /app/runtime \
+    && chmod 755 /app/entrypoint.sh
 
 USER 10001:10001
 
 EXPOSE 8080
 
+# Decodes the PO-approved Freshdesk agent rosters (config/freshdesk_agents.v1.json,
+# config/freshdesk_reconciliation_agents.v1.json, artifacts/freshdesk_discovery/
+# human_agent_candidates.v1.json) from base64 env vars at container start. These
+# files are gitignored (real agent identity data) and never reach the git remote,
+# so they cannot be baked into the image at build time.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["weekly-cs-dashboard", "--host", "0.0.0.0", "--port", "8080"]
