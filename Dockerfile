@@ -50,7 +50,7 @@ COPY entrypoint.sh /app/entrypoint.sh
 RUN groupadd --gid 10001 dashboard \
     && useradd --uid 10001 --gid dashboard --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin dashboard \
     && install -d -o dashboard -g dashboard -m 700 /app/runtime \
-    && install -d -o dashboard -g dashboard -m 700 /app/artifacts/freshdesk_discovery \
+    && install -d -o dashboard -g dashboard -m 700 /app/artifacts \
     && chown dashboard:dashboard /app/config \
     && chmod 755 /app/entrypoint.sh
 
