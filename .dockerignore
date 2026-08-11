@@ -3,6 +3,7 @@
 *
 !Dockerfile
 !.dockerignore
+!entrypoint.sh
 !pyproject.toml
 !uv.lock
 !README.md
