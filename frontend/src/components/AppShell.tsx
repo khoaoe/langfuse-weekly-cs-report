@@ -55,6 +55,8 @@ export interface AppShellProps {
   readonly activeFilters: readonly ActiveFilterChip[];
   readonly onRemoveFilter: (key: TicketFilterKey) => void;
   readonly onResetFilters: () => void;
+  readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
+  readonly onOpenFreshdeskCookieDialog?: () => void;
   readonly children: ReactNode;
 }
 
@@ -81,6 +83,8 @@ export function AppShell({
   activeFilters,
   onRemoveFilter,
   onResetFilters,
+  freshdeskCookieState = null,
+  onOpenFreshdeskCookieDialog = () => {},
   children,
 }: AppShellProps) {
   const [helpOpen, setHelpOpen] = useState(false);
@@ -136,6 +140,14 @@ export function AppShell({
       window.removeEventListener("resize", updateActiveSection);
     };
   }, [snapshot]);
+
+  const openFreshdeskCookieDialog = () => {
+    const section = document.getElementById("csat");
+    if (typeof section?.scrollIntoView === "function") {
+      section.scrollIntoView({ block: "start" });
+    }
+    onOpenFreshdeskCookieDialog();
+  };
 
   const closeHelp = () => {
     setHelpOpen(false);
@@ -198,6 +210,17 @@ export function AppShell({
                     ? "Dữ liệu cũ"
                     : "Sẵn sàng"}
             </span>
+            {freshdeskCookieState === "expired" ||
+            freshdeskCookieState === "missing" ? (
+              <button
+                type="button"
+                id="freshdeskCookieChip"
+                className={styles.freshdeskCookieChip}
+                onClick={openFreshdeskCookieDialog}
+              >
+                Freshdesk: cần cookie
+              </button>
+            ) : null}
             <span>
               Cập nhật{" "}
               <span
