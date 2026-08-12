@@ -1192,6 +1192,7 @@ def _run_fetch_freshdesk_entry_coverage_command(
     from .freshdesk_csat import (
         FreshdeskCookieExpired,
         FreshdeskFetchDeadline,
+        FreshdeskPageLimitReached,
         FreshdeskRateLimitExhausted,
         mark_cookie_expired,
         mark_cookie_verified,
@@ -1308,7 +1309,11 @@ def _run_fetch_freshdesk_entry_coverage_command(
             if args.auth == "cookie":
                 mark_cookie_expired(runtime_directory)
             raise
-        except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+        except (
+            FreshdeskFetchDeadline,
+            FreshdeskRateLimitExhausted,
+            FreshdeskPageLimitReached,
+        ):
             pass
         else:
             if args.auth == "cookie":
