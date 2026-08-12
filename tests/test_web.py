@@ -1416,6 +1416,22 @@ def test_runtime_directory_allows_absent_default_and_dedicated_private_cache(
     assert _validated_runtime_directory(dedicated) == dedicated
 
 
+def test_runtime_directory_allows_freshdesk_cookie_files(tmp_path: Path):
+    """The cookie-transport dialog (spec 2026-08-12) writes these two files
+    directly into the runtime directory; a redeploy must not crash-loop
+    because the allowlist doesn't know about them yet."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    cookie = runtime / "freshdesk_cookie"
+    cookie.write_text("cs_session=abc123", encoding="utf-8")
+    cookie.chmod(0o600)
+    state = runtime / "freshdesk_cookie_state.json"
+    state.write_text('{"state":"ok"}', encoding="utf-8")
+    state.chmod(0o600)
+
+    assert _validated_runtime_directory(runtime) == runtime
+
+
 def test_runtime_directory_rejects_permissive_or_linked_csat_cache(tmp_path: Path):
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)
