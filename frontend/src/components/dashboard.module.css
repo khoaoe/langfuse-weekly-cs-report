@@ -12,6 +12,10 @@
   box-shadow: var(--shell-shadow);
 }
 
+.shellTop {
+  position: relative;
+}
+
 .shellInner {
   position: relative;
   z-index: 1;
@@ -292,6 +296,25 @@
 .reportScopeAll[aria-pressed="true"] {
   border-color: var(--interactive);
   background: color-mix(in srgb, var(--interactive) 10%, var(--surface));
+}
+
+.reportScopeCurrent {
+  width: 100%;
+  min-height: 44px;
+  margin-top: var(--space-2);
+  padding: 0 var(--space-3);
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: transparent;
+  color: var(--interactive);
+  text-align: left;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.reportScopeCurrent:hover {
+  background: var(--surface-sunken);
 }
 
 .reportScopeOptions {
@@ -877,7 +900,8 @@
     top: 0;
     right: 0;
     bottom: 0;
-    /* Keep the decorative Z continuous across every header band. */
+    /* Anchored to .shellTop (title row + report scope bar) so its size
+       stays fixed when the nav row wraps or filter chips grow the shell. */
     z-index: 5;
     display: block;
     width: 76px;

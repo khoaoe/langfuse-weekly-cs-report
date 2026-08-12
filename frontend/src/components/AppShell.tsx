@@ -89,6 +89,7 @@ export function AppShell({
   >(SECTIONS[0].id);
   const helpPanel = useRef<HTMLElement>(null);
   const helpButton = useRef<HTMLButtonElement>(null);
+  const shellRef = useRef<HTMLElement>(null);
   const snapshotQuality =
     snapshot === null ? null : calculateDataQualityScore(snapshot);
   const displaysStale =
@@ -109,27 +110,31 @@ export function AppShell({
   }, [helpOpen]);
 
   useEffect(() => {
-    if (!("IntersectionObserver" in window)) {
+    const nodes = SECTIONS.map((section) =>
+      document.getElementById(section.id),
+    ).filter((node): node is HTMLElement => node !== null);
+    const firstNode = nodes[0];
+    if (firstNode === undefined) {
       return;
     }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((left, right) => right.intersectionRatio - left.intersectionRatio)[0];
-        if (visible !== undefined) {
-          setActiveSection(visible.target.id as (typeof SECTIONS)[number]["id"]);
+    const updateActiveSection = () => {
+      const offset =
+        (shellRef.current?.getBoundingClientRect().height ?? 0) + 1;
+      let current = firstNode.id as (typeof SECTIONS)[number]["id"];
+      for (const node of nodes) {
+        if (node.getBoundingClientRect().top <= offset) {
+          current = node.id as (typeof SECTIONS)[number]["id"];
         }
-      },
-      { rootMargin: "-25% 0px -65% 0px", threshold: [0, 0.25, 0.5, 1] },
-    );
-    for (const section of SECTIONS) {
-      const node = document.getElementById(section.id);
-      if (node !== null) {
-        observer.observe(node);
       }
-    }
-    return () => observer.disconnect();
+      setActiveSection(current);
+    };
+    updateActiveSection();
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("resize", updateActiveSection);
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("resize", updateActiveSection);
+    };
   }, [snapshot]);
 
   const closeHelp = () => {
@@ -145,7 +150,8 @@ export function AppShell({
         Tới nội dung chính
       </a>
 
-      <header className={styles.shell}>
+      <header className={styles.shell} ref={shellRef}>
+        <div className={styles.shellTop}>
         <div className={styles.shellInner}>
           <div className={styles.brand}>
             <span
@@ -274,6 +280,7 @@ export function AppShell({
             />
           </div>
         )}
+        </div>
 
         <nav
           id="sectionNav"
