@@ -11,10 +11,12 @@ export const TICKETS_ENDPOINT = "/api/tickets";
 export const ENTRY_COVERAGE_TICKETS_ENDPOINT =
   "/api/freshdesk-entry-coverage/tickets";
 export const REFRESH_ENDPOINT = "/api/refresh";
+export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";
 export const REFRESH_ACTION_VALUE = "refresh";
+export const FRESHDESK_COOKIE_ACTION_VALUE = "update_freshdesk_cookie";
 
 export class DashboardRequestError extends Error {
   readonly status: number;
@@ -104,4 +106,40 @@ export async function fetchEntryCoverageTicketPage(
     },
   );
   return readJson(response);
+}
+
+export interface FreshdeskCookieState {
+  readonly state: "ok" | "expired" | "missing";
+  readonly updated_at: string | null;
+  readonly last_verified_at: string | null;
+}
+
+export async function fetchFreshdeskCookieState(
+  signal?: AbortSignal,
+): Promise<FreshdeskCookieState> {
+  const response = await fetch(FRESHDESK_COOKIE_ENDPOINT, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: JSON_HEADERS,
+    ...(signal ? { signal } : {}),
+  });
+  return (await readJson(response)) as FreshdeskCookieState;
+}
+
+/** Throws DashboardRequestError(400) when the backend rejects the cookie
+ * itself (invalid or expired) after its one live verify call. */
+export async function updateFreshdeskCookie(
+  cookie: string,
+): Promise<FreshdeskCookieState> {
+  const response = await fetch(FRESHDESK_COOKIE_ENDPOINT, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      ...JSON_HEADERS,
+      "Content-Type": "application/json",
+      [REFRESH_ACTION_HEADER]: FRESHDESK_COOKIE_ACTION_VALUE,
+    },
+    body: JSON.stringify({ cookie }),
+  });
+  return (await readJson(response)) as FreshdeskCookieState;
 }

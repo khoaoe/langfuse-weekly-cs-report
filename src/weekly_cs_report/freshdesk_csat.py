@@ -79,6 +79,14 @@ class FreshdeskRateLimitExhausted(FreshdeskCSATError):
     """The current run must stop; its last private checkpoint remains usable."""
 
 
+class FreshdeskCookieMissing(FreshdeskCSATError):
+    """No Freshdesk cookie is configured; the caller must supply one."""
+
+
+class FreshdeskCookieExpired(FreshdeskCSATError):
+    """The configured Freshdesk cookie was rejected by the UI API (401/403)."""
+
+
 class _FreshdeskHTTPError(FreshdeskCSATError):
     def __init__(self, status_code: int, message: str) -> None:
         super().__init__(message)
@@ -114,6 +122,141 @@ class FreshdeskSettings:
         ):
             raise FreshdeskCSATError("Freshdesk settings are invalid")
         object.__setattr__(self, "base_url", f"https://{parsed.netloc}".rstrip("/"))
+
+
+_COOKIE_FILENAME = "freshdesk_cookie"
+_COOKIE_STATE_FILENAME = "freshdesk_cookie_state.json"
+_COOKIE_STATES = frozenset({"ok", "expired", "missing"})
+_COOKIE_STATE_KEYS = frozenset(
+    {"schema_version", "updated_at", "last_verified_at", "last_failure_at", "state"}
+)
+
+
+def cookie_path(runtime_directory: Path) -> Path:
+    return Path(runtime_directory) / _COOKIE_FILENAME
+
+
+def cookie_state_path(runtime_directory: Path) -> Path:
+    return Path(runtime_directory) / _COOKIE_STATE_FILENAME
+
+
+def load_freshdesk_cookie(runtime_directory: Path) -> str:
+    """Read the persisted cookie; the file wins over the bootstrap env var."""
+    path = cookie_path(runtime_directory)
+    try:
+        if path.exists():
+            value = path.read_text(encoding="utf-8").strip()
+            if value:
+                return value
+    except OSError:
+        pass
+    env_value = os.environ.get("FRESHDESK_COOKIE", "").strip()
+    if env_value:
+        return env_value
+    raise FreshdeskCookieMissing("Freshdesk cookie is not configured")
+
+
+def write_freshdesk_cookie(runtime_directory: Path, cookie: str) -> None:
+    if not isinstance(cookie, str) or not cookie.strip():
+        raise FreshdeskCSATError("Freshdesk cookie value is invalid")
+    path = cookie_path(runtime_directory)
+    parent = path.parent
+    try:
+        parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError:
+        raise FreshdeskCSATError(
+            "Freshdesk private file could not be written"
+        ) from None
+    descriptor: int | None = None
+    temporary_path: Path | None = None
+    try:
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=parent,
+        )
+        temporary_path = Path(temporary_name)
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            descriptor = None
+            stream.write(cookie.strip())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    except OSError:
+        raise FreshdeskCSATError(
+            "Freshdesk private file could not be written"
+        ) from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
+def read_cookie_state(runtime_directory: Path) -> dict[str, object]:
+    """Never raises for a missing file -- returns the synthetic 'missing' state."""
+    path = cookie_state_path(runtime_directory)
+    if not path.exists():
+        return {
+            "schema_version": 1,
+            "updated_at": None,
+            "last_verified_at": None,
+            "last_failure_at": None,
+            "state": "missing",
+        }
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        raise FreshdeskCSATError("Freshdesk cookie state is invalid") from None
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != _COOKIE_STATE_KEYS
+        or value["schema_version"] != 1
+        or value["state"] not in _COOKIE_STATES
+    ):
+        raise FreshdeskCSATError("Freshdesk cookie state is invalid")
+    return dict(value)
+
+
+def _write_cookie_state(
+    runtime_directory: Path,
+    *,
+    state: str,
+    last_verified_at: str | None = None,
+    last_failure_at: str | None = None,
+) -> None:
+    if state not in _COOKIE_STATES:
+        raise FreshdeskCSATError("Freshdesk cookie state is invalid")
+    current = read_cookie_state(runtime_directory)
+    payload = {
+        "schema_version": 1,
+        "updated_at": _format_utc(datetime.now(timezone.utc)),
+        "last_verified_at": (
+            last_verified_at
+            if last_verified_at is not None
+            else current.get("last_verified_at")
+        ),
+        "last_failure_at": (
+            last_failure_at
+            if last_failure_at is not None
+            else current.get("last_failure_at")
+        ),
+        "state": state,
+    }
+    _atomic_private_json(cookie_state_path(runtime_directory), payload)
+
+
+def mark_cookie_verified(runtime_directory: Path) -> None:
+    now = _format_utc(datetime.now(timezone.utc))
+    _write_cookie_state(runtime_directory, state="ok", last_verified_at=now)
+
+
+def mark_cookie_expired(runtime_directory: Path) -> None:
+    now = _format_utc(datetime.now(timezone.utc))
+    _write_cookie_state(runtime_directory, state="expired", last_failure_at=now)
 
 
 @dataclass(frozen=True)
@@ -355,6 +498,289 @@ class FreshdeskClient:
                     response.status_code,
                     "Freshdesk authentication or permission failed"
                 )
+            if not 200 <= response.status_code < 300:
+                raise _FreshdeskHTTPError(
+                    response.status_code,
+                    f"Freshdesk request failed with status {response.status_code}",
+                )
+            if len(response.content) > _MAX_RESPONSE_BYTES:
+                raise FreshdeskCSATError("Freshdesk response exceeded the byte limit")
+            try:
+                return response.json()
+            except ValueError:
+                raise FreshdeskCSATError("Freshdesk returned invalid JSON") from None
+        raise FreshdeskRateLimitExhausted(
+            "Freshdesk rate limit retry budget was exhausted"
+        )
+
+
+class FreshdeskUIClient:
+    """Small GET-only client for Freshdesk's internal UI API (/api/_/...),
+    cookie-authenticated. Mirrors the two FreshdeskClient methods that
+    fetch_csat_population() needs so callers can swap transports without
+    changing call sites. Confirmed live (2026-08-12 probe, ticket 7005238)
+    to return the identical JSON shape as the REST v2 equivalents. Does not
+    consume REST API quota and is not subject to its rolling-window limit.
+    """
+
+    def __init__(
+        self,
+        cookie: str,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if not isinstance(cookie, str) or not cookie.strip():
+            raise FreshdeskCSATError("Freshdesk cookie is invalid")
+        self._sleep = sleep
+        self._client = httpx.Client(
+            base_url=f"https://{_APPROVED_FRESHDESK_HOST}",
+            headers={
+                "Cookie": cookie.strip(),
+                "X-Requested-With": "XMLHttpRequest",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+            },
+            timeout=30.0,
+            follow_redirects=False,
+            transport=transport,
+        )
+
+    def __enter__(self) -> FreshdeskUIClient:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._client.close()
+
+    def get_satisfaction_ratings(self, ticket_id: str) -> tuple[object, ...]:
+        if not ticket_id.isdigit():
+            raise FreshdeskCSATError("Freshdesk ticket ID is invalid")
+        value = self._get_json(
+            f"/api/_/tickets/{ticket_id}/satisfaction_ratings",
+            not_found=(),
+        )
+        if isinstance(value, Mapping):
+            value = value.get("satisfaction_ratings")
+        if not isinstance(value, (list, tuple)):
+            raise FreshdeskCSATError("Freshdesk rating response is invalid")
+        return tuple(value)
+
+    def get_conversation_metadata(
+        self,
+        ticket_id: str,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[ConversationMetadata, ...]:
+        """Fetch conversations while retaining only the six approved fields.
+
+        The UI API returns the full conversation list in one response (no
+        page parameter observed in the 2026-08-12 probe), tagged with a
+        meta.count. Fail closed rather than guess at pagination mechanics
+        if the returned count ever disagrees with the reported total.
+        """
+
+        if not ticket_id.isdigit():
+            raise FreshdeskCSATError("Freshdesk ticket ID is invalid")
+        raw = self._get_json(
+            f"/api/_/tickets/{ticket_id}/conversations",
+            not_found=(),
+            should_stop=should_stop,
+        )
+        if not isinstance(raw, Mapping):
+            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+        value = raw.get("conversations")
+        if not isinstance(value, (list, tuple)):
+            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+        meta = raw.get("meta")
+        reported_count = meta.get("count") if isinstance(meta, Mapping) else None
+        if (
+            isinstance(reported_count, int)
+            and not isinstance(reported_count, bool)
+            and reported_count != len(value)
+        ):
+            raise FreshdeskCSATError("Freshdesk conversation response is incomplete")
+        try:
+            rows = tuple(
+                ConversationMetadata(
+                    conversation_id=item.get("id"),
+                    author_id=item.get("user_id"),
+                    incoming=item.get("incoming"),
+                    private=item.get("private"),
+                    source=item.get("source"),
+                    created_at=item.get("created_at"),
+                    category=item.get("category"),
+                    is_autorep_private_note=(
+                        item.get("private") is True
+                        and _contains_autorep_marker(
+                            item.get("body_text") or item.get("body")
+                        )
+                    ),
+                )
+                for item in value
+                if isinstance(item, Mapping)
+            )
+        except (OutcomeReconciliationError, TypeError):
+            raise FreshdeskCSATError(
+                "Freshdesk conversation response is invalid"
+            ) from None
+        if len(rows) != len(value):
+            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+        return rows
+
+    def verify(self) -> None:
+        """Cheapest possible live check that the cookie still authenticates.
+
+        Raises FreshdeskCookieExpired on 401/403. Used by the web layer's
+        cookie-update endpoint (spec 2026-08-12 SS6.3) -- exactly one such
+        request is allowed there; it must never fetch ticket data.
+        """
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=1)
+        self._get_json(
+            "/api/_/tickets",
+            params=[
+                ("only", "count"),
+                ("query_hash[0][condition]", "created_at"),
+                ("query_hash[0][operator]", "is_greater_than"),
+                ("query_hash[0][type]", "default"),
+                ("query_hash[0][value][from]", since.strftime("%Y-%m-%dT%H:%M:%S.000Z")),
+                ("query_hash[0][value][to]", now.strftime("%Y-%m-%dT%H:%M:%S.999Z")),
+            ],
+        )
+
+    def list_ticket_metadata(
+        self,
+        *,
+        updated_since: datetime,
+        max_pages: int = 300,
+        page_size: int = 50,
+        start_page: int = 1,
+        existing: tuple[FreshdeskTicketMetadata, ...] = (),
+        on_page: Callable[[tuple[FreshdeskTicketMetadata, ...], int, bool], None]
+        | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[FreshdeskTicketMetadata, ...]:
+        """List tickets via the UI API, filtered by created_at >= updated_since.
+
+        The UI API's query_hash rejects an updated_at condition (confirmed
+        400 invalid_value in the 2026-08-12 probe) -- only created_at works.
+        This is not a behavior loss for any current caller: every existing
+        caller of the REST equivalent immediately re-filters its result to
+        created_at >= updated_since anyway (entry coverage narrows to
+        filtered_inventory before use), so a ticket created before the
+        window would be fetched by REST and then discarded downstream.
+        Filtering by created_at here produces the identical final population,
+        just without the wasted fetch.
+        """
+        if (
+            updated_since.tzinfo is None
+            or updated_since.utcoffset() is None
+            or max_pages < 1
+            or max_pages > 300
+            or page_size != 50
+            or start_page < 1
+            or start_page > max_pages + 1
+            or any(
+                not isinstance(item, FreshdeskTicketMetadata) for item in existing
+            )
+        ):
+            raise FreshdeskCSATError("Freshdesk ticket listing options are invalid")
+        updated_since_utc = updated_since.astimezone(timezone.utc)
+        now = datetime.now(timezone.utc)
+        projected: list[FreshdeskTicketMetadata] = list(existing)
+        seen_ids: set[str] = {item.ticket_id for item in projected}
+        if len(seen_ids) != len(projected):
+            raise FreshdeskCSATError(
+                "Freshdesk ticket response contains duplicate tickets"
+            )
+        query_hash_params = [
+            ("query_hash[0][condition]", "created_at"),
+            ("query_hash[0][operator]", "is_greater_than"),
+            ("query_hash[0][type]", "default"),
+            (
+                "query_hash[0][value][from]",
+                updated_since_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            ),
+            ("query_hash[0][value][to]", now.strftime("%Y-%m-%dT%H:%M:%S.999Z")),
+        ]
+        page = start_page
+        while page <= max_pages:
+            _check_fetch_deadline(should_stop)
+            value = self._get_json(
+                "/api/_/tickets",
+                params=[
+                    ("order_by", "created_at"),
+                    ("order_type", "asc"),
+                    ("page", page),
+                    ("per_page", page_size),
+                ]
+                + query_hash_params,
+                should_stop=should_stop,
+            )
+            if not isinstance(value, Mapping):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            tickets = value.get("tickets")
+            if not isinstance(tickets, list):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            page_rows: list[FreshdeskTicketMetadata] = []
+            for item in tickets:
+                if not isinstance(item, Mapping):
+                    raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+                try:
+                    row = FreshdeskTicketMetadata(
+                        ticket_id=str(item["id"]),
+                        created_at=item["created_at"],
+                    )
+                except (KeyError, TypeError, FreshdeskEntryCoverageError):
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response is invalid"
+                    ) from None
+                if row.ticket_id in seen_ids:
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response contains duplicate tickets"
+                    )
+                seen_ids.add(row.ticket_id)
+                page_rows.append(row)
+            projected.extend(page_rows)
+            is_complete = len(tickets) < page_size
+            if on_page is not None:
+                on_page(tuple(projected), page + 1, is_complete)
+            _check_fetch_deadline(should_stop)
+            if is_complete:
+                return tuple(projected)
+            page += 1
+            self._sleep(0.1)
+        raise FreshdeskCSATError("Freshdesk ticket page limit exceeded")
+
+    def _get_json(
+        self,
+        path: str,
+        *,
+        params: Mapping[str, object] | None = None,
+        not_found: object | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> object:
+        for attempt in range(_MAX_RETRIES + 1):
+            _check_fetch_deadline(should_stop)
+            try:
+                response = self._client.get(path, params=params)
+            except httpx.HTTPError:
+                raise FreshdeskCSATError("Freshdesk request failed") from None
+            if response.is_redirect:
+                raise FreshdeskCSATError("Freshdesk redirect was rejected")
+            if response.status_code == 404 and not_found is not None:
+                return not_found
+            if response.status_code == 429 and attempt < _MAX_RETRIES:
+                delay = _retry_after(response.headers.get("Retry-After"))
+                if should_stop is not None and should_stop():
+                    raise FreshdeskFetchDeadline("Freshdesk fetch duration limit reached")
+                self._sleep(delay)
+                _check_fetch_deadline(should_stop)
+                continue
+            if response.status_code in {401, 403}:
+                raise FreshdeskCookieExpired("Freshdesk cookie was rejected")
             if not 200 <= response.status_code < 300:
                 raise _FreshdeskHTTPError(
                     response.status_code,

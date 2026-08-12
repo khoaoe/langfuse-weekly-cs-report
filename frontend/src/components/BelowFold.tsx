@@ -761,6 +761,8 @@ export interface BelowFoldProps {
   readonly onCsatBreakdownGroupingChange: () => void;
   readonly qualityExpanded: boolean;
   readonly onQualityExpandedChange: (expanded: boolean) => void;
+  readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
+  readonly onOpenFreshdeskCookieDialog?: () => void;
 }
 
 /**
@@ -781,6 +783,8 @@ export function BelowFold({
   onCsatBreakdownGroupingChange,
   qualityExpanded,
   onQualityExpandedChange,
+  freshdeskCookieState = null,
+  onOpenFreshdeskCookieDialog = () => {},
 }: BelowFoldProps) {
   const view = selectView(snapshot, weekDefinition);
   const weeks = selectWeekly(view);
@@ -900,6 +904,8 @@ export function BelowFold({
           onTicketFilterSelect({ [grouping]: value })
         }
         onBreakdownGroupingChange={onCsatBreakdownGroupingChange}
+        freshdeskCookieState={freshdeskCookieState}
+        onOpenFreshdeskCookieDialog={onOpenFreshdeskCookieDialog}
       />
 
       <TransferDiagnostics
