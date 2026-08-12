@@ -175,7 +175,11 @@ def main() -> int:
     store.save(snapshot)
     manager = SnapshotManager(lambda: snapshot, store)
 
-    app = create_app(manager, settings=WebSettings("off", "X-Forwarded-User", mode))
+    app = create_app(
+        manager,
+        settings=WebSettings("off", "X-Forwarded-User", mode),
+        runtime_directory=runtime,
+    )
     uvicorn.run(
         app, host=host, port=port, workers=1, access_log=False, log_level="warning"
     )

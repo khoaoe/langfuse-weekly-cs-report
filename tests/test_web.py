@@ -40,6 +40,7 @@ from weekly_cs_report.web import (
 NOW = datetime(2026, 7, 29, 5, tzinfo=timezone.utc)
 IDENTITY_HEADER = "X-Forwarded-User"
 REFRESH_ACTION_HEADERS = {"X-Dashboard-Action": "refresh"}
+COOKIE_ACTION_HEADERS = {"X-Dashboard-Action": "update_freshdesk_cookie"}
 
 
 def _empty_transfer_reasons() -> dict[str, object]:
@@ -1750,3 +1751,176 @@ def test_main_rejects_out_of_range_refresh_controls_before_loading_secrets(
 
     assert main([]) == 2
     assert capsys.readouterr().err == f"{message}\n"
+
+
+def _cookie_app(tmp_path: Path):
+    runtime = tmp_path / "runtime"
+    store = ProtectedSnapshotStore(runtime)
+    manager = SnapshotManager(lambda: _snapshot(), store, clock=lambda: NOW)
+    app = create_app(
+        manager,
+        settings=WebSettings("off", IDENTITY_HEADER),
+        runtime_directory=runtime,
+    )
+    return app, runtime
+
+
+def test_freshdesk_cookie_get_returns_missing_when_unconfigured(tmp_path: Path):
+    app, _runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.get("/api/freshdesk-cookie")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "state": "missing",
+        "updated_at": None,
+        "last_verified_at": None,
+    }
+
+
+def test_freshdesk_cookie_post_requires_action_header(tmp_path: Path):
+    app, _runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/freshdesk-cookie", json={"cookie": "cs_session=abc"}
+        )
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": {"code": "cookie_action_required"}}
+
+
+def test_freshdesk_cookie_post_rejects_blank_cookie(tmp_path: Path):
+    app, runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/freshdesk-cookie",
+            headers=COOKIE_ACTION_HEADERS,
+            json={"cookie": "   "},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": {"code": "cookie_invalid"}}
+    assert not (runtime / "freshdesk_cookie").exists()
+
+
+def test_freshdesk_cookie_post_rejects_oversized_body(tmp_path: Path):
+    app, runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/freshdesk-cookie",
+            headers=COOKIE_ACTION_HEADERS,
+            content=json.dumps({"cookie": "x" * 9000}),
+        )
+
+    assert response.status_code == 413
+    assert not (runtime / "freshdesk_cookie").exists()
+
+
+def test_freshdesk_cookie_post_never_writes_a_cookie_that_fails_live_verification(
+    tmp_path: Path, monkeypatch
+):
+    class RejectingClient:
+        def __init__(self, _cookie):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def verify(self):
+            from weekly_cs_report.freshdesk_csat import FreshdeskCookieExpired
+
+            raise FreshdeskCookieExpired("stale")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.freshdesk_csat.FreshdeskUIClient", RejectingClient
+    )
+    app, runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/freshdesk-cookie",
+            headers=COOKIE_ACTION_HEADERS,
+            json={"cookie": "cs_session=stale-value"},
+        )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": {"code": "cookie_invalid"}}
+    assert not (runtime / "freshdesk_cookie").exists()
+    assert "stale-value" not in json.dumps(response.json())
+
+
+def test_freshdesk_cookie_post_persists_and_verifies_a_valid_cookie(
+    tmp_path: Path, monkeypatch
+):
+    class AcceptingClient:
+        def __init__(self, cookie):
+            self.cookie = cookie
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def verify(self):
+            return None
+
+    monkeypatch.setattr(
+        "weekly_cs_report.freshdesk_csat.FreshdeskUIClient", AcceptingClient
+    )
+    app, runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/freshdesk-cookie",
+            headers=COOKIE_ACTION_HEADERS,
+            json={"cookie": "cs_session=fresh-value"},
+        )
+        assert response.status_code == 202
+        assert response.json()["state"] == "ok"
+        assert "fresh-value" not in json.dumps(response.json())
+
+        get_response = client.get("/api/freshdesk-cookie")
+        assert get_response.json()["state"] == "ok"
+        assert get_response.json()["last_verified_at"] is not None
+
+    saved = runtime / "freshdesk_cookie"
+    assert saved.read_text(encoding="utf-8") == "cs_session=fresh-value"
+    import stat as _stat
+
+    assert _stat.S_IMODE(saved.stat().st_mode) == 0o600
+
+
+def test_freshdesk_cookie_post_is_rate_limited(tmp_path: Path, monkeypatch):
+    class RejectingClient:
+        def __init__(self, _cookie):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def verify(self):
+            from weekly_cs_report.freshdesk_csat import FreshdeskCookieExpired
+
+            raise FreshdeskCookieExpired("stale")
+
+    monkeypatch.setattr(
+        "weekly_cs_report.freshdesk_csat.FreshdeskUIClient", RejectingClient
+    )
+    app, _runtime = _cookie_app(tmp_path)
+    with TestClient(app) as client:
+        statuses = [
+            client.post(
+                "/api/freshdesk-cookie",
+                headers=COOKIE_ACTION_HEADERS,
+                json={"cookie": "cs_session=abc"},
+            ).status_code
+            for _ in range(6)
+        ]
+
+    assert statuses[:5] == [400, 400, 400, 400, 400]
+    assert statuses[5] == 429
