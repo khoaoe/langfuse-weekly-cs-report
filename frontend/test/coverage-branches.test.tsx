@@ -298,8 +298,6 @@ function renderBelowFold(snapshot: DashboardSnapshot) {
       activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
       onCsatBreakdownSelect={() => {}}
       onCsatBreakdownGroupingChange={() => {}}
-      qualityExpanded
-      onQualityExpandedChange={() => {}}
     />,
   );
 }

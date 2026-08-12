@@ -12,6 +12,7 @@ export const ENTRY_COVERAGE_TICKETS_ENDPOINT =
   "/api/freshdesk-entry-coverage/tickets";
 export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
+export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";
@@ -124,6 +125,32 @@ export async function fetchFreshdeskCookieState(
     ...(signal ? { signal } : {}),
   });
   return (await readJson(response)) as FreshdeskCookieState;
+}
+
+/** Throws DashboardRequestError(status) for 400/404/503 domain errors, same
+ * as every other endpoint here -- the caller inspects `.status` to choose a
+ * Vietnamese message instead of showing the raw code. */
+export async function fetchTraceExplanation(
+  ticketId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const response = await fetch(
+    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}`,
+    {
+      method: "GET",
+      credentials: "same-origin",
+      headers: JSON_HEADERS,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  if (response.status !== 200) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
 }
 
 /** Throws DashboardRequestError(400) when the backend rejects the cookie

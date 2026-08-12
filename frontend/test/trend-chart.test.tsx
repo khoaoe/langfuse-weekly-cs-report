@@ -164,8 +164,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -224,8 +222,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -278,8 +274,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -315,8 +309,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -342,8 +334,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -384,8 +374,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
     expect(screen.queryByRole("button", { name: "Cùng kỳ đến T5" })).toBeNull();
@@ -404,8 +392,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 
@@ -425,8 +411,6 @@ describe("trend chart data gaps", () => {
         activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
-        qualityExpanded={false}
-        onQualityExpandedChange={() => {}}
       />,
     );
 

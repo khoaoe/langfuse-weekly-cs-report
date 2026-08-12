@@ -401,7 +401,6 @@ export interface AttentionItem {
   readonly headline: string;
   readonly action: string;
   readonly filterPatch: Partial<TicketFilters> | null;
-  readonly targetSection: "quality" | null;
 }
 
 /**
@@ -425,7 +424,6 @@ export function selectAttentionItems(
       headline: `${formatCount(scope.gt4WithoutCs)} ticket có hơn 3 lượt xử lý mà chưa chuyển CS`,
       action: "Mở Ticket Explorer, lọc >3 lượt xử lý để xem từng ticket.",
       filterPatch: { gt4_turn: "true", transferred: "false" },
-      targetSection: null,
     });
   }
 
@@ -436,7 +434,6 @@ export function selectAttentionItems(
       headline: `${formatRate(snapshot.gate_status.structural_invalid_rate)} bản ghi lỗi cấu trúc, vượt ngưỡng 5%`,
       action: "Số tuần này chưa dùng để ra quyết định. Kiểm tra nguồn dữ liệu trước.",
       filterPatch: null,
-      targetSection: "quality",
     });
   }
 

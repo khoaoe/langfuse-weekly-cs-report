@@ -1,0 +1,321 @@
+.pasteForm {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.field {
+  display: grid;
+  gap: var(--space-1);
+  min-width: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.field input {
+  width: 12em;
+  max-width: 100%;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+.turnTabs {
+  display: inline-flex;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  overflow: hidden;
+}
+
+.turnTab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0 var(--space-4);
+  border: 0;
+  border-left: 1px solid var(--rule-strong);
+  background: var(--surface);
+  color: var(--muted);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.turnTab:first-child {
+  border-left: 0;
+}
+
+.turnTab[aria-selected="true"] {
+  background: var(--interactive);
+  color: var(--interactive-ink);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
+  flex: 0 0 auto;
+}
+
+.dotAnswered {
+  composes: dot;
+  color: var(--success-text);
+}
+
+.dotTransferred {
+  composes: dot;
+  color: var(--warning-text);
+}
+
+.dotUnanswered {
+  composes: dot;
+  color: var(--muted);
+}
+
+.turnTab[aria-selected="true"] .dotAnswered,
+.turnTab[aria-selected="true"] .dotTransferred,
+.turnTab[aria-selected="true"] .dotUnanswered {
+  color: var(--interactive-ink);
+}
+
+.conclusionCard {
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.conclusion {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 17px;
+  text-wrap: pretty;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
+  content: "";
+  flex: 0 0 auto;
+}
+
+.badgeAnswered {
+  composes: badge;
+  color: var(--success-text);
+}
+
+.badgeTransferred {
+  composes: badge;
+  color: var(--warning-text);
+}
+
+.badgeUnanswered {
+  composes: badge;
+  color: var(--muted);
+}
+
+.turnMeta {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.conversation {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.bubbleLabel {
+  display: block;
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.customerBubble,
+.agentBubble {
+  max-width: 640px;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-tight);
+}
+
+.customerBubble {
+  border: 1px solid var(--rule);
+  background: var(--surface-sunken);
+}
+
+.customerBubble p {
+  margin: 0;
+  text-wrap: pretty;
+}
+
+.agentBubble {
+  margin-left: auto;
+  border: 1px solid color-mix(in srgb, var(--interactive) 35%, var(--rule));
+  background: color-mix(in srgb, var(--interactive) 6%, var(--surface));
+}
+
+.agentBubble .bubbleLabel {
+  color: var(--interactive);
+}
+
+.agentBubbleContent p {
+  margin: 0 0 var(--space-2);
+  text-wrap: pretty;
+}
+
+.agentBubbleContent p:last-child {
+  margin-bottom: 0;
+}
+
+.agentBubbleContent ul,
+.agentBubbleContent ol {
+  margin: 0 0 var(--space-2);
+  padding-left: 1.25em;
+}
+
+.agentBubbleContent li + li {
+  margin-top: var(--space-1);
+}
+
+.timelineTitle {
+  margin: var(--space-5) 0 var(--space-2);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.step,
+.stepBlocked {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2);
+  border-radius: var(--radius-tight);
+}
+
+.stepBlocked {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.stepDot,
+.stepDotBlocked {
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+}
+
+.stepDot {
+  background: var(--rule-strong);
+}
+
+.stepDotBlocked {
+  background: var(--warning);
+}
+
+.stepBody {
+  min-width: 0;
+  flex: 1;
+}
+
+.stepSummary {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+  text-wrap: pretty;
+}
+
+.stepLabel {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.evidenceToggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin: var(--space-1) 0 0 calc(var(--space-2) * -1);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-tight);
+  background: none;
+  font-size: 13px;
+  color: var(--interactive);
+  cursor: pointer;
+  transition-property: background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.evidenceToggle:hover {
+  background: var(--surface-sunken);
+}
+
+.evidence {
+  margin: var(--space-1) 0 0;
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--surface-sunken);
+  padding: var(--space-2);
+  border-radius: var(--radius-tight);
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+}
+
+.langfuseLink {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--interactive);
+  font-size: 13px;
+}
+
+.copyStatus {
+  min-height: 1em;
+  color: var(--muted);
+  font-size: 13px;
+}

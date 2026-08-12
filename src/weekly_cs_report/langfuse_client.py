@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import socket
 import time
 import threading
@@ -14,6 +15,7 @@ import httpx
 
 
 _DNS_OVERRIDE_ENV = "LANGFUSE_DNS_OVERRIDE"
+_SESSION_ID_PATTERN = re.compile(r"[0-9]+\Z")
 _real_getaddrinfo = socket.getaddrinfo
 _dns_override_applied: str | None = None
 
@@ -182,6 +184,36 @@ class LangfuseClient:
             if page_number >= total_pages:
                 return
             page_number += 1
+
+    def list_traces_by_session(self, session_id: str) -> list[dict]:
+        """Read every trace of one session, sorted by timestamp ascending."""
+        if not _SESSION_ID_PATTERN.fullmatch(session_id):
+            raise ValueError("session_id must be a non-empty numeric string")
+
+        traces: list[dict] = []
+        page_number = 1
+        while True:
+            response = self._request(
+                "GET",
+                "/api/public/traces",
+                params={
+                    "sessionId": session_id,
+                    "fields": "core,io",
+                    "page": page_number,
+                    "limit": 100,
+                    "orderBy": "timestamp.asc",
+                },
+                expected_status=200,
+            )
+            data, total_pages = self._parse_page(
+                response, "GET", "/api/public/traces"
+            )
+            traces.extend(data)
+            if page_number >= total_pages:
+                break
+            page_number += 1
+        traces.sort(key=lambda item: item.get("timestamp") or "")
+        return traces
 
     def list_observations(self, trace_id: str) -> list[dict]:
         observations: list[dict] = []

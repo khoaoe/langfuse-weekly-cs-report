@@ -1,0 +1,42 @@
+{
+  "ticket_id": "5551001",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-5551001-0",
+        "sessionId": "5551001",
+        "timestamp": "2026-08-01T02:00:00.000Z",
+        "metadata": {"turn": 0},
+        "input": {
+          "user_input": "Giao dich rut tien bi treo, chua nhan duoc tien",
+          "source": "ticket",
+          "other_info": {"freshdesk_id": "5551001", "title": "synthetic"}
+        },
+        "output": {
+          "response": "<p>Giao dich cua Quy khach da duoc xu ly thanh cong.</p>",
+          "agents_used": ["customer-service"],
+          "elapsed_s": 12.3
+        }
+      },
+      "observations": [
+        {"id": "o1", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.100Z", "name": "idempotency_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o2", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.200Z", "name": "escalation_history_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o3", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.300Z", "name": "input_guardrail", "input": {"user_input": "..."}, "output": {"blocked": false, "rule": "input_compliant"}},
+        {"id": "o4", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.400Z", "name": "route", "input": {"user_input": "..."}, "output": {"agents": ["customer-service"], "needs_planning": false}},
+        {"id": "o5", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.500Z", "name": "execute", "input": {"agents": ["customer-service"]}, "output": {"response": "..."}},
+        {"id": "o6", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.600Z", "name": "plugin:customer-service", "input": {}, "output": {}},
+        {"id": "o7", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.700Z", "name": "skills_loaded", "input": {"plugin": "customer-service"}, "output": {"skills": ["withdraw"]}},
+        {"id": "o8", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:00.800Z", "name": "tools_loaded", "input": {"plugin": "customer-service"}, "output": {"tools": []}},
+        {"id": "o9", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:01.000Z", "name": "llm_call:iter_0", "input": {"messages_count": 4}, "output": {"text": "..."}, "metadata": {"iteration": 0, "stop_reason": "tool_calls"}},
+        {"id": "o10", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:02.000Z", "name": "tool:get_transaction_processing_engine_data", "input": {"trans_id": "260805002090164"}, "output": {"result": {"transstatus": "-217", "stepresult": "0"}}},
+        {"id": "o11", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:03.000Z", "name": "llm_call:iter_1", "input": {"messages_count": 6}, "output": {"text": "..."}, "metadata": {"iteration": 1, "stop_reason": "tool_calls"}},
+        {"id": "o12", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:04.000Z", "name": "tool:load_skill_reference__withdraw", "input": {"skill": "withdraw"}, "output": {}},
+        {"id": "o13", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:05.000Z", "name": "skill_guardrail_checked", "input": {"skill": "customer-service/withdraw", "stage": "input"}, "output": {"passed": true, "rule": "input_compliant"}},
+        {"id": "o14", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:06.000Z", "name": "llm_call:iter_2", "input": {"messages_count": 8}, "output": {"text": "..."}, "metadata": {"iteration": 2, "stop_reason": "stop"}},
+        {"id": "o15", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:07.000Z", "name": "skill_guardrail_checked", "input": {"skill": "customer-service/withdraw", "stage": "output"}, "output": {"passed": true, "rule": "output_compliant"}},
+        {"id": "o16", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:08.000Z", "name": "output_guardrail", "input": {}, "output": {"blocked": false, "rule": "output_compliant"}},
+        {"id": "o17", "traceId": "trace-5551001-0", "startTime": "2026-08-01T02:00:09.000Z", "name": "pipeline", "input": {}, "output": {"response": "..."}}
+      ]
+    }
+  ]
+}

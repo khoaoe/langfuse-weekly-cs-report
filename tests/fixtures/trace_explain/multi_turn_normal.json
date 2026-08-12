@@ -1,0 +1,55 @@
+{
+  "ticket_id": "5551004",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-5551004-0",
+        "sessionId": "5551004",
+        "timestamp": "2026-08-05T01:00:00.000Z",
+        "metadata": {"turn": 0},
+        "input": {
+          "user_input": "Toi nap tien khong vao",
+          "source": "ticket",
+          "other_info": {"freshdesk_id": "5551004", "title": "synthetic"}
+        },
+        "output": {
+          "response": "<p>Giao dich nap tien da xu ly thanh cong.</p>",
+          "agents_used": ["customer-service"],
+          "elapsed_s": 8.0
+        }
+      },
+      "observations": [
+        {"id": "o1", "traceId": "trace-5551004-0", "startTime": "2026-08-05T01:00:00.100Z", "name": "idempotency_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o2", "traceId": "trace-5551004-0", "startTime": "2026-08-05T01:00:00.200Z", "name": "escalation_history_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o3", "traceId": "trace-5551004-0", "startTime": "2026-08-05T01:00:00.300Z", "name": "input_guardrail", "input": {"user_input": "..."}, "output": {"blocked": false, "rule": "input_compliant"}},
+        {"id": "o4", "traceId": "trace-5551004-0", "startTime": "2026-08-05T01:00:00.400Z", "name": "route", "input": {"user_input": "..."}, "output": {"agents": ["customer-service"], "needs_planning": false}},
+        {"id": "o5", "traceId": "trace-5551004-0", "startTime": "2026-08-05T01:00:00.500Z", "name": "output_guardrail", "input": {}, "output": {"blocked": false, "rule": "output_compliant"}}
+      ]
+    },
+    {
+      "trace": {
+        "id": "trace-5551004-1",
+        "sessionId": "5551004",
+        "timestamp": "2026-08-05T01:10:00.000Z",
+        "metadata": {"turn": 1},
+        "input": {
+          "user_input": "Cam on ban, nhung toi con 1 giao dich khac cung bi loi",
+          "source": "ticket",
+          "other_info": {"freshdesk_id": "5551004", "title": "synthetic"}
+        },
+        "output": {
+          "response": "<p>Giao dich thu hai cua Quy khach cung da duoc xu ly.</p>",
+          "agents_used": ["customer-service"],
+          "elapsed_s": 9.0
+        }
+      },
+      "observations": [
+        {"id": "o6", "traceId": "trace-5551004-1", "startTime": "2026-08-05T01:10:00.100Z", "name": "idempotency_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o7", "traceId": "trace-5551004-1", "startTime": "2026-08-05T01:10:00.200Z", "name": "escalation_history_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o8", "traceId": "trace-5551004-1", "startTime": "2026-08-05T01:10:00.300Z", "name": "input_guardrail", "input": {"user_input": "..."}, "output": {"blocked": false, "rule": "input_compliant"}},
+        {"id": "o9", "traceId": "trace-5551004-1", "startTime": "2026-08-05T01:10:00.400Z", "name": "route", "input": {"user_input": "..."}, "output": {"agents": ["customer-service"], "needs_planning": false}},
+        {"id": "o10", "traceId": "trace-5551004-1", "startTime": "2026-08-05T01:10:00.500Z", "name": "output_guardrail", "input": {}, "output": {"blocked": false, "rule": "output_compliant"}}
+      ]
+    }
+  ]
+}

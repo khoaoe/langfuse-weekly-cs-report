@@ -164,11 +164,6 @@ export function DecisionLedger({
                     Xem ticket
                   </button>
                 )}
-                {item.targetSection === null ? null : (
-                  <a className={styles.railActionLink} href="#quality">
-                    Kiểm tra dữ liệu
-                  </a>
-                )}
               </div>
             </li>
           ))}

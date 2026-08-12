@@ -1,0 +1,28 @@
+{
+  "ticket_id": "5551002",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-5551002-0",
+        "sessionId": "5551002",
+        "timestamp": "2026-08-02T03:00:00.000Z",
+        "metadata": {"turn": 0},
+        "input": {
+          "user_input": "asdkjaslkdj random spam text",
+          "source": "ticket",
+          "other_info": {"freshdesk_id": "5551002", "title": "synthetic"}
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [],
+          "elapsed_s": 3.1
+        }
+      },
+      "observations": [
+        {"id": "o1", "traceId": "trace-5551002-0", "startTime": "2026-08-02T03:00:00.100Z", "name": "idempotency_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o2", "traceId": "trace-5551002-0", "startTime": "2026-08-02T03:00:00.200Z", "name": "escalation_history_guard", "input": {"source": "ticket"}, "output": {"blocked": false}},
+        {"id": "o3", "traceId": "trace-5551002-0", "startTime": "2026-08-02T03:00:00.300Z", "name": "input_guardrail", "input": {"user_input": "..."}, "output": {"blocked": true, "rule": "off_topic"}}
+      ]
+    }
+  ]
+}
