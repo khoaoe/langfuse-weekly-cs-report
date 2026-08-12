@@ -575,31 +575,44 @@ class FreshdeskUIClient:
     ) -> tuple[ConversationMetadata, ...]:
         """Fetch conversations while retaining only the six approved fields.
 
-        The UI API returns the full conversation list in one response (no
-        page parameter observed in the 2026-08-12 probe), tagged with a
-        meta.count. Fail closed rather than guess at pagination mechanics
-        if the returned count ever disagrees with the reported total.
+        The UI API paginates exactly like the REST equivalent (confirmed
+        live 2026-08-12: page/per_page are honoured and meta.count reports
+        the true total) -- an unpaginated call silently truncates any
+        ticket with more conversations than one page holds. Loop pages and
+        cross-check the total against meta.count; fail closed rather than
+        under-report a truncated fetch.
         """
 
         if not ticket_id.isdigit():
             raise FreshdeskCSATError("Freshdesk ticket ID is invalid")
-        raw = self._get_json(
-            f"/api/_/tickets/{ticket_id}/conversations",
-            not_found=(),
-            should_stop=should_stop,
-        )
-        if not isinstance(raw, Mapping):
-            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
-        value = raw.get("conversations")
-        if not isinstance(value, (list, tuple)):
-            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
-        meta = raw.get("meta")
-        reported_count = meta.get("count") if isinstance(meta, Mapping) else None
-        if (
-            isinstance(reported_count, int)
-            and not isinstance(reported_count, bool)
-            and reported_count != len(value)
-        ):
+        collected: list[object] = []
+        reported_count: int | None = None
+        for page in range(1, _MAX_CONVERSATION_PAGES + 1):
+            raw = self._get_json(
+                f"/api/_/tickets/{ticket_id}/conversations",
+                params={"page": page, "per_page": _CONVERSATION_PAGE_SIZE},
+                not_found=(),
+                should_stop=should_stop,
+            )
+            if not isinstance(raw, Mapping):
+                raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+            value = raw.get("conversations")
+            if not isinstance(value, (list, tuple)):
+                raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+            meta = raw.get("meta")
+            page_count = meta.get("count") if isinstance(meta, Mapping) else None
+            if isinstance(page_count, int) and not isinstance(page_count, bool):
+                if reported_count is not None and reported_count != page_count:
+                    raise FreshdeskCSATError(
+                        "Freshdesk conversation response is invalid"
+                    )
+                reported_count = page_count
+            collected.extend(value)
+            if len(value) < _CONVERSATION_PAGE_SIZE:
+                break
+        else:
+            raise FreshdeskCSATError("Freshdesk conversation page limit exceeded")
+        if reported_count is not None and reported_count != len(collected):
             raise FreshdeskCSATError("Freshdesk conversation response is incomplete")
         try:
             rows = tuple(
@@ -618,14 +631,14 @@ class FreshdeskUIClient:
                         )
                     ),
                 )
-                for item in value
+                for item in collected
                 if isinstance(item, Mapping)
             )
         except (OutcomeReconciliationError, TypeError):
             raise FreshdeskCSATError(
                 "Freshdesk conversation response is invalid"
             ) from None
-        if len(rows) != len(value):
+        if len(rows) != len(collected):
             raise FreshdeskCSATError("Freshdesk conversation response is invalid")
         return rows
 
