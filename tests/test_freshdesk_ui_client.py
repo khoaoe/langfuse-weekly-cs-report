@@ -286,6 +286,29 @@ def test_ui_list_ticket_metadata_resumes_from_checkpoint_page():
     assert result[0].ticket_id == "1"
 
 
+def test_ui_list_ticket_metadata_resumes_past_prior_call_page_budget():
+    """A checkpoint resume from page 301 (the boundary exposed 2026-08-12)
+    must still fetch, not immediately raise the page-limit error."""
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params["page"]
+        requests.append(page)
+        rows = [{"id": 1000 + int(page), "created_at": "2026-07-06T01:00:00Z"}]
+        return httpx.Response(200, json={"tickets": rows})
+
+    with FreshdeskUIClient(
+        "cs_session=abc123", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = client.list_ticket_metadata(
+            updated_since=datetime(2026, 7, 5, 17, tzinfo=timezone.utc),
+            start_page=301,
+        )
+
+    assert requests == ["301"]
+    assert [item.ticket_id for item in result] == ["1301"]
+
+
 def test_ui_list_ticket_metadata_rejects_duplicate_tickets_across_pages():
     def handler(request: httpx.Request) -> httpx.Response:
         rows = [{"id": 999, "created_at": "2026-07-06T01:00:00Z"}]

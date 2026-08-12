@@ -291,6 +291,30 @@ def test_list_ticket_metadata_resumes_from_checkpoint_page():
     assert [item.ticket_id for item in result] == ["1001", "1004"]
 
 
+def test_list_ticket_metadata_resumes_past_prior_call_page_budget():
+    """A checkpoint resume from page 301 (the boundary exposed 2026-08-12)
+    must still fetch, not immediately raise the page-limit error."""
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params["page"]
+        requests.append(page)
+        rows = [{"id": 1000 + int(page), "created_at": "2026-07-06T01:00:00Z"}]
+        return httpx.Response(200, json=rows)
+
+    with FreshdeskClient(
+        FreshdeskSettings("https://vngzalopay.freshdesk.com", "secret"),
+        transport=httpx.MockTransport(handler),
+    ) as client:
+        result = client.list_ticket_metadata(
+            updated_since=datetime(2026, 7, 5, 17, tzinfo=timezone.utc),
+            start_page=301,
+        )
+
+    assert requests == ["301"]
+    assert [item.ticket_id for item in result] == ["1301"]
+
+
 def test_incremental_entry_coverage_skips_records_already_checkpointed():
     tickets = (
         FreshdeskTicketMetadata("123", "2026-07-06T01:00:00Z"),

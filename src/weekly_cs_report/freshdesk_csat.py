@@ -407,7 +407,12 @@ class FreshdeskClient:
         | None = None,
         should_stop: Callable[[], bool] | None = None,
     ) -> tuple[FreshdeskTicketMetadata, ...]:
-        """List Freshdesk tickets and project only the join-safe metadata."""
+        """List Freshdesk tickets and project only the join-safe metadata.
+
+        `max_pages` bounds how many pages THIS call may fetch, not an
+        absolute page index -- resuming from a `start_page` beyond the
+        first call's `max_pages` must still be able to make progress.
+        """
 
         if (
             updated_since.tzinfo is None
@@ -416,7 +421,6 @@ class FreshdeskClient:
             or max_pages > 300
             or page_size != 50
             or start_page < 1
-            or start_page > max_pages + 1
             or any(not isinstance(item, FreshdeskTicketMetadata) for item in existing)
         ):
             raise FreshdeskCSATError("Freshdesk ticket listing options are invalid")
@@ -426,7 +430,8 @@ class FreshdeskClient:
         if len(seen_ids) != len(projected):
             raise FreshdeskCSATError("Freshdesk ticket response contains duplicate tickets")
         page = start_page
-        while page <= max_pages:
+        last_page = start_page + max_pages - 1
+        while page <= last_page:
             _check_fetch_deadline(should_stop)
             value = self._get_json(
                 "/api/v2/tickets",
@@ -691,6 +696,10 @@ class FreshdeskUIClient:
         window would be fetched by REST and then discarded downstream.
         Filtering by created_at here produces the identical final population,
         just without the wasted fetch.
+
+        `max_pages` bounds how many pages THIS call may fetch, not an
+        absolute page index -- resuming from a `start_page` beyond the
+        first call's `max_pages` must still be able to make progress.
         """
         if (
             updated_since.tzinfo is None
@@ -699,7 +708,6 @@ class FreshdeskUIClient:
             or max_pages > 300
             or page_size != 50
             or start_page < 1
-            or start_page > max_pages + 1
             or any(
                 not isinstance(item, FreshdeskTicketMetadata) for item in existing
             )
@@ -724,7 +732,8 @@ class FreshdeskUIClient:
             ("query_hash[0][value][to]", now.strftime("%Y-%m-%dT%H:%M:%S.999Z")),
         ]
         page = start_page
-        while page <= max_pages:
+        last_page = start_page + max_pages - 1
+        while page <= last_page:
             _check_fetch_deadline(should_stop)
             value = self._get_json(
                 "/api/_/tickets",
