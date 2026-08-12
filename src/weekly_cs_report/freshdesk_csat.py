@@ -79,6 +79,11 @@ class FreshdeskRateLimitExhausted(FreshdeskCSATError):
     """The current run must stop; its last private checkpoint remains usable."""
 
 
+class FreshdeskPageLimitReached(FreshdeskCSATError):
+    """The per-call page cap was hit before the listing finished; the
+    checkpoint written on the last page is resumable by the next call."""
+
+
 class FreshdeskCookieMissing(FreshdeskCSATError):
     """No Freshdesk cookie is configured; the caller must supply one."""
 
@@ -466,7 +471,7 @@ class FreshdeskClient:
             if is_complete:
                 return tuple(projected)
             page += 1
-        raise FreshdeskCSATError("Freshdesk ticket page limit exceeded")
+        raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
 
     def _get_json(
         self,
@@ -765,7 +770,7 @@ class FreshdeskUIClient:
                 return tuple(projected)
             page += 1
             self._sleep(0.1)
-        raise FreshdeskCSATError("Freshdesk ticket page limit exceeded")
+        raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
 
     def _get_json(
         self,
