@@ -108,6 +108,8 @@ _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _CSAT_CACHE_FILENAME = "csat_cache.json"
 _RECONCILIATION_CACHE_FILENAME = "outcome_reconciliation_cache.json"
 _ENTRY_COVERAGE_CACHE_FILENAME = "entry_coverage_cache.json"
+_FRESHDESK_COOKIE_FILENAME = "freshdesk_cookie"
+_FRESHDESK_COOKIE_STATE_FILENAME = "freshdesk_cookie_state.json"
 _TEMP_SNAPSHOT_NAME = re.compile(r"\.dashboard_snapshot\..+\.tmp\Z")
 _RUNTIME_DIRECTORY_ERROR = "dashboard runtime directory is unsafe"
 _REFRESH_ACTION_HEADER = "X-Dashboard-Action"
@@ -957,6 +959,8 @@ def _validated_runtime_directory(value: Path) -> Path:
             or entry.name == _CSAT_CACHE_FILENAME
             or entry.name == _RECONCILIATION_CACHE_FILENAME
             or entry.name == _ENTRY_COVERAGE_CACHE_FILENAME
+            or entry.name == _FRESHDESK_COOKIE_FILENAME
+            or entry.name == _FRESHDESK_COOKIE_STATE_FILENAME
             or _TEMP_SNAPSHOT_NAME.fullmatch(entry.name) is not None
         )
         if (
