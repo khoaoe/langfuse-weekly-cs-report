@@ -7,14 +7,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import ipaddress
-import json
 import os
 from pathlib import Path
 import re
 import stat
 import sys
 import threading
-import time
 from typing import Sequence
 from zoneinfo import ZoneInfo
 
@@ -112,10 +110,6 @@ _TEMP_SNAPSHOT_NAME = re.compile(r"\.dashboard_snapshot\..+\.tmp\Z")
 _RUNTIME_DIRECTORY_ERROR = "dashboard runtime directory is unsafe"
 _REFRESH_ACTION_HEADER = "X-Dashboard-Action"
 _REFRESH_ACTION_VALUE = "refresh"
-_COOKIE_ACTION_VALUE = "update_freshdesk_cookie"
-_COOKIE_BODY_LIMIT_BYTES = 8 * 1024
-_COOKIE_POST_LIMIT = 5
-_COOKIE_POST_WINDOW_SECONDS = 60.0
 _INLINE_STYLE = re.compile(r"<style>(.*?)</style>", re.DOTALL)
 _INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 _PLACEHOLDER = (
@@ -154,12 +148,7 @@ class WebSettings:
             raise ValueError("identity_header is not approved for proxy authentication")
 
 
-def create_app(
-    manager: SnapshotManager,
-    *,
-    settings: WebSettings,
-    runtime_directory: Path | None = None,
-) -> FastAPI:
+def create_app(manager: SnapshotManager, *, settings: WebSettings) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         emit_event("service_start")
@@ -183,7 +172,6 @@ def create_app(
     )
     app.state.snapshot_manager = manager
     app.state.resources_closed = False
-    app.state.freshdesk_cookie_post_times = []
 
     @app.middleware("http")
     async def security_boundary(request: Request, call_next):
@@ -282,83 +270,6 @@ def create_app(
             )
         view = manager.request_refresh(force=True)
         return JSONResponse(_state_envelope(view), status_code=202)
-
-    @app.get("/api/freshdesk-cookie")
-    async def freshdesk_cookie_state():
-        return JSONResponse(_freshdesk_cookie_state_payload(runtime_directory))
-
-    @app.post("/api/freshdesk-cookie")
-    async def freshdesk_cookie_update(request: Request):
-        if runtime_directory is None:
-            return JSONResponse(
-                {"detail": {"code": "freshdesk_cookie_unavailable"}},
-                status_code=503,
-            )
-        if request.headers.get(_REFRESH_ACTION_HEADER) != _COOKIE_ACTION_VALUE:
-            return JSONResponse(
-                {"detail": {"code": "cookie_action_required"}},
-                status_code=403,
-            )
-        now = time.monotonic()
-        recent = [
-            sent_at
-            for sent_at in app.state.freshdesk_cookie_post_times
-            if now - sent_at < _COOKIE_POST_WINDOW_SECONDS
-        ]
-        if len(recent) >= _COOKIE_POST_LIMIT:
-            return JSONResponse(
-                {"detail": {"code": "cookie_rate_limited"}},
-                status_code=429,
-            )
-        app.state.freshdesk_cookie_post_times = recent + [now]
-
-        body = await request.body()
-        if len(body) > _COOKIE_BODY_LIMIT_BYTES:
-            return JSONResponse(
-                {"detail": {"code": "cookie_too_large"}},
-                status_code=413,
-            )
-        try:
-            payload = json.loads(body)
-        except ValueError:
-            return JSONResponse(
-                {"detail": {"code": "cookie_invalid"}},
-                status_code=400,
-            )
-        cookie = payload.get("cookie") if isinstance(payload, dict) else None
-        if not isinstance(cookie, str) or not cookie.strip():
-            return JSONResponse(
-                {"detail": {"code": "cookie_invalid"}},
-                status_code=400,
-            )
-
-        from .freshdesk_csat import (
-            FreshdeskCSATError,
-            FreshdeskUIClient,
-            mark_cookie_verified,
-            write_freshdesk_cookie,
-        )
-
-        try:
-            with FreshdeskUIClient(cookie) as client:
-                client.verify()
-        except FreshdeskCSATError:
-            return JSONResponse(
-                {"detail": {"code": "cookie_invalid"}},
-                status_code=400,
-            )
-        try:
-            write_freshdesk_cookie(runtime_directory, cookie)
-            mark_cookie_verified(runtime_directory)
-        except FreshdeskCSATError:
-            return JSONResponse(
-                {"detail": {"code": "internal_error"}},
-                status_code=500,
-            )
-        return JSONResponse(
-            _freshdesk_cookie_state_payload(runtime_directory),
-            status_code=202,
-        )
 
     @app.get("/healthz")
     async def health():
@@ -669,9 +580,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             cancel_event=refresh_cancel_event,
         )
-        app = create_app(
-            manager, settings=web_settings, runtime_directory=runtime_directory
-        )
+        app = create_app(manager, settings=web_settings)
         app.state.langfuse_client = client
         uvicorn.run(
             app,
@@ -743,24 +652,6 @@ def _state_envelope(view: CacheView) -> dict[str, object]:
         "snapshot": (
             view.snapshot.dashboard_dict() if view.snapshot is not None else None
         ),
-    }
-
-
-def _freshdesk_cookie_state_payload(
-    runtime_directory: Path | None,
-) -> dict[str, object]:
-    if runtime_directory is None:
-        return {"state": "missing", "updated_at": None, "last_verified_at": None}
-    from .freshdesk_csat import FreshdeskCSATError, read_cookie_state
-
-    try:
-        state = read_cookie_state(runtime_directory)
-    except FreshdeskCSATError:
-        state = {"state": "missing", "updated_at": None, "last_verified_at": None}
-    return {
-        "state": state["state"],
-        "updated_at": state["updated_at"],
-        "last_verified_at": state["last_verified_at"],
     }
 
 

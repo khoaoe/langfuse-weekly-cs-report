@@ -10,7 +10,6 @@ import {
   updateTicketFilters,
 } from "../lib/dashboard-filters";
 import { useDashboardRuntime } from "../hooks/useDashboardRuntime";
-import { useFreshdeskCookieStatus } from "../hooks/useFreshdeskCookieStatus";
 import {
   ALL_WEEKS_SCOPE,
   SELECTED_WEEKS_SCOPE,
@@ -22,7 +21,6 @@ import { scopeSnapshotToWeeks } from "../lib/report-scope";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
 import { DecisionLedger } from "./DecisionLedger";
-import { FreshdeskCookieDialog } from "./FreshdeskCookieDialog";
 import { TicketExplorer } from "./TicketExplorer";
 import { WeeklyReport } from "./WeeklyReport";
 import styles from "./dashboard.module.css";
@@ -62,8 +60,6 @@ function DashboardBody() {
   const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
   const [qualityExpanded, setQualityExpanded] = useState(false);
   const { state, refresh, refreshDisabled, refreshHint } = useDashboardRuntime();
-  const { state: freshdeskCookie, submitCookie } = useFreshdeskCookieStatus();
-  const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
   const snapshot = state.snapshot;
   const reportView =
     snapshot === null ? null : selectView(snapshot, weekDefinition);
@@ -208,7 +204,6 @@ function DashboardBody() {
   }, [applyLedgerFilter]);
 
   return (
-    <>
     <AppShell
       weekDefinition={weekDefinition}
       onWeekDefinitionChange={setWeekDefinition}
@@ -224,8 +219,6 @@ function DashboardBody() {
       activeFilters={shellFilters}
       onRemoveFilter={removeFilter}
       onResetFilters={resetFilters}
-      freshdeskCookieState={freshdeskCookie?.state ?? null}
-      onOpenFreshdeskCookieDialog={() => setCookieDialogOpen(true)}
     >
       {snapshot === null ? (
         <div
@@ -288,8 +281,6 @@ function DashboardBody() {
             }}
             qualityExpanded={qualityExpanded}
             onQualityExpandedChange={setQualityExpanded}
-            freshdeskCookieState={freshdeskCookie?.state ?? null}
-            onOpenFreshdeskCookieDialog={() => setCookieDialogOpen(true)}
           />
           <TicketExplorer
             snapshot={snapshot}
@@ -301,12 +292,6 @@ function DashboardBody() {
         </>
       )}
     </AppShell>
-    <FreshdeskCookieDialog
-      open={cookieDialogOpen}
-      onClose={() => setCookieDialogOpen(false)}
-      onSubmit={submitCookie}
-    />
-    </>
   );
 }
 

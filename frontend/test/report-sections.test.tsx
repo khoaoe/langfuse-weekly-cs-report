@@ -632,9 +632,7 @@ describe("Below-fold analysis", () => {
       name: "Khách hài lòng tới đâu",
     });
     expect(segmentSection?.nextElementSibling).toBe(csatSection);
-    expect(csatSection).toHaveTextContent(
-      "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT.",
-    );
+    expect(csatSection).toHaveTextContent("Chưa có dữ liệu CSAT từ Freshdesk.");
     expect(csatSection).not.toHaveTextContent("0 phản hồi");
   });
 

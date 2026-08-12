@@ -127,27 +127,7 @@ def test_reporting_package_keeps_freshdesk_credentials_inside_csat_cli_only():
     )
     for name in serving_and_reporting:
         text = _required_text(REPORTING_PACKAGE / name)
-        if name == "web.py":
-            # spec 2026-08-12-freshdesk-cookie-crawl-design.md SS6.3 carves out
-            # one narrow exception: the serving process may perform exactly
-            # one live cookie-verify call and persist the cookie file. It
-            # must never import anything that fetches ticket or rating data,
-            # and must never touch REST credentials.
-            forbidden_freshdesk_names = (
-                "FreshdeskClient",
-                "FreshdeskSettings",
-                "fetch_csat_population",
-                "collect_ticket_ratings",
-                "load_agent_config",
-                "list_ticket_metadata",
-                "get_satisfaction_ratings",
-                "get_conversation_metadata",
-            )
-            assert not any(token in text for token in forbidden_freshdesk_names)
-            assert "FRESHDESK_BASE_URL" not in text
-            assert "FRESHDESK_API_KEY" not in text
-        else:
-            assert "freshdesk_csat" not in text
+        assert "freshdesk_csat" not in text
         assert all(token not in text for token in credential_tokens)
 
 
@@ -328,7 +308,6 @@ def test_dockerfile_has_an_explicit_secret_free_build_context():
         "COPY --from=python-deps /opt/venv/ /opt/venv/",
         "COPY --from=python-deps /app/src/ ./src/",
         "COPY config/ ./config/",
-        "COPY entrypoint.sh /app/entrypoint.sh",
     ]
     assert "LANGFUSE_" not in text
     assert not re.search(r"(?im)^ENV\s+DASHBOARD_AUTH_MODE\b", text)

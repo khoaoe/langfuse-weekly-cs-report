@@ -262,9 +262,6 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_csat.add_argument("--max-workers", type=int, default=2)
     fetch_csat.add_argument("--max-duration", type=int, default=30 * 60)
     fetch_csat.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
-    fetch_csat.add_argument(
-        "--auth", choices=("cookie", "rest"), default="cookie"
-    )
 
     reconcile_freshdesk = subparsers.add_parser(
         "reconcile-freshdesk-outcomes"
@@ -277,18 +274,12 @@ def build_parser() -> argparse.ArgumentParser:
     reconcile_freshdesk.add_argument(
         "--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH
     )
-    reconcile_freshdesk.add_argument(
-        "--auth", choices=("cookie", "rest"), default="cookie"
-    )
     entry_coverage = subparsers.add_parser("fetch-freshdesk-entry-coverage")
     entry_coverage.add_argument("--weeks", type=int, default=13)
     entry_coverage.add_argument("--max-workers", type=int, default=1)
     entry_coverage.add_argument("--max-duration", type=int, default=30 * 60)
     entry_coverage.add_argument(
         "--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH
-    )
-    entry_coverage.add_argument(
-        "--auth", choices=("cookie", "rest"), default="cookie"
     )
     parser.set_defaults(command="dry-run")
     return parser
@@ -1054,22 +1045,6 @@ def _freshdesk_settings():
     )
 
 
-def _freshdesk_client(auth: str, runtime_directory: Path):
-    from .freshdesk_csat import (
-        FreshdeskClient,
-        FreshdeskCSATError,
-        FreshdeskUIClient,
-        load_freshdesk_cookie,
-    )
-
-    if auth == "cookie":
-        cookie = load_freshdesk_cookie(runtime_directory)
-        return FreshdeskUIClient(cookie)
-    if auth == "rest":
-        return FreshdeskClient(_freshdesk_settings())
-    raise FreshdeskCSATError("Freshdesk auth mode is invalid")
-
-
 def _csat_population(runtime_directory: Path, weeks: int):
     from .dashboard_cache import ProtectedSnapshotStore
     from .freshdesk_csat import FreshdeskCSATError
@@ -1190,11 +1165,9 @@ def _run_fetch_freshdesk_entry_coverage_command(
         _cohort_week,
     )
     from .freshdesk_csat import (
-        FreshdeskCookieExpired,
+        FreshdeskClient,
         FreshdeskFetchDeadline,
         FreshdeskRateLimitExhausted,
-        mark_cookie_expired,
-        mark_cookie_verified,
     )
     from .outcome_reconciliation import load_reconciliation_agent_config
     import time as monotonic_time
@@ -1296,7 +1269,7 @@ def _run_fetch_freshdesk_entry_coverage_command(
             else 1
         )
         try:
-            with _freshdesk_client(args.auth, runtime_directory) as client:
+            with FreshdeskClient(_freshdesk_settings()) as client:
                 client.list_ticket_metadata(
                     updated_since=updated_since,
                     start_page=start_page,
@@ -1304,15 +1277,8 @@ def _run_fetch_freshdesk_entry_coverage_command(
                     on_page=write_inventory_page,
                     should_stop=should_stop,
                 )
-        except FreshdeskCookieExpired:
-            if args.auth == "cookie":
-                mark_cookie_expired(runtime_directory)
-            raise
         except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
             pass
-        else:
-            if args.auth == "cookie":
-                mark_cookie_verified(runtime_directory)
         if not inventory_complete:
             selected_records = tuple(
                 item
@@ -1414,7 +1380,7 @@ def _run_fetch_freshdesk_entry_coverage_command(
         last_checkpoint_write = now
 
     try:
-        with _freshdesk_client(args.auth, runtime_directory) as client:
+        with FreshdeskClient(_freshdesk_settings()) as client:
             result = fetch_entry_coverage_population(
                 client,
                 filtered_inventory,
@@ -1440,12 +1406,6 @@ def _run_fetch_freshdesk_entry_coverage_command(
                     index,
                 ),
             )
-        if args.auth == "cookie":
-            mark_cookie_verified(runtime_directory)
-    except FreshdeskCookieExpired:
-        if args.auth == "cookie":
-            mark_cookie_expired(runtime_directory)
-        raise
     except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
         try:
             checkpoint_after_interrupt = load_coverage_checkpoint(checkpoint_path)
@@ -1541,11 +1501,9 @@ def _run_fetch_csat_command(args: argparse.Namespace) -> dict[str, object]:
     from .csat_cache import CSATCacheError, load_csat_cache, write_csat_cache
     from .freshdesk_csat import (
         FreshdeskCSATError,
-        FreshdeskCookieExpired,
+        FreshdeskClient,
         fetch_csat_population,
         load_agent_config,
-        mark_cookie_expired,
-        mark_cookie_verified,
     )
 
     runtime_directory = Path(args.runtime_dir)
@@ -1584,25 +1542,18 @@ def _run_fetch_csat_command(args: argparse.Namespace) -> dict[str, object]:
             ) from error
 
     as_of = datetime.now(VIETNAM_TIMEZONE)
-    try:
-        with _freshdesk_client(args.auth, runtime_directory) as client:
-            result = fetch_csat_population(
-                client,
-                population,
-                config,
-                existing=existing,
-                as_of=as_of,
-                since_week=args.since_week,
-                max_workers=args.max_workers,
-                max_duration_seconds=args.max_duration,
-                on_week_complete=write_checkpoint,
-            )
-    except FreshdeskCookieExpired:
-        if args.auth == "cookie":
-            mark_cookie_expired(runtime_directory)
-        raise
-    if args.auth == "cookie":
-        mark_cookie_verified(runtime_directory)
+    with FreshdeskClient(_freshdesk_settings()) as client:
+        result = fetch_csat_population(
+            client,
+            population,
+            config,
+            existing=existing,
+            as_of=as_of,
+            since_week=args.since_week,
+            max_workers=args.max_workers,
+            max_duration_seconds=args.max_duration,
+            on_week_complete=write_checkpoint,
+        )
     if result.complete:
         try:
             write_csat_cache(runtime_directory / "csat_cache.json", result.cache)
@@ -1688,11 +1639,7 @@ def _run_reconcile_freshdesk_outcomes_command(
     args: argparse.Namespace,
 ) -> dict[str, object]:
     from .cohort import VIETNAM_TIMEZONE
-    from .freshdesk_csat import (
-        FreshdeskCookieExpired,
-        mark_cookie_expired,
-        mark_cookie_verified,
-    )
+    from .freshdesk_csat import FreshdeskClient
     from .outcome_reconciliation import (
         OutcomeReconciliationError,
         fetch_reconciliation_population,
@@ -1746,24 +1693,17 @@ def _run_reconcile_freshdesk_outcomes_command(
                 "Freshdesk reconciliation checkpoint could not be written"
             ) from error
 
-    try:
-        with _freshdesk_client(args.auth, runtime_directory) as client:
-            result = fetch_reconciliation_population(
-                client,
-                population,
-                config,
-                existing=existing,
-                as_of=datetime.now(VIETNAM_TIMEZONE),
-                max_workers=args.max_workers,
-                max_duration_seconds=args.max_duration,
-                on_week_complete=write_checkpoint,
-            )
-    except FreshdeskCookieExpired:
-        if args.auth == "cookie":
-            mark_cookie_expired(runtime_directory)
-        raise
-    if args.auth == "cookie":
-        mark_cookie_verified(runtime_directory)
+    with FreshdeskClient(_freshdesk_settings()) as client:
+        result = fetch_reconciliation_population(
+            client,
+            population,
+            config,
+            existing=existing,
+            as_of=datetime.now(VIETNAM_TIMEZONE),
+            max_workers=args.max_workers,
+            max_duration_seconds=args.max_duration,
+            on_week_complete=write_checkpoint,
+        )
     if result.complete:
         try:
             write_reconciliation_cache(

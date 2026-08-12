@@ -358,8 +358,6 @@ def test_entry_coverage_command_publishes_only_after_inventory_and_coverage_comp
                 "13",
                 "--max-duration",
                 "60",
-                "--auth",
-                "rest",
             ]
         )
     )
@@ -442,8 +440,6 @@ def test_entry_coverage_command_resumes_inventory_after_rate_limit_checkpoint(
             "13",
             "--max-duration",
             "60",
-            "--auth",
-            "rest",
         ]
     )
 
@@ -535,15 +531,7 @@ def test_fetch_csat_command_checkpoints_completed_weeks_without_publishing_parti
 
     result = cli_module._run_fetch_csat_command(
         build_parser().parse_args(
-            [
-                "fetch-csat",
-                "--runtime-dir",
-                str(runtime),
-                "--weeks",
-                "1",
-                "--auth",
-                "rest",
-            ]
+            ["fetch-csat", "--runtime-dir", str(runtime), "--weeks", "1"]
         )
     )
 
@@ -622,8 +610,6 @@ def test_reconciliation_command_checkpoints_without_exposing_identity(
                 str(runtime),
                 "--weeks",
                 "1",
-                "--auth",
-                "rest",
             ]
         )
     )
