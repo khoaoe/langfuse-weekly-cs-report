@@ -517,8 +517,6 @@ export interface CsatSectionProps {
     value: string,
   ) => void;
   readonly onBreakdownGroupingChange: () => void;
-  readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
-  readonly onOpenFreshdeskCookieDialog?: () => void;
 }
 
 /** Bot-only Freshdesk satisfaction, kept separate from Langfuse metrics. */
@@ -530,8 +528,6 @@ export function CsatSection({
   onBreakdownSelect,
   onBreakdownRowSelect,
   onBreakdownGroupingChange,
-  freshdeskCookieState = null,
-  onOpenFreshdeskCookieDialog = () => {},
 }: CsatSectionProps) {
   const [grouping, setGrouping] = useState<CsatGrouping>("outcome");
   const activeValue = activeBreakdownFilters[grouping];
@@ -565,27 +561,7 @@ export function CsatSection({
       </p>
 
       {csat === null ? (
-        <div className={csatStyles.empty}>
-          <p>
-            {freshdeskCookieState === "expired"
-              ? "Cookie Freshdesk đã hết hạn — CSAT đã dừng cập nhật."
-              : "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT."}
-          </p>
-          {freshdeskCookieState === "expired" ||
-          freshdeskCookieState === "missing" ? (
-            <div className={csatStyles.emptyActions}>
-              <button
-                type="button"
-                className={styles.action}
-                onClick={onOpenFreshdeskCookieDialog}
-              >
-                {freshdeskCookieState === "expired"
-                  ? "Cập nhật cookie"
-                  : "Kết nối Freshdesk"}
-              </button>
-            </div>
-          ) : null}
-        </div>
+        <p className={csatStyles.empty}>Chưa có dữ liệu CSAT từ Freshdesk.</p>
       ) : data === null ? (
         <p className={csatStyles.empty}>
           {effectiveWeek === ""
