@@ -22,6 +22,7 @@ import {
   type CsatGrouping,
 } from "./CsatBreakdownTable";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
+import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
 
 const FEEDBACK_PER_PAGE = 10;
@@ -48,8 +49,6 @@ function vietnamDateKey(value: string | number): string | null {
     ? `${parts.year}-${parts.month}-${parts.day}`
     : null;
 }
-
-type PaginationItem = number | "gap-before" | "gap-after";
 
 function aggregateWeeks(weeks: readonly CsatWeek[]): CsatWeek | null {
   if (weeks.length === 0) {
@@ -167,107 +166,6 @@ function selectCsatScope(csat: Csat, effectiveWeek: string): CsatWeek | null {
     return csat.by_week[effectiveWeek] ?? null;
   }
   return aggregateWeeks(Object.values(csat.by_week));
-}
-
-function paginationItems(
-  currentPage: number,
-  pageCount: number,
-): readonly PaginationItem[] {
-  if (pageCount <= 7) {
-    return Array.from({ length: pageCount }, (_, index) => index + 1);
-  }
-  if (currentPage <= 4) {
-    return [1, 2, 3, 4, 5, "gap-after", pageCount];
-  }
-  if (currentPage >= pageCount - 3) {
-    return [
-      1,
-      "gap-before",
-      pageCount - 4,
-      pageCount - 3,
-      pageCount - 2,
-      pageCount - 1,
-      pageCount,
-    ];
-  }
-  return [
-    1,
-    "gap-before",
-    currentPage - 1,
-    currentPage,
-    currentPage + 1,
-    "gap-after",
-    pageCount,
-  ];
-}
-
-function FeedbackPagination({
-  currentPage,
-  pageCount,
-  onPageChange,
-}: {
-  readonly currentPage: number;
-  readonly pageCount: number;
-  readonly onPageChange: (page: number) => void;
-}) {
-  if (pageCount <= 1) {
-    return null;
-  }
-
-  return (
-    <nav
-      className={csatStyles.pagination}
-      aria-label="Phân trang nội dung phản hồi CSAT"
-    >
-      {currentPage > 1 ? (
-        <button
-          type="button"
-          className={csatStyles.paginationStep}
-          onClick={() => onPageChange(currentPage - 1)}
-        >
-          Trang trước
-        </button>
-      ) : null}
-      <div className={csatStyles.paginationNumbers}>
-        {paginationItems(currentPage, pageCount).map((item) =>
-          typeof item === "number" ? (
-            <button
-              key={item}
-              type="button"
-              className={`${csatStyles.paginationPage} ${
-                item === currentPage ? csatStyles.paginationCurrent : ""
-              }`}
-              aria-label={`Trang ${item}`}
-              aria-current={item === currentPage ? "page" : undefined}
-              onClick={() => onPageChange(item)}
-            >
-              {item}
-            </button>
-          ) : (
-            <span
-              key={item}
-              className={csatStyles.paginationGap}
-              aria-hidden="true"
-            >
-              …
-            </span>
-          ),
-        )}
-      </div>
-      <span className={csatStyles.paginationCompact}>
-        {`Trang ${formatCount(currentPage)} / ${formatCount(pageCount)}`}
-      </span>
-      {currentPage < pageCount ? (
-        <button
-          type="button"
-          className={csatStyles.paginationStep}
-          onClick={() => onPageChange(currentPage + 1)}
-        >
-          Trang sau
-        </button>
-      ) : null}
-    </nav>
-  );
 }
 
 interface FeedbackWithWeek extends CsatFeedbackEntry {
@@ -489,10 +387,11 @@ function FeedbackDisclosure({
               ))}
             </ul>
           ) : null}
-          <FeedbackPagination
+          <Pagination
             currentPage={currentPage}
             pageCount={pageCount}
             onPageChange={changePage}
+            ariaLabel="Phân trang nội dung phản hồi CSAT"
           />
         </div>
       ) : null}

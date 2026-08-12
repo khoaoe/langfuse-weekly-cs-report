@@ -375,7 +375,6 @@
 .nav {
   position: relative;
   z-index: 1;
-  border-top: 1px solid var(--rule);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
 }
@@ -808,6 +807,13 @@
 .currentWeekRow th,
 .currentWeekRow td {
   background: color-mix(in srgb, var(--warning) 8%, transparent);
+}
+
+/* Keep the sticky column opaque even on the highlighted current-week row --
+   the transparent mix above lets horizontally-scrolled numeric columns show
+   through the "(WTD)" label otherwise. */
+.currentWeekRow .stickyColumn {
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
 .emptyCell {

@@ -433,3 +433,69 @@ def test_dns_override_rejects_a_malformed_value(monkeypatch):
 
     with pytest.raises(ValueError, match="LANGFUSE_DNS_OVERRIDE"):
         module._apply_dns_override()
+
+
+def test_list_traces_by_session_paginates_and_returns_sorted_by_timestamp():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        page_number = int(request.url.params["page"])
+        if page_number == 1:
+            return httpx.Response(
+                200,
+                json=page(
+                    [
+                        {"id": "trace-b", "sessionId": "7068785", "timestamp": "2026-08-01T02:00:00.000Z"},
+                        {"id": "trace-a", "sessionId": "7068785", "timestamp": "2026-08-01T01:00:00.000Z"},
+                    ],
+                    total_pages=2,
+                ),
+                request=request,
+            )
+        return httpx.Response(
+            200,
+            json=page(
+                [{"id": "trace-c", "sessionId": "7068785", "timestamp": "2026-08-01T03:00:00.000Z"}],
+                total_pages=2,
+            ),
+            request=request,
+        )
+
+    client = client_for(handler)
+    traces = client.list_traces_by_session("7068785")
+
+    assert [item["id"] for item in traces] == ["trace-a", "trace-b", "trace-c"]
+    assert [(request.method, request.url.path) for request in requests] == [
+        ("GET", "/api/public/traces"),
+        ("GET", "/api/public/traces"),
+    ]
+    assert dict(requests[0].url.params) == {
+        "sessionId": "7068785",
+        "fields": "core,io",
+        "page": "1",
+        "limit": "100",
+        "orderBy": "timestamp.asc",
+    }
+    assert dict(requests[1].url.params)["page"] == "2"
+
+
+def test_list_traces_by_session_returns_empty_list_for_single_empty_page():
+    client = client_for(lambda request: httpx.Response(200, json=page([]), request=request))
+
+    assert client.list_traces_by_session("7068785") == []
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["", "abc", "70-68785", "7068785 ", " 7068785", "70.68785"],
+    ids=("empty", "alpha", "hyphen", "trailing-space", "leading-space", "dot"),
+)
+def test_list_traces_by_session_rejects_non_numeric_session_id_before_request(session_id: str):
+    transport = TrackingTransport()
+    client = LangfuseClient(BASE_URL, PUBLIC_KEY, SECRET_KEY, transport=transport)
+
+    with pytest.raises(ValueError, match="session_id must be a non-empty numeric string"):
+        client.list_traces_by_session(session_id)
+
+    assert transport.requests == []

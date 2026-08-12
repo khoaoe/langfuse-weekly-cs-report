@@ -463,7 +463,6 @@ describe("DashboardScreen", () => {
   });
 
   it("exposes SPA hooks without putting an ambiguous coverage badge in the header", async () => {
-    const user = userEvent.setup();
     render(<DashboardScreen />);
 
     expect(await screen.findByRole("heading", { level: 1 })).toBeVisible();
@@ -485,14 +484,6 @@ describe("DashboardScreen", () => {
     expect(within(header).queryByText(/Skill.*(?:thiếu|%)/)).toBeNull();
     expect(document.getElementById("updatedAt")).toHaveTextContent("dữ liệu cũ");
     expect(document.getElementById("statusChip")).toHaveTextContent("Dữ liệu cũ");
-
-    await user.click(screen.getByText("Số liệu này đáng tin tới đâu"));
-    expect(
-      screen.getByText(
-        /Skill: 60,0% ticket có dữ liệu Skill để phân nhóm.*40,0% còn lại/s,
-      ),
-    ).toBeVisible();
-    expect(screen.queryByText(/Survey khách hàng: không có trong Langfuse/)).toBeNull();
   });
 
   it("ships the required operating controls and applies the stuck-ticket drill-down", async () => {

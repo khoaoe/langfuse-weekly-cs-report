@@ -251,8 +251,6 @@ function belowFold(
       activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
       onCsatBreakdownSelect={() => {}}
       onCsatBreakdownGroupingChange={() => {}}
-      qualityExpanded={false}
-      onQualityExpandedChange={() => {}}
       {...overrides}
     />
   );
@@ -1626,76 +1624,6 @@ describe("Below-fold analysis", () => {
     expect(within(panel).queryByRole("button", { name: "Chưa ghi nhận" })).toBeNull();
   });
 
-  it("exposes the Skill segment dimension and reports coverage from the rendered week", async () => {
-    const user = userEvent.setup();
-    const snapshot = snapshotWithActiveSkillBuckets({
-      "interbank-fund-transfer": {
-        total: 6,
-        ai_first: 5,
-        transferred: 1,
-        reopen: 1,
-      },
-      "Chưa ghi nhận": {
-        total: 4,
-        ai_first: 0,
-        transferred: 4,
-        reopen: 0,
-      },
-    });
-
-    renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-20" }));
-
-    const skillTab = screen.getByRole("tab", { name: "Skill" });
-    await user.click(skillTab);
-
-    expect(skillTab).toHaveAttribute("aria-selected", "true");
-    expect(
-      screen.getByText(
-        "Bảng dưới chỉ tính 6/10 ticket có ghi nhận skill. 4 ticket còn lại agent chưa gắn skill nên không nằm trong bảng này.",
-      ),
-    ).toBeVisible();
-  });
-
-  it("does not warn when rendered Skill coverage is exactly eighty percent", async () => {
-    const user = userEvent.setup();
-    const snapshot = snapshotWithActiveSkillBuckets({
-      "interbank-fund-transfer": {
-        total: 8,
-        ai_first: 7,
-        transferred: 1,
-        reopen: 1,
-      },
-      "Chưa ghi nhận": {
-        total: 2,
-        ai_first: 0,
-        transferred: 2,
-        reopen: 0,
-      },
-    });
-
-    renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-20" }));
-    await user.click(screen.getByRole("tab", { name: "Skill" }));
-
-    expect(screen.queryByText(/Bảng dưới chỉ tính/)).toBeNull();
-  });
-
-  it("does not render a Skill coverage line for a zero denominator", async () => {
-    const user = userEvent.setup();
-    const snapshot = snapshotWithActiveSkillBuckets({
-      "Chưa ghi nhận": {
-        total: 0,
-        ai_first: 0,
-        transferred: 0,
-        reopen: 0,
-      },
-    });
-
-    renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-20" }));
-    await user.click(screen.getByRole("tab", { name: "Skill" }));
-
-    expect(screen.queryByText(/Bảng dưới chỉ tính/)).toBeNull();
-  });
-
   it("names ticket-source dimensions without redundant methodology copy", () => {
     renderWithQuery(belowFold(baseSnapshot));
 
@@ -1780,55 +1708,6 @@ describe("Below-fold analysis", () => {
     expect(intentTab).toHaveFocus();
   });
 
-  it("keeps data quality collapsed by default and honors controlled expansion", () => {
-    const collapsed = renderWithQuery(belowFold(baseSnapshot));
-
-    expect(screen.getByText("Số liệu này đáng tin tới đâu").closest("details")).not
-      .toHaveAttribute("open");
-    expect(screen.getByText("Mở chi tiết")).toBeVisible();
-
-    collapsed.unmount();
-    renderWithQuery(belowFold(baseSnapshot, { qualityExpanded: true }));
-
-    expect(screen.getByText("Số liệu này đáng tin tới đâu").closest("details"))
-      .toHaveAttribute("open");
-    expect(screen.getByText("Thu gọn")).toBeVisible();
-  });
-
-  it("keeps quality to two useful lines with an explicit all-period denominator", () => {
-    const snapshot: DashboardSnapshot = {
-      ...baseSnapshot,
-      data_range: {
-        ...baseSnapshot.data_range,
-        weeks_without_data: ["2026-07-13"],
-      },
-    };
-    renderWithQuery(
-      belowFold(snapshot, {
-        weekDefinition: "mon_fri",
-        qualityExpanded: true,
-      }),
-    );
-
-    const panel = document.getElementById("coveragePanel");
-    expect(panel).not.toBeNull();
-    expect(panel?.querySelectorAll("p")).toHaveLength(2);
-    expect(screen.getByText(/Cập nhật .*cách đây/)).toBeVisible();
-    expect(
-      screen.getByText(
-        /Skill: 60,0% ticket có dữ liệu Skill để phân nhóm.*40,0% còn lại.*Tính trên toàn bộ 10 ticket trong 1 tuần, không phải riêng tuần đang xem/s,
-      ),
-    ).toBeVisible();
-    expect(
-      screen.queryByText(/Các tuần đó để trống, không phải bằng 0/),
-    ).toBeNull();
-    expect(document.getElementById("qualityGrid")).toBeNull();
-    expect(document.getElementById("gateGrid")).toBeNull();
-    expect(document.getElementById("stepResultCoveragePanel")).toBeNull();
-    expect(panel).not.toHaveTextContent(
-      /Ngưỡng độ tươi|Phiên hợp lệ|cửa sổ|Session sai khóa|Survey khách hàng|Step result/,
-    );
-  });
 });
 
 describe("Ticket Explorer", () => {
@@ -2046,6 +1925,27 @@ describe("Ticket Explorer", () => {
     expect(langfuseIcon).toHaveAttribute("alt", "");
     expect(langfuseIcon).toHaveAttribute("aria-hidden", "true");
     expect(langfuseIcon?.getAttribute("src")).toContain("langfuse-icon.svg");
+
+    const whyLink = screen.getByRole("link", {
+      name: "Xem giải thích vì sao agent xử lý ticket 6991254",
+    });
+    expect(whyLink).toHaveTextContent("Vì sao?");
+    expect(whyLink).toHaveAttribute("href", "#trace/6991254");
+    // Internal hash navigation, unlike the two external links right next to it.
+    expect(whyLink).not.toHaveAttribute("target");
+  });
+
+  it("keeps the Vì sao? link next to Freshdesk/Langfuse even for malformed IDs it must hide for", () => {
+    const { container } = render(
+      <TicketIdentifier
+        ticketId="ticket-6991254"
+        traceRangeStart="2026-07-20"
+        traceRangeEnd="2026-07-29T11:27:00Z"
+      />,
+    );
+
+    expect(container.textContent).toBe("ticket-6991254");
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   it("uses the oldest snapshot week instead of a fixed relative Tracing range", () => {

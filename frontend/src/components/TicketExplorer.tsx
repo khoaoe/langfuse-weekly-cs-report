@@ -33,6 +33,7 @@ import {
   writeVisibleTicketColumns,
 } from "../lib/ticket-columns";
 import { DataTableSortButton } from "./DataTableSortButton";
+import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
 import {
   FreshdeskTicketLink,
@@ -151,6 +152,14 @@ export function TicketIdentifier({
           />
         </a>
       )}
+      <a
+        className={ticketStyles.ticketLink}
+        href={`#trace/${ticketId}`}
+        aria-label={`Xem giải thích vì sao agent xử lý ticket ${ticketId}`}
+        title="Vì sao agent làm vậy?"
+      >
+        Vì sao?
+      </a>
     </span>
   );
 }
@@ -808,23 +817,12 @@ export function TicketExplorer({
       </div>
 
       <div className={ticketStyles.pager}>
-        <button
-          type="button"
-          className={styles.action}
-          disabled={page <= 1}
-          onClick={() => setPage((value) => Math.max(1, value - 1))}
-        >
-          Trang trước
-        </button>
-        <span>{`Trang ${formatCount(page)} / ${formatCount(lastPage)}`}</span>
-        <button
-          type="button"
-          className={styles.action}
-          disabled={page >= lastPage}
-          onClick={() => setPage((value) => value + 1)}
-        >
-          Trang sau
-        </button>
+        <Pagination
+          currentPage={page}
+          pageCount={lastPage}
+          onPageChange={setPage}
+          ariaLabel="Phân trang danh sách ticket"
+        />
       </div>
 
       <details id="ticketColumnChooser" className={ticketStyles.columnPicker}>

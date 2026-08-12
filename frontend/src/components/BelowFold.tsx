@@ -33,7 +33,6 @@ import {
   type SortValue,
   type TableSort,
 } from "../lib/table-sort";
-import { DataQualitySection } from "./DataQualitySection";
 import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
 import { CsatSection } from "./CsatSection";
@@ -556,21 +555,6 @@ function SegmentTable({
     `${formatCount(count)} · ${
       denominator === 0 ? "—" : formatRate(count / denominator)
     }`;
-  const skillCoverageLine = useMemo(() => {
-    if (dimension !== "skill" || total === 0) {
-      return null;
-    }
-    const missing = buckets["Chưa ghi nhận"]?.total ?? 0;
-    const recorded = total - missing;
-    if (recorded / total >= 0.8) {
-      return null;
-    }
-    return `Bảng dưới chỉ tính ${formatCount(recorded)}/${formatCount(
-      total,
-    )} ticket có ghi nhận skill. ${formatCount(
-      missing,
-    )} ticket còn lại agent chưa gắn skill nên không nằm trong bảng này.`;
-  }, [buckets, dimension, total]);
   const rows = useMemo(() => {
     const source = Object.entries(buckets)
       .filter(([, counts]) => counts.total > 0)
@@ -637,10 +621,6 @@ function SegmentTable({
           </button>
         ))}
       </div>
-
-      {skillCoverageLine === null ? null : (
-        <p className={styles.sectionNote}>{skillCoverageLine}</p>
-      )}
 
       <p
         id="segmentCaption"
@@ -759,8 +739,6 @@ export interface BelowFoldProps {
     value: string,
   ) => void;
   readonly onCsatBreakdownGroupingChange: () => void;
-  readonly qualityExpanded: boolean;
-  readonly onQualityExpandedChange: (expanded: boolean) => void;
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
 }
@@ -781,8 +759,6 @@ export function BelowFold({
   activeCsatBreakdownFilters,
   onCsatBreakdownSelect,
   onCsatBreakdownGroupingChange,
-  qualityExpanded,
-  onQualityExpandedChange,
   freshdeskCookieState = null,
   onOpenFreshdeskCookieDialog = () => {},
 }: BelowFoldProps) {
@@ -915,12 +891,6 @@ export function BelowFold({
         weekDefinition={weekDefinition}
         onShowStuckTickets={() => onShowStuckTickets(effectiveWeek)}
         onTicketFilterSelect={onTicketFilterSelect}
-      />
-
-      <DataQualitySection
-        snapshot={snapshot}
-        qualityExpanded={qualityExpanded}
-        onQualityExpandedChange={onQualityExpandedChange}
       />
     </>
   );

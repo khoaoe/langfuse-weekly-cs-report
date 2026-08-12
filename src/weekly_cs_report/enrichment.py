@@ -88,7 +88,7 @@ def build_trace_enrichment(
                 and rule not in taxonomy.guardrail_compliant_values
             ):
                 rules[trace_id].add(rule)
-                if _is_blocking_guardrail(observation, taxonomy):
+                if is_blocking_guardrail(observation, taxonomy):
                     stage = (
                         _nested_string(observation, "input", "stage")
                         if name == "skill_guardrail_checked"
@@ -266,7 +266,7 @@ def _nested_bool(observation: Mapping[str, object], container: str, key: str) ->
     return candidate if isinstance(candidate, bool) else None
 
 
-def _is_blocking_guardrail(
+def is_blocking_guardrail(
     observation: Mapping[str, object],
     taxonomy: Taxonomy,
 ) -> bool:

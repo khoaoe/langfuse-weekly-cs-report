@@ -23,10 +23,31 @@ import {
 } from "../lib/selectors";
 import { ThemeToggle } from "./ThemeToggle";
 import { ReportScopePicker } from "./ReportScopePicker";
+import { TraceExplainer } from "./TraceExplainer";
 import styles from "./dashboard.module.css";
 import themeStyles from "./theme-toggle.module.css";
 
 const WEEK_DEFINITIONS: readonly WeekDefinition[] = ["mon_fri", "mon_sun"];
+const TRACE_HASH = /^#trace(?:\/(.*))?$/;
+
+/** No react-router in this SPA (see CLAUDE.md) -- #trace/<ticketId> is parsed
+ * by hand and swaps only the main content area; the brand header and section
+ * nav stay so CS always has a way back to the dashboard. */
+function traceHashTicketId(hash: string): string | null | undefined {
+  const match = TRACE_HASH.exec(hash);
+  if (match === null) {
+    return undefined;
+  }
+  const raw = match[1];
+  if (raw === undefined || raw === "") {
+    return null;
+  }
+  try {
+    return decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+}
 
 const SECTIONS = [
   { id: "weekly", label: "Báo cáo tuần" },
@@ -34,7 +55,6 @@ const SECTIONS = [
   { id: "trend", label: "Xu hướng" },
   { id: "segments", label: "So sánh segment" },
   { id: "diagnostics", label: "Chẩn đoán" },
-  { id: "quality", label: "Chất lượng dữ liệu" },
   { id: "tickets", label: "Ticket Explorer" },
 ] as const;
 
@@ -91,6 +111,15 @@ export function AppShell({
   const [activeSection, setActiveSection] = useState<
     (typeof SECTIONS)[number]["id"]
   >(SECTIONS[0].id);
+  const [hash, setHash] = useState(() =>
+    typeof window === "undefined" ? "" : window.location.hash,
+  );
+  useEffect(() => {
+    const onHashChange = () => setHash(window.location.hash);
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
+  const traceTicketId = traceHashTicketId(hash);
   const helpPanel = useRef<HTMLElement>(null);
   const helpButton = useRef<HTMLButtonElement>(null);
   const shellRef = useRef<HTMLElement>(null);
@@ -156,6 +185,58 @@ export function AppShell({
     }, 0);
   };
 
+  const brandMark = (
+    <div className={styles.brand}>
+      <span
+        className={styles.logoFrame}
+        aria-hidden="true"
+        data-brand-logo-frame
+      >
+        <img
+          className={`${styles.logo} ${themeStyles.themedAsset} ${themeStyles.lightAsset}`}
+          src={logoColor}
+          alt=""
+          width="106"
+          height="24"
+          data-theme-asset="logo-light"
+        />
+        <img
+          className={`${styles.logo} ${themeStyles.themedAsset} ${themeStyles.darkAsset}`}
+          src={logoWhite}
+          alt=""
+          width="106"
+          height="24"
+          data-theme-asset="logo-dark"
+        />
+      </span>
+      <span className="visually-hidden">Zalopay</span>
+      <span className={styles.productName} data-product-name>
+        Báo cáo hiệu quả CS Agent
+      </span>
+    </div>
+  );
+
+  if (traceTicketId !== undefined) {
+    return (
+      <div className={styles.page}>
+        <a className="skip-link" href="#dashboardMain">
+          Tới nội dung chính
+        </a>
+        <header className={styles.shell}>
+          <div className={styles.shellTop}>
+            <div className={styles.shellInner}>
+              {brandMark}
+              <ThemeToggle />
+            </div>
+          </div>
+        </header>
+        <main id="dashboardMain" className={styles.main} tabIndex={-1}>
+          <TraceExplainer ticketId={traceTicketId} />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.page}>
       <a className="skip-link" href="#dashboardMain">
@@ -165,34 +246,7 @@ export function AppShell({
       <header className={styles.shell} ref={shellRef}>
         <div className={styles.shellTop}>
         <div className={styles.shellInner}>
-          <div className={styles.brand}>
-            <span
-              className={styles.logoFrame}
-              aria-hidden="true"
-              data-brand-logo-frame
-            >
-              <img
-                className={`${styles.logo} ${themeStyles.themedAsset} ${themeStyles.lightAsset}`}
-                src={logoColor}
-                alt=""
-                width="106"
-                height="24"
-                data-theme-asset="logo-light"
-              />
-              <img
-                className={`${styles.logo} ${themeStyles.themedAsset} ${themeStyles.darkAsset}`}
-                src={logoWhite}
-                alt=""
-                width="106"
-                height="24"
-                data-theme-asset="logo-dark"
-              />
-            </span>
-            <span className="visually-hidden">Zalopay</span>
-            <span className={styles.productName} data-product-name>
-              Báo cáo hiệu quả CS Agent
-            </span>
-          </div>
+          {brandMark}
 
           <div className={styles.shellMeta}>
             <span
@@ -317,6 +371,7 @@ export function AppShell({
                 className={styles.navLink}
                 href={`#${section.id}`}
                 aria-current={activeSection === section.id ? "location" : undefined}
+                onClick={() => setActiveSection(section.id)}
               >
                 {section.label}
               </a>

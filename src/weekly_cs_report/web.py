@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 import hashlib
 import ipaddress
 import json
@@ -22,6 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
+from .categories import load_taxonomy
 from .cli import ConfigurationError, PROJECT_ROOT, load_environment
 from .csat_cache import CSATCacheError, load_csat_cache
 from .dashboard_cache import CacheView, ProtectedSnapshotStore, SnapshotManager
@@ -34,13 +37,14 @@ from .entry_coverage_cache import (
     EntryCoverageCacheError,
     load_entry_coverage_cache,
 )
-from .langfuse_client import LangfuseClient
+from .langfuse_client import LangfuseAPIError, LangfuseClient
 from .reconciliation_cache import (
     ReconciliationCacheError,
     load_reconciliation_cache,
 )
 from .report import compute_report
 from .runtime_logging import configure_json_logging, emit_event
+from .trace_explainer import build_trace_explanation
 
 
 _AUTH_MODES = frozenset({"off", "proxy", "basic"})
@@ -90,6 +94,9 @@ _MAX_QUERY_PAIRS = len(_QUERY_NAMES)
 _MAX_QUERY_VALUE_LENGTH = 128
 _MAX_RAW_QUERY_BYTES = 8192
 _INTEGER_QUERY = re.compile(r"[0-9]{1,9}\Z")
+_TRACE_EXPLAIN_TICKET_ID = re.compile(r"[0-9]{1,20}\Z")
+_TRACE_EXPLAIN_CACHE_TTL_SECONDS = 300.0
+_TRACE_EXPLAIN_CACHE_MISS = object()
 _STATIC_ROOT = Path(__file__).with_name("static")
 _STATIC_INDEX = _STATIC_ROOT / "index.html"
 _SPA_ROOT = _STATIC_ROOT / "spa"
@@ -156,6 +163,47 @@ class WebSettings:
             raise ValueError("identity_header is not approved for proxy authentication")
 
 
+class _TraceExplainCache:
+    """In-process TTL cache keyed by ticket_id.
+
+    A cached value of None is a confirmed "no trace found" result, distinct
+    from a cache miss — both are legitimate outcomes worth remembering for
+    the TTL window. Langfuse errors are never cached: a transient outage
+    must not lock the next request out of a retry.
+    """
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = _TRACE_EXPLAIN_CACHE_TTL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._ttl_seconds = ttl_seconds
+        self._monotonic = monotonic
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[float, object]] = {}
+
+    def get(self, ticket_id: str) -> object:
+        with self._lock:
+            entry = self._entries.get(ticket_id)
+            if entry is None:
+                return _TRACE_EXPLAIN_CACHE_MISS
+            expires_at, value = entry
+            if self._monotonic() >= expires_at:
+                del self._entries[ticket_id]
+                return _TRACE_EXPLAIN_CACHE_MISS
+            return value
+
+    def set(self, ticket_id: str, value: object) -> None:
+        with self._lock:
+            self._entries[ticket_id] = (self._monotonic() + self._ttl_seconds, value)
+
+
+@lru_cache(maxsize=1)
+def _trace_explain_taxonomy():
+    return load_taxonomy(PROJECT_ROOT / "config" / "taxonomy.v2.json")
+
+
 def create_app(
     manager: SnapshotManager,
     *,
@@ -186,6 +234,7 @@ def create_app(
     app.state.snapshot_manager = manager
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
+    app.state.trace_explain_cache = _TraceExplainCache()
 
     @app.middleware("http")
     async def security_boundary(request: Request, call_next):
@@ -257,6 +306,41 @@ def create_app(
         except ValueError as error:
             return _invalid_query(_parameter_for_validation_error(error))
         return JSONResponse(payload)
+
+    @app.get("/api/trace-explain/{ticket_id}")
+    def trace_explain(ticket_id: str, request: Request):
+        # Deliberately sync: this route makes a live, potentially slow
+        # Langfuse HTTP call, so FastAPI must run it in its threadpool
+        # rather than block the single-worker event loop used elsewhere.
+        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
+            return JSONResponse(
+                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
+            )
+
+        cached = app.state.trace_explain_cache.get(ticket_id)
+        if cached is _TRACE_EXPLAIN_CACHE_MISS:
+            langfuse_client = getattr(request.app.state, "langfuse_client", None)
+            if langfuse_client is None:
+                return JSONResponse(
+                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                )
+            try:
+                explanation = build_trace_explanation(
+                    langfuse_client, ticket_id, _trace_explain_taxonomy()
+                )
+            except LangfuseAPIError:
+                return JSONResponse(
+                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                )
+            app.state.trace_explain_cache.set(ticket_id, explanation)
+        else:
+            explanation = cached
+
+        if explanation is None:
+            return JSONResponse(
+                {"detail": {"code": "trace_not_found"}}, status_code=404
+            )
+        return JSONResponse(asdict(explanation))
 
     @app.get("/api/freshdesk-entry-coverage/tickets")
     async def freshdesk_entry_coverage_tickets(request: Request):

@@ -60,7 +60,6 @@ function DashboardBody() {
     mode: "latest",
   });
   const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
-  const [qualityExpanded, setQualityExpanded] = useState(false);
   const { state, refresh, refreshDisabled, refreshHint } = useDashboardRuntime();
   const { state: freshdeskCookie, submitCookie } = useFreshdeskCookieStatus();
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
@@ -286,8 +285,6 @@ function DashboardBody() {
                 [grouping]: value,
               }));
             }}
-            qualityExpanded={qualityExpanded}
-            onQualityExpandedChange={setQualityExpanded}
             freshdeskCookieState={freshdeskCookie?.state ?? null}
             onOpenFreshdeskCookieDialog={() => setCookieDialogOpen(true)}
           />
