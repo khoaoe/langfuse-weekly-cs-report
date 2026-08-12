@@ -126,78 +126,53 @@ describe("App shell operating states", () => {
     expect(document.getElementById("dqBadge")).toBeNull();
   });
 
-  it("tracks the most visible existing section and disconnects its observer", () => {
-    type ObserverCallback = (
-      entries: readonly IntersectionObserverEntry[],
-    ) => void;
-    let callback: ObserverCallback | undefined;
-    const observe = vi.fn();
-    const disconnect = vi.fn();
-
-    class TestIntersectionObserver {
-      constructor(next: ObserverCallback) {
-        callback = next;
-      }
-
-      observe = observe;
-      disconnect = disconnect;
-      unobserve = vi.fn();
-      takeRecords = () => [];
-      root = null;
-      rootMargin = "";
-      thresholds = [];
+  it("tracks the section whose top has scrolled under the sticky header, and stops updating after unmount", () => {
+    const view = render(shell(baseSnapshot));
+    const header = screen.getByRole("banner");
+    const weekly = document.getElementById("weekly");
+    const tickets = document.getElementById("tickets");
+    if (weekly === null || tickets === null) {
+      throw new Error("fixture is missing the weekly/tickets sections");
     }
 
-    Object.defineProperty(window, "IntersectionObserver", {
-      configurable: true,
-      value: TestIntersectionObserver,
+    vi.spyOn(header, "getBoundingClientRect").mockReturnValue({
+      height: 100,
+    } as unknown as DOMRect);
+    const weeklyRect = vi.spyOn(weekly, "getBoundingClientRect");
+    const ticketsRect = vi.spyOn(tickets, "getBoundingClientRect");
+
+    // Both sections have scrolled past the header — the last one wins.
+    weeklyRect.mockReturnValue({ top: -400 } as unknown as DOMRect);
+    ticketsRect.mockReturnValue({ top: 50 } as unknown as DOMRect);
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
     });
+    expect(
+      screen.getByRole("link", { name: "Ticket Explorer" }),
+    ).toHaveAttribute("aria-current", "location");
+    expect(
+      screen.getByRole("link", { name: "Báo cáo tuần" }),
+    ).not.toHaveAttribute("aria-current");
 
-    try {
-      const view = render(shell(baseSnapshot));
-      expect(observe).toHaveBeenCalledTimes(2);
+    // Ticket Explorer scrolls back below the header — Báo cáo tuần leads again.
+    ticketsRect.mockReturnValue({ top: 500 } as unknown as DOMRect);
+    act(() => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+    expect(
+      screen.getByRole("link", { name: "Báo cáo tuần" }),
+    ).toHaveAttribute("aria-current", "location");
 
-      const weekly = document.getElementById("weekly");
-      const tickets = document.getElementById("tickets");
-      expect(weekly).not.toBeNull();
-      expect(tickets).not.toBeNull();
-
-      act(() => {
-        callback?.([
-          {
-            isIntersecting: true,
-            intersectionRatio: 0.25,
-            target: weekly,
-          },
-          {
-            isIntersecting: true,
-            intersectionRatio: 0.8,
-            target: tickets,
-          },
-        ] as unknown as IntersectionObserverEntry[]);
-      });
-      expect(
-        screen.getByRole("link", { name: "Ticket Explorer" }),
-      ).toHaveAttribute("aria-current", "location");
-
-      act(() => {
-        callback?.([
-          {
-            isIntersecting: false,
-            intersectionRatio: 0,
-            target: weekly,
-          },
-        ] as unknown as IntersectionObserverEntry[]);
-      });
-      expect(
-        screen.getByRole("link", { name: "Ticket Explorer" }),
-      ).toHaveAttribute("aria-current", "location");
-
-      view.unmount();
-      expect(disconnect).toHaveBeenCalledOnce();
-    } finally {
-      Reflect.deleteProperty(window, "IntersectionObserver");
-    }
+    const removeListener = vi.spyOn(window, "removeEventListener");
+    view.unmount();
+    expect(removeListener).toHaveBeenCalledWith(
+      "scroll",
+      expect.any(Function),
+    );
+    expect(removeListener).toHaveBeenCalledWith(
+      "resize",
+      expect.any(Function),
+    );
   });
 });
 

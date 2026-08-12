@@ -29,6 +29,11 @@ export function ReportScopePicker({
     allWeeksSelected ? observed.map((week) => week.cohort_week) : selectedWeeks,
   );
   const selectedRows = observed.filter((week) => selected.has(week.cohort_week));
+  const currentWeek = observed.find((week) => week.cohort_status === "wtd");
+  const isOnlyCurrentWeek =
+    currentWeek !== undefined &&
+    selected.size === 1 &&
+    selected.has(currentWeek.cohort_week);
   const summary = allWeeksSelected
     ? `Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`
     : selectedRows.length === 1 && selectedRows[0] !== undefined
@@ -81,6 +86,18 @@ export function ReportScopePicker({
           >
             {`Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`}
           </button>
+          {currentWeek !== undefined && !isOnlyCurrentWeek ? (
+            <button
+              type="button"
+              className={styles.reportScopeCurrent}
+              onClick={() => onChange([currentWeek.cohort_week])}
+            >
+              {`Về tuần hiện tại · ${formatWeekRange(
+                currentWeek.cohort_week,
+                weekDefinition,
+              )} · WTD`}
+            </button>
+          ) : null}
           <div className={styles.reportScopeOptions}>
             {observed.map((week) => {
               const checked = selected.has(week.cohort_week);
