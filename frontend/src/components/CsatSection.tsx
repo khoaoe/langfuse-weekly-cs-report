@@ -522,7 +522,6 @@ export function CsatSection({
           <time dateTime={csat.fetched_at}>
             {formatUpdatedAt(csat.fetched_at)}
           </time>
-          {" · "}Dữ liệu khác: Langfuse
           {stale ? (
             <>
               {" · "}

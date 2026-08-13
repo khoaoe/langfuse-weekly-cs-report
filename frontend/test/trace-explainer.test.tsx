@@ -219,15 +219,15 @@ describe("TraceExplainer", () => {
     await screen.findByText("Đã trả lời");
     window.location.hash = "#trace/7068785";
 
-    await user.click(screen.getByRole("link", { name: "Quay lại dashboard" }));
+    await user.click(screen.getByRole("button", { name: "Quay lại dashboard" }));
 
     expect(window.location.hash).not.toContain("trace");
   });
 
-  it("shows the back link even before any ticket is loaded", () => {
+  it("shows the back button even before any ticket is loaded", () => {
     renderExplainer(null);
 
-    expect(screen.getByRole("link", { name: "Quay lại dashboard" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Quay lại dashboard" })).toBeInTheDocument();
   });
 
   it("renders the agent response as separate paragraphs, not raw HTML tags", async () => {
