@@ -809,7 +809,7 @@ describe("Below-fold analysis", () => {
       expect(section).not.toHaveTextContent("%");
       const source = document.getElementById("csat-source");
       expect(source).toHaveTextContent(
-        /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+ · Dữ liệu khác: Langfuse\.$/,
+        /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+\.$/,
       );
       expect(source?.tagName).toBe("P");
       expect(document.getElementById("csat-attribution")).toBeNull();

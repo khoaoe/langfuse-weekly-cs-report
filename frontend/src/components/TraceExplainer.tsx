@@ -277,9 +277,15 @@ export function TraceExplainer({
         <h2 id="trace-explainer-title" className={styles.sectionTitle}>
           Vì sao agent làm vậy
         </h2>
-        <a className={traceStyles.langfuseLink} href="#weekly">
+        <button
+          type="button"
+          className={styles.action}
+          onClick={() => {
+            window.location.hash = "weekly";
+          }}
+        >
           <span aria-hidden="true">← </span>Quay lại dashboard
-        </a>
+        </button>
       </div>
 
       <form
