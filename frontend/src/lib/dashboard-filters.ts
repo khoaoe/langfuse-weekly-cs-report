@@ -92,6 +92,40 @@ export interface ActiveFilterChip {
   readonly label: string;
 }
 
+export interface TpeOptionSource {
+  readonly transstatus: string;
+  readonly step_result: string | null;
+  readonly status: string | null;
+}
+
+const TPE_UNCLASSIFIED_STATUS_LABEL = "Chưa phân loại";
+const TPE_MISSING_STEP_RESULT_LABEL = "—";
+
+/**
+ * Labels a Transstatus dropdown option for the Ticket Explorer, a dev/CS
+ * investigation tool. Unlike the C-level narrative sentence, the raw code
+ * pair stays visible in parentheses next to the resolved status so an
+ * investigator can still cross-reference the taxonomy directly.
+ */
+export function tpeOptionLabel(item: TpeOptionSource): string {
+  const statusLabel = item.status ?? TPE_UNCLASSIFIED_STATUS_LABEL;
+  const stepResult = item.step_result ?? TPE_MISSING_STEP_RESULT_LABEL;
+  return `${statusLabel} (${item.transstatus} / ${stepResult})`;
+}
+
+/**
+ * Picks the representative `(transstatus, step_result)` row for a dropdown
+ * option keyed only by `transstatus`. A single transstatus code can carry
+ * more than one step_result; `tpe` rows arrive sorted by count descending, so
+ * the first match is the most common pairing for that code.
+ */
+export function findTpeOptionSource(
+  transstatus: string,
+  tpe: readonly TpeOptionSource[],
+): TpeOptionSource | undefined {
+  return tpe.find((item) => item.transstatus === transstatus);
+}
+
 export function updateTicketFilters(
   current: TicketFilters,
   patch: Partial<TicketFilters>,

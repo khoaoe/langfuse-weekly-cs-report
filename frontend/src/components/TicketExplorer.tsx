@@ -18,6 +18,8 @@ import {
   EMPTY_TICKET_FILTERS,
   OUTCOME_FILTER_LABELS,
   activeTicketFilterChips,
+  findTpeOptionSource,
+  tpeOptionLabel,
   type TicketFilters,
   updateTicketFilters,
 } from "../lib/dashboard-filters";
@@ -643,11 +645,17 @@ export function TicketExplorer({
             onChange={(event) => update({ tpe_code: event.target.value })}
           >
             <option value="">Tất cả</option>
-            {filterOptions.tpe_code.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
+            {filterOptions.tpe_code.map((value) => {
+              const source = findTpeOptionSource(
+                value,
+                view.transfer_reasons.tpe,
+              );
+              return (
+                <option key={value} value={value}>
+                  {source ? tpeOptionLabel(source) : value}
+                </option>
+              );
+            })}
           </select>
         </label>
         <label className={ticketStyles.field}>
