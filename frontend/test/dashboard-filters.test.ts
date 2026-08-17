@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   EMPTY_TICKET_FILTERS,
   activeTicketFilterChips,
+  tpeOptionLabel,
   updateTicketFilters,
 } from "../src/lib/dashboard-filters";
 
@@ -33,5 +34,12 @@ describe("dashboard filter state", () => {
     expect(next.product_code).toBe("");
     expect(next.app).toBe("Zalopay");
     expect(current.product_code).toBe("IBFT");
+  });
+
+  it("nhan option Transstatus uu tien status, giu ma trong ngoac", () => {
+    expect(tpeOptionLabel({ transstatus: "1", step_result: "1", status: "SUCCESSFUL" }))
+      .toBe("SUCCESSFUL (1 / 1)");
+    expect(tpeOptionLabel({ transstatus: "-217", step_result: "-5025", status: null }))
+      .toBe("Chưa phân loại (-217 / -5025)");
   });
 });
