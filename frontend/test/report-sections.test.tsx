@@ -1389,6 +1389,7 @@ describe("Below-fold analysis", () => {
         .getAllByRole("columnheader")
         .map((header) => header.textContent),
     ).toEqual([
+      "Trạng thái",
       "Transstatus",
       "Step result",
       "Ticket",
@@ -1396,19 +1397,34 @@ describe("Below-fold analysis", () => {
     ]);
     const tpeRow = within(tpeTable).getByRole("row", { name: /-365/ });
     expect(
-      within(tpeRow).getByRole("rowheader", { name: "-365" }),
+      within(tpeRow).getByRole("rowheader", { name: "FAILED_FACE_AUTH" }),
+    ).toBeVisible();
+    expect(
+      within(tpeRow).getByRole("button", {
+        name: "Lọc Ticket Explorer theo Transstatus: -365",
+      }),
     ).toBeVisible();
     expect(within(tpeRow).getByText("-1013")).toBeVisible();
     expect(within(tpeRow).getByText("2")).toBeVisible();
     expect(within(tpeRow).getByText("66,7%")).toBeVisible();
     const missingRow = within(tpeTable).getByRole("row", { name: /-217/ });
     expect(
+      within(missingRow).getByRole("rowheader", { name: "Chưa phân loại" }),
+    ).toBeVisible();
+    expect(
       within(missingRow).getByText("Không có Step result"),
     ).toBeVisible();
     expect(tpeRegion.querySelector("#stepResultCoverage")).toHaveTextContent(
       "1/3 ticket chuyển CS (33,3%) không có Step result. Các ca này hiện chưa truy được tới bước lỗi cụ thể.",
     );
-    expect(tpeRegion).not.toHaveTextContent(/case|taxonomy|Đang xử lý/i);
+    // "taxonomy" now legitimately appears in the TPE status caption
+    // (#tpeStatusCaption); everything else in the section must still avoid
+    // the legacy map/case wording it replaced.
+    const tpeRegionWithoutStatusCaption = tpeRegion.cloneNode(true) as HTMLElement;
+    tpeRegionWithoutStatusCaption.querySelector("#tpeStatusCaption")?.remove();
+    expect(tpeRegionWithoutStatusCaption.textContent).not.toMatch(
+      /case|taxonomy|Đang xử lý/i,
+    );
 
     const conditionRegion = screen.getByRole("region", {
       name: "Lý do chuyển CS",

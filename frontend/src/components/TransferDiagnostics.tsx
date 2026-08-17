@@ -26,7 +26,7 @@ import styles from "./dashboard.module.css";
 
 type TpeReason = TransferReasons["tpe"][number];
 type TransferTrigger = TransferReasons["triggers"][number];
-type TpeSortKey = "transstatus" | "step_result" | "count" | "share";
+type TpeSortKey = "status" | "transstatus" | "step_result" | "count" | "share";
 type TransferReasonSortKey =
   | "reason"
   | "rule"
@@ -47,7 +47,19 @@ function formatTransferShare(count: number, denominator: number): string {
   return denominator === 0 ? "—" : formatRate(count / denominator);
 }
 
+const TPE_UNCLASSIFIED_LABEL = "Chưa phân loại";
+
+function tpeStatusLabel(status: string | null): string {
+  return status === null ? TPE_UNCLASSIFIED_LABEL : status;
+}
+
 const TPE_SORT_COLUMNS: readonly TpeSortColumn[] = [
+  {
+    key: "status",
+    label: "Trạng thái",
+    initialDirection: "asc",
+    value: (item) => item.status,
+  },
   {
     key: "transstatus",
     label: "Transstatus",
@@ -138,6 +150,7 @@ function TpeZone({
                 <tr>
                   {TPE_SORT_COLUMNS.map((column, index) => {
                     const active = sort.key === column.key;
+                    const numeric = index >= 3;
                     return (
                       <th
                         key={column.key}
@@ -145,7 +158,7 @@ function TpeZone({
                         className={
                           index === 0
                             ? styles.stickyColumn
-                            : index >= 2
+                            : numeric
                               ? styles.numeric
                               : undefined
                         }
@@ -161,7 +174,7 @@ function TpeZone({
                           label={column.label}
                           active={active}
                           direction={sort.direction}
-                          align={index >= 2 ? "end" : "start"}
+                          align={numeric ? "end" : "start"}
                           onClick={() =>
                             setSort((current) =>
                               toggleTableSort(
@@ -180,7 +193,7 @@ function TpeZone({
               <tbody>
                 {transfer.tpe.length === 0 ? (
                   <tr>
-                    <td className={styles.emptyCell} colSpan={4}>
+                    <td className={styles.emptyCell} colSpan={5}>
                       Không có Transstatus trong phạm vi đang chọn.
                     </td>
                   </tr>
@@ -190,6 +203,9 @@ function TpeZone({
                     key={`tpe-${item.transstatus}-${item.step_result ?? "missing"}`}
                   >
                     <th scope="row" className={styles.stickyColumn}>
+                      {tpeStatusLabel(item.status)}
+                    </th>
+                    <td>
                       <FilterValueButton
                         label={item.transstatus}
                         filterLabel="Transstatus"
@@ -197,7 +213,7 @@ function TpeZone({
                           onTicketFilterSelect({ tpe_code: item.transstatus })
                         }
                       />
-                    </th>
+                    </td>
                     <td>
                       {item.step_result === null
                         ? "Không có Step result"
@@ -222,6 +238,9 @@ function TpeZone({
                   transfer.step_result_missing.count,
                   transfer.step_result_missing.denominator,
                 )}
+          </p>
+          <p id="tpeStatusCaption" className={styles.sectionNote}>
+            {'Trạng thái lấy từ bảng TPE của taxonomy. "Chưa phân loại" nghĩa là cặp mã chưa có trong bảng — không phải lỗi giao dịch.'}
           </p>
         </div>
       </details>

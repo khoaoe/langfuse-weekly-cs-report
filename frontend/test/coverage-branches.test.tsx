@@ -335,7 +335,12 @@ describe("below-fold degraded states", () => {
     expect(document.getElementById("gateGrid")).toBeNull();
     expect(screen.queryByText("-999 · 1 ticket")).toBeNull();
     expect(screen.queryByText("-998 · Chờ map · 2 ticket")).toBeNull();
-    expect(screen.queryByText(/taxonomy/i)).toBeNull();
+    // "taxonomy" now legitimately appears in the TPE status caption
+    // (#tpeStatusCaption); only the legacy map/case wording it replaced is
+    // still disallowed here.
+    expect(
+      screen.queryByText(/taxonomy/i, { ignore: "#tpeStatusCaption" }),
+    ).toBeNull();
   });
 
   it("renders exact-source TPE signals without dividing by zero", async () => {
@@ -400,7 +405,12 @@ describe("below-fold degraded states", () => {
       ),
     ).toHaveLength(1);
     expect(document.getElementById("stepResultCoveragePanel")).toBeNull();
-    expect(screen.queryByText(/taxonomy/i)).toBeNull();
+    // "taxonomy" now legitimately appears in the TPE status caption
+    // (#tpeStatusCaption); only the legacy map/case wording it replaced is
+    // still disallowed here.
+    expect(
+      screen.queryByText(/taxonomy/i, { ignore: "#tpeStatusCaption" }),
+    ).toBeNull();
   });
 
   it("calls out a majority once in transfer diagnostics when most transfers lack Step result", () => {

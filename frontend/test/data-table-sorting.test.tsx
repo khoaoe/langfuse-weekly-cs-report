@@ -35,6 +35,16 @@ function rowHeaders(table: HTMLElement): string[] {
     .map((cell) => cell.textContent?.trim() ?? "");
 }
 
+// The TPE table's row header (first column) is now the governed Trạng thái
+// label, not the Transstatus code — this reads the Transstatus column
+// (second column) directly to check sort order on the exact-source code.
+function transstatusCells(table: HTMLElement): string[] {
+  return within(table)
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => within(row).getAllByRole("cell")[0]?.textContent?.trim() ?? "");
+}
+
 function weekRow(
   cohortWeek: string,
   totalTickets: number,
@@ -434,17 +444,17 @@ describe("sorting bảng dữ liệu", () => {
     expect(
       within(table).getByRole("columnheader", { name: /Ticket/ }),
     ).toHaveAttribute("aria-sort", "descending");
-    expect(rowHeaders(table)).toEqual(["-10", "-2", "-383"]);
+    expect(transstatusCells(table)).toEqual(["-10", "-2", "-383"]);
 
     await user.click(
       within(table).getByRole("button", { name: /Sắp xếp theo Transstatus/ }),
     );
-    expect(rowHeaders(table)).toEqual(["-383", "-10", "-2"]);
+    expect(transstatusCells(table)).toEqual(["-383", "-10", "-2"]);
 
     await user.click(
       within(table).getByRole("button", { name: /Sắp xếp theo Step result/ }),
     );
-    expect(rowHeaders(table)).toEqual(["-383", "-10", "-2"]);
+    expect(transstatusCells(table)).toEqual(["-383", "-10", "-2"]);
   });
 
   it("sorts transfer reasons and shows exact source values for CS and Dev", async () => {

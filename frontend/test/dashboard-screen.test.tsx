@@ -7,6 +7,7 @@ import {
   divergentCohortEnvelope,
   equivalentWtdCohortEnvelope,
   staleViewLevelRuleGt4Envelope,
+  tpeStatusDiagnosticsEnvelope,
 } from "./fixtures/cohort";
 import { dashboardEnvelopeFixture, loadingEnvelopeFixture } from "./fixtures/dashboard";
 import { server } from "./msw/server";
@@ -742,6 +743,25 @@ describe("DashboardScreen", () => {
     expect(
       within(explorer).getByRole("combobox", { name: "Đã chuyển CS" }),
     ).toHaveValue("true");
+  });
+
+  it("hien status da resolve va gan nhan chua phan loai cho phan con lai", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/dashboard", () =>
+        HttpResponse.json(tpeStatusDiagnosticsEnvelope()),
+      ),
+    );
+    render(<DashboardScreen />);
+
+    await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
+    await user.click(
+      screen.getByRole("heading", { name: "Transstatus và Step result" }),
+    );
+
+    const tpeTable = document.getElementById("tpeDistribution") as HTMLElement;
+    expect(within(tpeTable).getByText("SUCCESSFUL")).toBeInTheDocument();
+    expect(within(tpeTable).getByText("Chưa phân loại")).toBeInTheDocument();
   });
 
   it("keeps the last-good report visible after a refresh fails", async () => {
