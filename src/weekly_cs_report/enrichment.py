@@ -12,7 +12,8 @@ import re
 from typing import Mapping, Sequence
 
 from .categories import Taxonomy
-from .models import TicketDimensions, TraceRecord, TransferTrigger
+from .models import SessionMetrics, TicketDimensions, TraceRecord, TransferTrigger
+from .tpe_status import resolve_tpe_status
 
 
 ENRICHMENT_NAMES = (
@@ -386,3 +387,23 @@ def _safe_skill(value: str) -> bool:
 
 def _only_value(values: set[str]) -> str | None:
     return next(iter(values)) if len(values) == 1 else None
+
+
+def build_tpe_status_index(
+    sessions: Sequence[SessionMetrics], taxonomy: Taxonomy
+) -> dict[tuple[str, str | None], str]:
+    """Map every observed (transstatus, step_result) to its governed status.
+
+    Only observed pairs are included, so the payload never ships the taxonomy
+    itself.  Unmapped pairs are omitted entirely — absence means "not mapped",
+    which the browser renders as unclassified rather than guessing.
+    """
+    index: dict[tuple[str, str | None], str] = {}
+    for session in sessions:
+        for pair in session.dimensions.tpe_signals:
+            if pair in index:
+                continue
+            status = resolve_tpe_status(pair[0], pair[1], taxonomy)
+            if status is not None:
+                index[pair] = status
+    return index

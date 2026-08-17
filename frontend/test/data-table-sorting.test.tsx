@@ -110,16 +110,19 @@ function analysisSnapshot(): DashboardSnapshot {
         transstatus: "-383",
         step_result: "-1013",
         count: 2,
+        status: null,
       },
       {
         transstatus: "-2",
         step_result: null,
         count: 5,
+        status: null,
       },
       {
         transstatus: "-10",
         step_result: "-1006",
         count: 5,
+        status: null,
       },
     ],
     guardrail: [

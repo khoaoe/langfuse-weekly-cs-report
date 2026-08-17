@@ -346,8 +346,8 @@ describe("below-fold degraded states", () => {
       step_result_missing: { count: 0, denominator: 0 },
       guardrail: [{ rule: "off_topic", count: 1 }],
       tpe: [
-        { transstatus: "-1", step_result: null, count: 1 },
-        { transstatus: "-2", step_result: "-1006", count: 1 },
+        { transstatus: "-1", step_result: null, count: 1, status: null },
+        { transstatus: "-2", step_result: "-1006", count: 1, status: null },
       ],
       escalation_guard_blocked: { count: 0, denominator: 0 },
     });
@@ -387,7 +387,7 @@ describe("below-fold degraded states", () => {
       ],
       step_result_missing: { count: 2, denominator: 5 },
       guardrail: [],
-      tpe: [{ transstatus: "-365", step_result: "-1024", count: 3 }],
+      tpe: [{ transstatus: "-365", step_result: "-1024", count: 3, status: null }],
       escalation_guard_blocked: { count: 0, denominator: 5 },
     });
 
@@ -418,7 +418,7 @@ describe("below-fold degraded states", () => {
       ],
       step_result_missing: { count: 4, denominator: 5 },
       guardrail: [],
-      tpe: [{ transstatus: "-365", step_result: "-1024", count: 1 }],
+      tpe: [{ transstatus: "-365", step_result: "-1024", count: 1, status: null }],
       escalation_guard_blocked: { count: 0, denominator: 5 },
     });
 

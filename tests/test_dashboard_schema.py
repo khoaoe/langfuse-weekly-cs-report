@@ -14,6 +14,7 @@ from weekly_cs_report.dashboard_schema import (
     TicketRow,
     _safe_string,
     _ticket_sort_value,
+    _tpe_rows_from_signals,
     project_dashboard,
     ticket_page,
 )
@@ -126,7 +127,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 20
+    assert snapshot.storage_dict()["schema_version"] == 21
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -171,7 +172,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 20
+    value["schema_version"] = 21
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -851,21 +852,25 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
                 "transstatus": "-365",
                 "step_result": "-1013",
                 "count": 2,
+                "status": "FAILED_FACE_AUTH",
             },
             {
                 "transstatus": "-365",
                 "step_result": "-1006",
                 "count": 1,
+                "status": "FAILED_NFC",
             },
             {
                 "transstatus": "-365",
                 "step_result": None,
                 "count": 1,
+                "status": None,
             },
             {
                 "transstatus": "-383",
                 "step_result": None,
                 "count": 1,
+                "status": "PENDING",
             },
         ],
         "step_result_missing": {"count": 2, "denominator": 4},
@@ -893,6 +898,17 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
         buckets == {("Chưa ghi nhận" if dimension == "skill" else "Không xác định"): zero_bucket}
         for dimension, buckets in empty_week["segments"].items()
     )
+
+
+def test_tpe_rows_carry_resolved_status_and_leave_unmapped_null():
+    """Status phai di kem tung dong, va cap chua map phai la None."""
+    rows = _tpe_rows_from_signals(
+        {("1", "1"): 19, ("-217", "-5025"): 2},
+        {("1", "1"): "SUCCESSFUL"},
+    )
+    by_pair = {(r["transstatus"], r["step_result"]): r for r in rows}
+    assert by_pair[("1", "1")]["status"] == "SUCCESSFUL"
+    assert by_pair[("-217", "-5025")]["status"] is None
 
 
 def test_guardrail_reason_counts_are_overlapping_not_a_partition():
@@ -1243,7 +1259,7 @@ def test_public_dashboard_does_not_project_meta_tpe_taxonomy_mapping():
     dashboard = _snapshot().dashboard_dict()
     assert dashboard["unmapped_tpe_codes"] == []
     tpe_row = dashboard["views"]["mon_sun"]["transfer_reasons"]["tpe"][0]
-    assert set(tpe_row) == {"transstatus", "step_result", "count"}
+    assert set(tpe_row) == {"transstatus", "step_result", "count", "status"}
 
     value = _snapshot().storage_dict()
     value["dashboard"]["unmapped_tpe_codes"] = [

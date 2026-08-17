@@ -243,6 +243,7 @@ def test_compute_report_applies_complete_bulk_enrichment_without_per_ticket_obse
             "transstatus": "-365",
             "step_result": "-1013",
             "count": 1,
+            "status": "FAILED_FACE_AUTH",
         }
     ]
 
