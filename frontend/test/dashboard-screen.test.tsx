@@ -464,6 +464,11 @@ describe("DashboardScreen", () => {
     expect(document.body).not.toHaveTextContent(/[①②③④⑤⑥]/);
   });
 
+  it("co link dieu huong toi muc CSAT", async () => {
+    render(<DashboardScreen />);
+    expect(await screen.findByRole("link", { name: "Mức hài lòng" })).toHaveAttribute("href", "#csat");
+  });
+
   it("exposes SPA hooks without putting an ambiguous coverage badge in the header", async () => {
     render(<DashboardScreen />);
 

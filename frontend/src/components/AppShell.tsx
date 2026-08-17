@@ -54,6 +54,7 @@ const SECTIONS = [
   { id: "entry-coverage", label: "Độ phủ Freshdesk" },
   { id: "trend", label: "Xu hướng" },
   { id: "segments", label: "So sánh segment" },
+  { id: "csat", label: "Mức hài lòng" },
   { id: "diagnostics", label: "Chẩn đoán" },
   { id: "tickets", label: "Ticket Explorer" },
 ] as const;
