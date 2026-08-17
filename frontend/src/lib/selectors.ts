@@ -251,12 +251,23 @@ export interface LedgerCell {
    * something narrower than the number shown.
    */
   readonly filterPatch: Partial<TicketFilters> | null;
-  /**
-   * Names the single weakest coverage dimension so every KPI cell carries
-   * the same reliability caveat, wherever the reader happens to be looking.
-   * Null once every dimension clears `COVERAGE_BADGE_FLOOR`.
-   */
-  readonly coverageNote?: string | null;
+}
+
+/**
+ * The single sentence naming the weakest coverage dimension, shared by the
+ * whole ledger rather than duplicated onto every cell.
+ *
+ * `selectWeakestCoverage()` is a snapshot-wide scalar — there is no mapping
+ * from a coverage dimension (Category, TPE, Skill, ...) to one particular
+ * ledger cell (AI First, Transfer, Reopen, >3 turns) — so the caveat belongs
+ * once, next to the ledger, not repeated on every KPI. Null once every
+ * dimension clears `COVERAGE_BADGE_FLOOR`.
+ */
+export function selectCoverageNote(snapshot: DashboardSnapshot): string | null {
+  const weakest = selectWeakestCoverage(snapshot);
+  return weakest === null
+    ? null
+    : `Độ phủ ${weakest.label} ${formatRate(1 - weakest.missingShare)}`;
 }
 
 function share(numerator: number, denominator: number): string {
@@ -341,14 +352,6 @@ export function selectLedger(
         ? "ticket trong các tuần đã chọn"
         : "ticket tuần này";
 
-  const weakestCoverage = selectWeakestCoverage(snapshot);
-  const coverageNote =
-    weakestCoverage === null
-      ? null
-      : `Độ phủ ${weakestCoverage.label} ${formatRate(
-          1 - weakestCoverage.missingShare,
-        )}`;
-
   return [
     {
       id: "ledger-ai-first",
@@ -362,7 +365,6 @@ export function selectLedger(
             )} ${populationLabel}`,
       tone: "brand",
       filterPatch: null,
-      coverageNote,
     },
     {
       id: "ledger-transfer",
@@ -376,7 +378,6 @@ export function selectLedger(
             )} ${populationLabel}`,
       tone: "neutral",
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
-      coverageNote,
     },
     {
       id: "ledger-reopen",
@@ -391,7 +392,6 @@ export function selectLedger(
             )} trong ${formatCount(scope.reopenDenominator)} ticket AI First`,
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
       filterPatch: null,
-      coverageNote,
     },
     {
       id: "ledger-gt4",
@@ -408,7 +408,6 @@ export function selectLedger(
         scope.gt4WithoutCs === 0
           ? null
           : { gt4_turn: "true", transferred: "false" },
-      coverageNote,
     },
   ];
 }

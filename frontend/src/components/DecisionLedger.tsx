@@ -6,6 +6,7 @@ import {
   COHORT_LABELS,
   buildNarrativeInput,
   selectAttentionItems,
+  selectCoverageNote,
   selectLedger,
   selectScope,
   selectView,
@@ -40,6 +41,7 @@ export function DecisionLedger({
   const scope = selectScope(snapshot, weekDefinition, activeWeek);
   const latest = scope.week;
   const cells = selectLedger(snapshot, weekDefinition, activeWeek);
+  const coverageNote = selectCoverageNote(snapshot);
   const attention = selectAttentionItems(snapshot, weekDefinition, activeWeek);
   const narrative = buildDeterministicNarrative(
     buildNarrativeInput(snapshot, weekDefinition, activeWeek),
@@ -116,11 +118,6 @@ export function DecisionLedger({
                   {cell.support === null ? null : (
                     <span className={styles.ledgerSupport}>{cell.support}</span>
                   )}
-                  {cell.coverageNote == null ? null : (
-                    <span className={styles.ledgerSupport}>
-                      {cell.coverageNote}
-                    </span>
-                  )}
                 </div>
               ) : (
                 <div
@@ -138,16 +135,20 @@ export function DecisionLedger({
                     {cell.support === null ? null : (
                       <span className={styles.ledgerSupport}>{cell.support}</span>
                     )}
-                    {cell.coverageNote == null ? null : (
-                      <span className={styles.ledgerSupport}>
-                        {cell.coverageNote}
-                      </span>
-                    )}
                   </button>
                 </div>
               ),
             )}
           </div>
+
+          {coverageNote === null ? null : (
+            <p
+              id="ledger-coverage-note"
+              className={`${styles.tableCaption} ${styles.ledgerCoverageNote}`}
+            >
+              {coverageNote}
+            </p>
+          )}
         </div>
       </div>
 
