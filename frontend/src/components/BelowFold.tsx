@@ -19,6 +19,7 @@ import {
   formatWeekStart,
   formatWeekdayCode,
   formatWeekdayName,
+  shareWithSampleGuard,
 } from "../lib/format";
 import {
   MIN_TREND_WEEKS,
@@ -551,10 +552,7 @@ function SegmentTable({
     () => Object.values(buckets).reduce((sum, counts) => sum + counts.total, 0),
     [buckets],
   );
-  const formatMetric = (count: number, denominator: number) =>
-    `${formatCount(count)} · ${
-      denominator === 0 ? "—" : formatRate(count / denominator)
-    }`;
+  const formatMetric = shareWithSampleGuard;
   const rows = useMemo(() => {
     const source = Object.entries(buckets)
       .filter(([, counts]) => counts.total > 0)

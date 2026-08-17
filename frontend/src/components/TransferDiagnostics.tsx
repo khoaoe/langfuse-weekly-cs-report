@@ -7,7 +7,12 @@ import type {
   WeeklyReportRow,
 } from "../lib/dashboard-schema";
 import type { TicketFilters } from "../lib/dashboard-filters";
-import { formatCount, formatRate, formatWeekRange } from "../lib/format";
+import {
+  PERCENTAGE_SAMPLE_MINIMUM,
+  formatCount,
+  formatRate,
+  formatWeekRange,
+} from "../lib/format";
 import {
   formatMissingStepResult,
   transferReasonLabel,
@@ -43,8 +48,16 @@ interface TpeSortColumn {
   readonly value: (item: TpeReason, denominator: number) => SortValue;
 }
 
+/**
+ * `denominator` here is `observed_transfer_denominator` — the whole table's
+ * transferred-ticket total, not a per-row sample size like CSAT's. Gating on
+ * it would almost never trigger, so the small-sample guard instead checks
+ * `count`, the numerator for this specific transstatus/step_result or
+ * transfer-reason row.
+ */
 function formatTransferShare(count: number, denominator: number): string {
-  return denominator === 0 ? "—" : formatRate(count / denominator);
+  if (denominator === 0) return "—";
+  return count < PERCENTAGE_SAMPLE_MINIMUM ? "—" : formatRate(count / denominator);
 }
 
 const TPE_UNCLASSIFIED_LABEL = "Chưa phân loại";

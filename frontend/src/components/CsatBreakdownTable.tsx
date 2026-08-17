@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CsatWeek, Outcome } from "../lib/dashboard-schema";
 import { OUTCOME_FILTER_LABELS } from "../lib/dashboard-filters";
-import { formatCount, formatRate } from "../lib/format";
+import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate } from "../lib/format";
 import { FilterValueButton } from "./FilterValueButton";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
@@ -17,7 +17,6 @@ const OUTCOME_ORDER: readonly Outcome[] = [
   "unclassified",
 ];
 const GROUP_LIMIT = 10;
-const PERCENTAGE_SAMPLE_MINIMUM = 20;
 
 interface BreakdownRow {
   readonly value: string;
