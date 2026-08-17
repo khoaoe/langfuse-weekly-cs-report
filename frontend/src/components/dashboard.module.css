@@ -523,6 +523,13 @@
   margin-top: 0;
 }
 
+.ledgerCoverageNote {
+  margin-top: var(--space-2);
+  margin-bottom: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .headline {
   display: grid;
   gap: var(--space-2);
