@@ -116,6 +116,11 @@ export function DecisionLedger({
                   {cell.support === null ? null : (
                     <span className={styles.ledgerSupport}>{cell.support}</span>
                   )}
+                  {cell.coverageNote == null ? null : (
+                    <span className={styles.ledgerSupport}>
+                      {cell.coverageNote}
+                    </span>
+                  )}
                 </div>
               ) : (
                 <div
@@ -132,6 +137,11 @@ export function DecisionLedger({
                     <span className={styles.ledgerValue}>{cell.value}</span>
                     {cell.support === null ? null : (
                       <span className={styles.ledgerSupport}>{cell.support}</span>
+                    )}
+                    {cell.coverageNote == null ? null : (
+                      <span className={styles.ledgerSupport}>
+                        {cell.coverageNote}
+                      </span>
                     )}
                   </button>
                 </div>

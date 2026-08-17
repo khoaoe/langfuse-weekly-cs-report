@@ -251,6 +251,12 @@ export interface LedgerCell {
    * something narrower than the number shown.
    */
   readonly filterPatch: Partial<TicketFilters> | null;
+  /**
+   * Names the single weakest coverage dimension so every KPI cell carries
+   * the same reliability caveat, wherever the reader happens to be looking.
+   * Null once every dimension clears `COVERAGE_BADGE_FLOOR`.
+   */
+  readonly coverageNote?: string | null;
 }
 
 function share(numerator: number, denominator: number): string {
@@ -335,6 +341,14 @@ export function selectLedger(
         ? "ticket trong các tuần đã chọn"
         : "ticket tuần này";
 
+  const weakestCoverage = selectWeakestCoverage(snapshot);
+  const coverageNote =
+    weakestCoverage === null
+      ? null
+      : `Độ phủ ${weakestCoverage.label} ${formatRate(
+          1 - weakestCoverage.missingShare,
+        )}`;
+
   return [
     {
       id: "ledger-ai-first",
@@ -348,6 +362,7 @@ export function selectLedger(
             )} ${populationLabel}`,
       tone: "brand",
       filterPatch: null,
+      coverageNote,
     },
     {
       id: "ledger-transfer",
@@ -361,6 +376,7 @@ export function selectLedger(
             )} ${populationLabel}`,
       tone: "neutral",
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
+      coverageNote,
     },
     {
       id: "ledger-reopen",
@@ -375,6 +391,7 @@ export function selectLedger(
             )} trong ${formatCount(scope.reopenDenominator)} ticket AI First`,
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
       filterPatch: null,
+      coverageNote,
     },
     {
       id: "ledger-gt4",
@@ -391,6 +408,7 @@ export function selectLedger(
         scope.gt4WithoutCs === 0
           ? null
           : { gt4_turn: "true", transferred: "false" },
+      coverageNote,
     },
   ];
 }

@@ -283,6 +283,48 @@ describe("selected-week decision scope", () => {
     ]);
   });
 
+  it("attaches the weakest-coverage note to KPI ledger cells in both render branches", () => {
+    const weak: DashboardSnapshot = {
+      ...baseSnapshot,
+      coverage: {
+        ...baseSnapshot.coverage,
+        issue_category: 0.856,
+        tpe: 0.783,
+        skill: 0.704,
+        app: 0.9,
+        intent: 0.9,
+      },
+    };
+
+    const { rerender } = render(
+      <DecisionLedger snapshot={weak} weekDefinition="mon_sun" />,
+    );
+
+    // Non-interactive branch (no onCellSelect): ledger-ai-first never has a
+    // filterPatch, so it always renders through the plain <div> branch.
+    const aiFirstCell = document.getElementById("ledger-ai-first");
+    expect(aiFirstCell).not.toBeNull();
+    expect(
+      within(aiFirstCell as HTMLElement).getByText(/Độ phủ Skill 70,4%/),
+    ).toBeVisible();
+
+    rerender(
+      <DecisionLedger
+        snapshot={weak}
+        weekDefinition="mon_sun"
+        onCellSelect={vi.fn()}
+      />,
+    );
+
+    // Interactive branch: ledger-transfer has a filterPatch and onCellSelect
+    // is now provided, so it renders through the <button>-wrapped branch.
+    const transferCell = document.getElementById("ledger-transfer");
+    expect(transferCell).not.toBeNull();
+    expect(
+      within(transferCell as HTMLElement).getByText(/Độ phủ Skill 70,4%/),
+    ).toBeVisible();
+  });
+
   it("renders critical rail items with a direct ticket filter", () => {
     const onCellSelect = vi.fn();
     render(
