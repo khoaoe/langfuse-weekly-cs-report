@@ -114,9 +114,10 @@ export function FreshdeskCookieDialog({
           </li>
           <li>Dán vào ô dưới</li>
         </ol>
-        <label className={csatStyles.cookieField}>
+        <label className={csatStyles.cookieField} htmlFor="freshdeskCookieInput">
           <span>Cookie</span>
           <textarea
+            id="freshdeskCookieInput"
             rows={4}
             autoComplete="off"
             spellCheck={false}

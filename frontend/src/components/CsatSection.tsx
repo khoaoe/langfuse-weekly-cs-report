@@ -277,9 +277,13 @@ function FeedbackDisclosure({
       {expanded ? (
         <div id="csat-comments" className={csatStyles.commentPanel}>
           <div className={csatStyles.commentControls}>
-            <label className={csatStyles.commentField}>
+            <label
+              className={csatStyles.commentField}
+              htmlFor="csatCommentGroupingInput"
+            >
               <span>{`Lọc nội dung theo ${csatGroupingLabel(grouping)}`}</span>
               <select
+                id="csatCommentGroupingInput"
                 value={activeValue}
                 onChange={(event) => {
                   onActiveValueChange(event.target.value);
@@ -294,9 +298,13 @@ function FeedbackDisclosure({
                 ))}
               </select>
             </label>
-            <label className={csatStyles.commentField}>
+            <label
+              className={csatStyles.commentField}
+              htmlFor="csatCommentWeekInput"
+            >
               <span>Tuần mở ticket</span>
               <select
+                id="csatCommentWeekInput"
                 value={weekFilter}
                 onChange={(event) => {
                   setWeekFilter(event.target.value);
@@ -311,9 +319,13 @@ function FeedbackDisclosure({
                 ))}
               </select>
             </label>
-            <label className={csatStyles.commentField}>
+            <label
+              className={csatStyles.commentField}
+              htmlFor="csatCommentSatisfactionInput"
+            >
               <span>Mức hài lòng</span>
               <select
+                id="csatCommentSatisfactionInput"
                 value={satisfactionFilter}
                 onChange={(event) => {
                   setSatisfactionFilter(
@@ -330,9 +342,13 @@ function FeedbackDisclosure({
                 <option value="negative">Rất tệ</option>
               </select>
             </label>
-            <label className={csatStyles.commentField}>
+            <label
+              className={csatStyles.commentField}
+              htmlFor="csatCommentSortInput"
+            >
               <span>Sắp xếp thời gian</span>
               <select
+                id="csatCommentSortInput"
                 value={timeSort}
                 onChange={(event) => {
                   setTimeSort(event.target.value as "newest" | "oldest");

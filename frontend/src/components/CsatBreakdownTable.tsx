@@ -99,9 +99,13 @@ export function CsatBreakdownTable({
 
   return (
     <div className={csatStyles.breakdown}>
-      <label className={csatStyles.groupingField}>
+      <label
+        className={csatStyles.groupingField}
+        htmlFor="csatBreakdownGroupingInput"
+      >
           <span>Nhóm theo</span>
         <select
+          id="csatBreakdownGroupingInput"
           value={grouping}
           onChange={(event) => onGroupingChange(event.target.value as CsatGrouping)}
         >

@@ -295,9 +295,10 @@ export function TraceExplainer({
           navigateToTicket(pastedTicketId);
         }}
       >
-        <label className={traceStyles.field}>
+        <label className={traceStyles.field} htmlFor="traceTicketIdInput">
           Mã ticket
           <input
+            id="traceTicketIdInput"
             type="text"
             inputMode="numeric"
             value={pastedTicketId}
