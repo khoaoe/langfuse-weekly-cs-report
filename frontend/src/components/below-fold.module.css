@@ -24,12 +24,6 @@
   color: var(--interactive-ink);
 }
 
-.criticalAction {
-  margin-top: var(--space-3);
-  border-color: var(--critical);
-  color: var(--critical-text);
-}
-
 .diagnosticZones {
   margin-top: var(--space-4);
   border-top: 1px solid var(--rule-strong);
