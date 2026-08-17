@@ -522,18 +522,20 @@ export function TicketExplorer({
             ))}
           </select>
         </label>
-        <label className={ticketStyles.field}>
+        <label className={ticketStyles.field} htmlFor="ticketIdInput">
           Mã ticket
           <input
+            id="ticketIdInput"
             type="text"
             inputMode="numeric"
             value={filters.ticket_id}
             onChange={(event) => update({ ticket_id: event.target.value })}
           />
         </label>
-        <label className={ticketStyles.field}>
+        <label className={ticketStyles.field} htmlFor="outcomeInput">
           Kết quả
           <select
+            id="outcomeInput"
             value={filters.outcome}
             onChange={(event) => update({ outcome: event.target.value })}
           >
@@ -545,9 +547,10 @@ export function TicketExplorer({
             ))}
           </select>
         </label>
-        <label className={ticketStyles.field}>
+        <label className={ticketStyles.field} htmlFor="csatSatisfactionInput">
           Mức độ hài lòng (CS Agent)
           <select
+            id="csatSatisfactionInput"
             value={filters.csat_satisfaction}
             onChange={(event) =>
               update({ csat_satisfaction: event.target.value })
@@ -840,8 +843,13 @@ export function TicketExplorer({
             Cột Ticket luôn hiển thị để giữ định danh điều tra.
           </p>
           {TICKET_COLUMNS.filter((column) => column.key !== "ticket_id").map((column) => (
-            <label key={column.key} className={ticketStyles.columnOption}>
+            <label
+              key={column.key}
+              className={ticketStyles.columnOption}
+              htmlFor={`columnOption-${column.key}`}
+            >
               <input
+                id={`columnOption-${column.key}`}
                 type="checkbox"
                 checked={visible.includes(column.key)}
                 onChange={() => toggleColumn(column.key)}

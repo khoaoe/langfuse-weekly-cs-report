@@ -801,4 +801,77 @@ describe("DashboardScreen", () => {
       screen.getByRole("heading", { name: /T2–T6.*7 ticket/i }),
     ).toBeVisible();
   });
+
+  it("moi control loc deu co id on dinh", async () => {
+    render(<DashboardScreen />);
+    await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
+
+    ["ticketIdInput", "outcomeInput", "csatSatisfactionInput"].forEach((id) => {
+      expect(document.getElementById(id)).not.toBeNull();
+    });
+
+    // The Freshdesk cookie dialog is always mounted (only its `open` state
+    // toggles visibility), so its stable id is present without opening it.
+    expect(document.getElementById("freshdeskCookieInput")).not.toBeNull();
+  });
+
+  it("cot Ticket Explorer duoc chon hien thi deu co id theo tien to columnOption", async () => {
+    const user = userEvent.setup();
+    render(<DashboardScreen />);
+    await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
+
+    await user.click(screen.getByText("Chọn cột hiển thị"));
+    expect(document.getElementById("columnOption-opened_at")).not.toBeNull();
+    expect(document.getElementById("columnOption-outcome")).not.toBeNull();
+  });
+
+  it("checkbox tuan trong Phạm vi báo cáo co id theo tien to reportScope", async () => {
+    server.use(
+      http.get("/api/dashboard", () =>
+        HttpResponse.json(envelopeWithTwoObservedWeeks()),
+      ),
+    );
+    render(<DashboardScreen />);
+    await screen.findByRole("heading", { name: /T2–T6.*7 ticket/i });
+
+    expect(document.getElementById("reportScope-2026-07-20")).not.toBeNull();
+    expect(document.getElementById("reportScope-2026-07-13")).not.toBeNull();
+  });
+
+  it("control loc noi dung phan hoi CSAT va nhom breakdown co id on dinh", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/dashboard", () => HttpResponse.json(envelopeWithCsatBreakdown())),
+    );
+    render(<DashboardScreen />);
+    await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
+
+    expect(document.getElementById("csatBreakdownGroupingInput")).not.toBeNull();
+
+    const csatSection = screen.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    await user.click(
+      within(csatSection).getByRole("button", { name: "Xem 2 nội dung phản hồi" }),
+    );
+
+    [
+      "csatCommentGroupingInput",
+      "csatCommentWeekInput",
+      "csatCommentSatisfactionInput",
+      "csatCommentSortInput",
+    ].forEach((id) => {
+      expect(document.getElementById(id)).not.toBeNull();
+    });
+  });
+
+  it("o dan ticket trong Vi sao agent lam vay co id on dinh", async () => {
+    const originalHash = window.location.hash;
+    window.location.hash = "#trace";
+    try {
+      render(<DashboardScreen />);
+      await screen.findByRole("heading", { name: "Vì sao agent làm vậy" });
+      expect(document.getElementById("traceTicketIdInput")).not.toBeNull();
+    } finally {
+      window.location.hash = originalHash;
+    }
+  });
 });

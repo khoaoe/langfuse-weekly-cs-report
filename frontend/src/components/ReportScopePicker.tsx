@@ -102,8 +102,13 @@ export function ReportScopePicker({
             {observed.map((week) => {
               const checked = selected.has(week.cohort_week);
               return (
-                <label key={week.cohort_week} className={styles.reportScopeOption}>
+                <label
+                  key={week.cohort_week}
+                  className={styles.reportScopeOption}
+                  htmlFor={`reportScope-${week.cohort_week}`}
+                >
                   <input
+                    id={`reportScope-${week.cohort_week}`}
                     type="checkbox"
                     checked={checked}
                     disabled={checked && selected.size === 1}
