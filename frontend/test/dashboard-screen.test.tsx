@@ -12,6 +12,7 @@ import {
 import { dashboardEnvelopeFixture, loadingEnvelopeFixture } from "./fixtures/dashboard";
 import { server } from "./msw/server";
 import { DashboardScreen } from "../src/components/DashboardScreen";
+import { calculateDataQualityScore } from "../src/lib/data-quality-score";
 
 describe("DashboardScreen", () => {
   function envelopeWithTwoObservedWeeks() {
@@ -485,6 +486,22 @@ describe("DashboardScreen", () => {
     expect(within(header).queryByText(/Skill.*(?:thiếu|%)/)).toBeNull();
     expect(document.getElementById("updatedAt")).toHaveTextContent("dữ liệu cũ");
     expect(document.getElementById("statusChip")).toHaveTextContent("Dữ liệu cũ");
+  });
+
+  it("hien diem do tin cay canh chip trang thai", async () => {
+    render(<DashboardScreen />);
+
+    const statusChip = await screen.findByText("Dữ liệu cũ");
+    const chip = screen.getByTestId("qualityChip");
+    const expected = calculateDataQualityScore(
+      dashboardEnvelopeFixture.snapshot as unknown as Parameters<
+        typeof calculateDataQualityScore
+      >[0],
+    );
+
+    expect(chip.compareDocumentPosition(statusChip) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+    expect(chip).toHaveTextContent(`Độ tin cậy ${expected.score}/100`);
+    expect(chip).toHaveAttribute("data-tone", expected.tone);
   });
 
   it("ships the required operating controls and applies the stuck-ticket drill-down", async () => {
