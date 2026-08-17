@@ -106,17 +106,17 @@ export function selectPreviousWeek(
 /**
  * Observed transfer signals, most frequent first.
  *
- * TPE codes are operational observations, not proven causes.
+ * TPE codes are operational observations, not proven causes.  Only rows the
+ * taxonomy could resolve carry a signal: a raw code means nothing to a CS or
+ * exec reader, and this string is copied into their own reports verbatim.
+ * Unresolved rows stay in the diagnostics table, where the count is the point.
  */
 export function selectTransferSignals(view: {
   readonly transfer_reasons: DashboardView["transfer_reasons"];
 }): NarrativeSignal[] {
-  const tpe = view.transfer_reasons.tpe.map((item) => ({
-    label: `Transstatus ${item.transstatus}${
-      item.step_result === null ? "" : ` / Step result ${item.step_result}`
-    }`,
-    count: item.count,
-  }));
+  const tpe = view.transfer_reasons.tpe
+    .filter((item) => item.status !== null)
+    .map((item) => ({ label: item.status as string, count: item.count }));
   return tpe.sort((left, right) => right.count - left.count);
 }
 

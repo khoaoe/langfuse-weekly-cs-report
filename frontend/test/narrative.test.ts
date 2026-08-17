@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDeterministicNarrative } from "../src/lib/narrative";
+import { selectTransferSignals } from "../src/lib/selectors";
 
 describe("deterministic narrative", () => {
   it("formats rates and deltas without calling an LLM", () => {
@@ -134,5 +135,24 @@ describe("deterministic narrative", () => {
     expect(
       narrative.some((line) => line.startsWith("Tín hiệu chuyển CS nổi bật")),
     ).toBe(false);
+  });
+
+  it("khong bao gio in ma TPE tho trong cau insight", () => {
+    const signals = selectTransferSignals({
+      transfer_reasons: {
+        observed_transfer_denominator: 21,
+        triggers: [],
+        step_result_missing: { count: 0, denominator: 21 },
+        tpe: [
+          { transstatus: "1", step_result: "1", count: 19, status: "SUCCESSFUL" },
+          { transstatus: "-217", step_result: "-5025", count: 2, status: null },
+        ],
+        guardrail: [],
+        escalation_guard_blocked: { count: 0, denominator: 21 },
+      },
+    });
+    const labels = signals.map((s) => s.label).join(" | ");
+    expect(labels).toContain("SUCCESSFUL");
+    expect(labels).not.toMatch(/-217|-5025|Transstatus|Step result/);
   });
 });
