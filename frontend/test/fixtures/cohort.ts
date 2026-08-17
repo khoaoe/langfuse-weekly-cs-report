@@ -77,6 +77,47 @@ export function equivalentWtdCohortEnvelope() {
 }
 
 /**
+ * One TPE pair resolves to a governed status; the other has no taxonomy
+ * entry yet. Exercises the diagnostics table's status column: a resolved
+ * label renders as-is, and the unmapped pair renders an explicit
+ * "unclassified" label rather than silently omitting status.
+ */
+export function tpeStatusDiagnosticsEnvelope() {
+  const base = dashboardEnvelopeFixture;
+  const monFri = base.snapshot.views.mon_fri;
+  const weekKey = "2026-07-20";
+  const detail = monFri.by_week[weekKey];
+  // observed_transfer_denominator stays as the base fixture's 3 — it must
+  // reconcile with the segment `transferred` totals, which this fixture does
+  // not otherwise touch. Only the TPE breakdown itself changes.
+  const patchedTransfer = {
+    ...detail.transfer_reasons,
+    tpe: [
+      { transstatus: "1", step_result: "1", count: 2, status: "SUCCESSFUL" },
+      { transstatus: "-217", step_result: "-5025", count: 1, status: null },
+    ],
+  };
+
+  return {
+    ...base,
+    snapshot: {
+      ...base.snapshot,
+      views: {
+        ...base.snapshot.views,
+        mon_fri: {
+          ...monFri,
+          transfer_reasons: patchedTransfer,
+          by_week: {
+            ...monFri.by_week,
+            [weekKey]: { ...detail, transfer_reasons: patchedTransfer },
+          },
+        },
+      },
+    },
+  };
+}
+
+/**
  * The latest week counts zero stuck tickets; the range-wide rule tally the
  * diagnostics panel used to read by default counts ten. Reproduces the exact
  * contradiction a CS reader reported: the KPI cell said 0, the panel below
