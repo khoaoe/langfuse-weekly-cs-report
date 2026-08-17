@@ -117,13 +117,34 @@ export function tpeOptionLabel(item: TpeOptionSource): string {
  * Picks the representative `(transstatus, step_result)` row for a dropdown
  * option keyed only by `transstatus`. A single transstatus code can carry
  * more than one step_result; `tpe` rows arrive sorted by count descending, so
- * the first match is the most common pairing for that code.
+ * the top match is the most common pairing for that code.
+ *
+ * Some codes resolve to more than one distinct governed status depending on
+ * step_result (e.g. `-365` splits across FAILED_FACE_AUTH, WAITING_NFC_REVIEW,
+ * FAILED_NFC, ... with no majority). The dropdown option still filters by
+ * `transstatus` alone, so labelling it with just the top row's status would
+ * assert one specific status for ticket volume that is really spread across
+ * several — worse than showing the raw code. When a code is ambiguous like
+ * this, return undefined so the caller falls back to the raw code instead of
+ * picking a single (misleading) status to display.
  */
 export function findTpeOptionSource(
   transstatus: string,
   tpe: readonly TpeOptionSource[],
 ): TpeOptionSource | undefined {
-  return tpe.find((item) => item.transstatus === transstatus);
+  const matches = tpe.filter((item) => item.transstatus === transstatus);
+  if (matches.length === 0) {
+    return undefined;
+  }
+  const distinctStatuses = new Set(
+    matches
+      .map((item) => item.status)
+      .filter((status): status is string => status !== null),
+  );
+  if (distinctStatuses.size > 1) {
+    return undefined;
+  }
+  return matches[0];
 }
 
 export function updateTicketFilters(
