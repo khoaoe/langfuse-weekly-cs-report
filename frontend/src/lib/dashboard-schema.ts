@@ -334,6 +334,8 @@ export const TransferReasonsSchema = z
           transstatus: tpeToken,
           step_result: tpeToken.nullable(),
           count: positiveInteger,
+          // null = cap chua co trong taxonomy TPE.
+          status: z.string().min(1).nullable(),
         })
         .strict(),
     ),

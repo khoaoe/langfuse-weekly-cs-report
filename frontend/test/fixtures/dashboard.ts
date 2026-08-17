@@ -95,8 +95,8 @@ function view(weekDefinition: "mon_sun" | "mon_fri", total: number) {
     ],
     step_result_missing: { count: 1, denominator: 3 },
     tpe: [
-      { transstatus: "-365", step_result: "-1013", count: 2 },
-      { transstatus: "-217", step_result: null, count: 1 },
+      { transstatus: "-365", step_result: "-1013", count: 2, status: "FAILED_FACE_AUTH" },
+      { transstatus: "-217", step_result: null, count: 1, status: null },
     ],
     guardrail: [{ rule: "missing_transaction_id", count: 2 }],
     escalation_guard_blocked: { count: 1, denominator: 3 },

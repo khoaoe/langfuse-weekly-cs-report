@@ -17,6 +17,7 @@ from unicodedata import category, decimal, normalize
 from zoneinfo import ZoneInfo
 
 from .csat_cache import CSATCache, CachedCSATResponse
+from .enrichment import build_tpe_status_index
 from .entry_coverage_cache import (
     ENTRY_COVERAGE_START_WEEK,
     EntryCoverageCache,
@@ -30,7 +31,7 @@ from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 20
+_STORAGE_VERSION = 21
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -667,6 +668,7 @@ def _dashboard_payload(
     mon_fri = result.weekly_mon_fri or tuple(
         summary for summary in mon_sun if summary.week_definition == "mon_fri"
     )
+    tpe_status_index = build_tpe_status_index(result.sessions, run.taxonomy)
     views = {
         "mon_sun": _view_payload(
             result.sessions,
@@ -679,6 +681,7 @@ def _dashboard_payload(
             ordered_csat,
             reconciliation_cache,
             entry_coverage_cache,
+            tpe_status_index,
         ),
         "mon_fri": _view_payload(
             result.sessions,
@@ -691,6 +694,7 @@ def _dashboard_payload(
             ordered_csat,
             reconciliation_cache,
             entry_coverage_cache,
+            tpe_status_index,
         ),
     }
     quality = Counter(_quality_label(session.data_quality) for session in result.sessions)
@@ -735,6 +739,7 @@ def _view_payload(
     ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
     reconciliation_cache: ReconciliationCache | None,
     entry_coverage_cache: EntryCoverageCache | None,
+    tpe_status_index: Mapping[tuple[str, str | None], str],
 ) -> dict[str, object]:
     sessions = tuple(
         session for session in all_sessions
@@ -771,6 +776,7 @@ def _view_payload(
                 ordered_csat,
                 reconciliation_cache,
                 entry_coverage_cache,
+                tpe_status_index,
             )
         weekly_payloads.append(_weekly_payload(summary, reopen_reason))
     return {
@@ -788,7 +794,7 @@ def _view_payload(
         },
         "weekly": weekly_payloads,
         "segments": _segments(sessions, safe_intents),
-        "transfer_reasons": _transfer_reasons(sessions),
+        "transfer_reasons": _transfer_reasons(sessions, tpe_status_index),
         "by_week": {
             summary.cohort_week.isoformat(): {
                 "segments": _segments(
@@ -804,7 +810,8 @@ def _view_payload(
                         session
                         for session in sessions
                         if session.cohort_week == summary.cohort_week
-                    )
+                    ),
+                    tpe_status_index,
                 ),
             }
             for summary in weekly
@@ -1220,8 +1227,34 @@ def _unique_tpe_transstatus(values: object) -> str | None:
     return next(iter(transstatuses)) if len(transstatuses) == 1 else None
 
 
+def _tpe_rows_from_signals(
+    tpe_counts: Mapping[tuple[str, str | None], int],
+    tpe_status_index: Mapping[tuple[str, str | None], str],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "transstatus": transstatus,
+            "step_result": step_result,
+            "count": count,
+            # None = cap chua co trong taxonomy.  Browser hien "chua phan loai";
+            # khong bao gio suy dien nghia tu con so.
+            "status": tpe_status_index.get((transstatus, step_result)),
+        }
+        for (transstatus, step_result), count in sorted(
+            tpe_counts.items(),
+            key=lambda item: (
+                -item[1],
+                item[0][0],
+                item[0][1] is None,
+                item[0][1] or "",
+            ),
+        )
+    ]
+
+
 def _transfer_reasons(
     sessions: tuple[SessionMetrics, ...],
+    tpe_status_index: Mapping[tuple[str, str | None], str],
 ) -> dict[str, object]:
     transferred = tuple(session for session in sessions if session.transferred)
     tpe_counts: Counter[tuple[str, str | None]] = Counter()
@@ -1247,22 +1280,7 @@ def _transfer_reasons(
         escalation_blocked += int(dims.escalation_guard_blocked)
         trigger_counts[_transfer_trigger_grain(session)] += 1
 
-    tpe_rows = [
-        {
-            "transstatus": transstatus,
-            "step_result": step_result,
-            "count": count,
-        }
-        for (transstatus, step_result), count in sorted(
-            tpe_counts.items(),
-            key=lambda item: (
-                -item[1],
-                item[0][0],
-                item[0][1] is None,
-                item[0][1] or "",
-            ),
-        )
-    ]
+    tpe_rows = _tpe_rows_from_signals(tpe_counts, tpe_status_index)
     guardrail_rows = [
         {"rule": rule, "count": count}
         for rule, count in sorted(
@@ -2657,7 +2675,7 @@ def _validate_transfer_reasons(
         row = _require_mapping(raw_row, "transfer_reasons.tpe item")
         _require_exact_keys(
             row,
-            {"transstatus", "step_result", "count"},
+            {"transstatus", "step_result", "count", "status"},
             "transfer_reasons.tpe item",
         )
         transstatus = row["transstatus"]
@@ -2673,6 +2691,11 @@ def _validate_transfer_reasons(
                 or _TPE_CODE_PATTERN.fullmatch(step_result) is None
             ):
                 raise ValueError("transfer_reasons.tpe step_result is invalid")
+        status = row["status"]
+        # None = cap chua co trong taxonomy TPE; khac None phai la chuoi khong
+        # rong theo governed status tu resolve_tpe_status().
+        if status is not None and (not isinstance(status, str) or status == ""):
+            raise ValueError("transfer_reasons.tpe status is invalid")
         count = _positive_int(row["count"], "transfer_reasons.tpe count")
         key = (transstatus, step_result)
         if key in seen_tpe:
