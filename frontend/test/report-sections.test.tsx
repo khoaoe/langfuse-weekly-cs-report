@@ -611,7 +611,10 @@ describe("Below-fold analysis", () => {
     // latest observed week, matching what the KPI ledger above would show for
     // the same snapshot — not a blended 13-week total the reader never asked
     // for.
-    expect(screen.getByText("10 · 100%")).toBeVisible();
+    // The week-level total (10) sits below the small-sample threshold (20),
+    // so the guard hides the rate and shows the raw count instead; the
+    // whole-range total (999) clears it and keeps "count · rate".
+    expect(screen.getByText("10")).toBeVisible();
     expect(screen.queryByText("999 · 100%")).toBeNull();
     expect(screen.queryByRole("button", { name: "Xem toàn kỳ" })).toBeNull();
 
@@ -1406,7 +1409,12 @@ describe("Below-fold analysis", () => {
     ).toBeVisible();
     expect(within(tpeRow).getByText("-1013")).toBeVisible();
     expect(within(tpeRow).getByText("2")).toBeVisible();
-    expect(within(tpeRow).getByText("66,7%")).toBeVisible();
+    // This row's own count (2) is the small-sample guard's numerator, not
+    // the whole-table `observed_transfer_denominator` (3) — well under the
+    // 20-sample threshold, so the share column hides the rate.
+    expect(
+      within(tpeRow).getAllByRole("cell").at(-1),
+    ).toHaveTextContent("—");
     const missingRow = within(tpeTable).getByRole("row", { name: /-217/ });
     expect(
       within(missingRow).getByRole("rowheader", { name: "Chưa phân loại" }),
@@ -1459,7 +1467,11 @@ describe("Below-fold analysis", () => {
     );
     expect(skillReason).toHaveTextContent("interbank-fund-transfer");
     expect(skillReason).toHaveTextContent("1");
-    expect(skillReason).toHaveTextContent("33,3%");
+    // This row's own count (1) is well under the small-sample threshold
+    // (20), so the shared guard hides the rate here too.
+    expect(
+      within(skillReason).getAllByRole("cell").at(-1),
+    ).toHaveTextContent("—");
     const responseReason = within(conditionTable).getByRole("row", {
       name: /Phản hồi AI được nhận diện là cần chuyển CS/,
     });
@@ -1588,7 +1600,9 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(baseSnapshot));
 
     const table = screen.getByRole("table", { name: /Ticket: tỷ trọng trong tuần/ });
-    expect(within(table).getByText("10 · 100%")).toBeVisible();
+    // The fixture's total (10) is below the small-sample threshold (20), so
+    // the guard shows the raw count instead of "count · rate".
+    expect(within(table).getByText("10")).toBeVisible();
 
     await user.click(screen.getByRole("tab", { name: "Product Code" }));
     expect(screen.getByRole("tab", { name: "Product Code" })).toHaveAttribute(
@@ -1620,7 +1634,9 @@ describe("Below-fold analysis", () => {
           name: `Lọc Ticket Explorer theo ${tabLabel}: Có ticket`,
         }),
       ).toBeVisible();
-      expect(within(panel).getByText("6 · 100%")).toBeVisible();
+      // total: 6 is below the small-sample threshold (20), so the guard
+      // shows the raw count instead of "count · rate".
+      expect(within(panel).getByText("6")).toBeVisible();
       expect(within(panel).queryByRole("button", { name: "Không có ticket" })).toBeNull();
       expect(within(panel).queryByRole("rowheader", { name: "Không có ticket" })).toBeNull();
     },
@@ -1689,11 +1705,14 @@ describe("Below-fold analysis", () => {
       })
       .closest("tr");
     expect(row).not.toBeNull();
+    // Every denominator in this fixture (10, 8, 3, 2) is below the
+    // small-sample threshold (20), so the shared guard falls back to the
+    // raw count for all four columns instead of asserting a rate.
     expect(within(row as HTMLTableRowElement).getAllByRole("cell").map((cell) => cell.textContent)).toEqual([
-      "10 · 100%",
-      "8 · 80,0%",
-      "3 · 30,0%",
-      "2 · 20,0%",
+      "10",
+      "8",
+      "3",
+      "2",
     ]);
     expect(row).not.toHaveTextContent("(");
   });

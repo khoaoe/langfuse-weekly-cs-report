@@ -6,6 +6,7 @@ import {
   formatRateAxis,
   formatWeekRange,
   formatWeekStart,
+  shareWithSampleGuard,
 } from "../src/lib/format";
 
 describe("dashboard formatting", () => {
@@ -41,5 +42,10 @@ describe("dashboard formatting", () => {
     expect(formatRateAxis(0.25)).toBe("25%");
     expect(formatRateAxis(0.5)).toBe("50%");
     expect(formatRateAxis(1)).toBe("100%");
+  });
+
+  it("giau ty le khi mau duoi nguong va giu nguyen so dem", () => {
+    expect(shareWithSampleGuard(3, 8)).toBe("3");
+    expect(shareWithSampleGuard(30, 200)).toBe("30 · 15,0%");
   });
 });

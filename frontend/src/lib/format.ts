@@ -49,6 +49,23 @@ export function formatRateAxis(value: number): string {
   return `${wholeRateFormatter.format(value * 100)}%`;
 }
 
+/**
+ * Below this many samples, a percentage implies more precision than the data
+ * supports — a single flipped rating can swing it by several points. Callers
+ * fall back to the raw count instead of asserting a rate.
+ */
+export const PERCENTAGE_SAMPLE_MINIMUM = 20;
+
+/**
+ * Renders "count · rate" when the denominator clears the small-sample
+ * threshold, or just the raw count when it doesn't.
+ */
+export function shareWithSampleGuard(count: number, denominator: number): string {
+  return denominator >= PERCENTAGE_SAMPLE_MINIMUM
+    ? `${formatCount(count)} · ${formatRate(count / denominator)}`
+    : formatCount(count);
+}
+
 export function formatAverage(value: number | null | undefined): string {
   return isAvailableNumber(value) ? averageFormatter.format(value) : "—";
 }
