@@ -26,3 +26,4 @@ playwright-report/
 /frontend/coverage/
 /coverage.json
 /coverage-*.json
+.worktrees/
