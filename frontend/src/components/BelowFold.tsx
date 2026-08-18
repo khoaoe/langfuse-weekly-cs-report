@@ -742,8 +742,10 @@ export interface BelowFoldProps {
 }
 
 /**
- * Trends, segment comparison, transfer diagnostics and the data-quality
- * disclosure — everything that explains the ledger above.
+ * Trends, segment comparison, CSAT and transfer/rule diagnostics —
+ * everything that explains the ledger above. The data-quality disclosure
+ * this component used to render was retired; see `AppShell`'s confidence
+ * chip and `selectCoverageNote()` for how that question is answered now.
  */
 export function BelowFold({
   snapshot,
