@@ -7,7 +7,7 @@ as it is actually implemented in `frontend/src`, measured from the shipped
 build — not from intent. It is not "official": UXD/Brand Owner and Design
 System Owner acceptance has not been performed. See §Deviations.
 
-Updated on 2026-08-04 against `frontend/src` and storage/browser schema v18.
+Updated on 2026-08-18 against `frontend/src` and storage/browser schema v21.
 
 ## Direction
 
@@ -257,7 +257,7 @@ enforced by a mobile `600px` decision minimum plus browser tests, not by a hard
   stale_error keep the last-good snapshot; the server error code never appears
   in user-facing text.
 - The source-faithful TPE contract was introduced in storage schema v5. The
-  current storage schema is v18; persisted older snapshots are ignored and
+  current storage schema is v21; persisted older snapshots are ignored and
   refreshed, never converted in place. v4 additionally carries
   `code/status/step/case/mapped` semantics that are not equivalent to
   `transstatus/step_result`.
