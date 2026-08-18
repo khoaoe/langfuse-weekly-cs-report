@@ -379,6 +379,49 @@ describe("DashboardScreen", () => {
     ).toHaveTextContent("toàn bộ kỳ báo cáo");
   });
 
+  it("keeps the Explorer's manual week override across a background refresh that returns the same scope", async () => {
+    // Regression: `currentExplorerWeekPatch` is a new object on every parsed
+    // snapshot even when its cohort_week/cohort_weeks strings are unchanged,
+    // so a naive by-reference (or "re-run every time the memo changes")
+    // effect would silently reapply the global scope on every poll and wipe
+    // out any manual override the user made in Ticket Explorer -- including
+    // a week selection, and (per the same mechanism) an opened-date range.
+    const user = userEvent.setup();
+    render(<DashboardScreen />);
+
+    await screen.findByRole("heading", { name: /T2–T6.*7 ticket/i });
+    const explorerWeek = screen.getByRole("combobox", { name: "Tuần" });
+    await waitFor(() => expect(explorerWeek).toHaveValue("2026-07-20"));
+
+    await user.selectOptions(explorerWeek, "");
+    expect(explorerWeek).toHaveValue("");
+
+    // A background refresh that reports the exact same scope (same weeks,
+    // same cohort data, just a later generated_at) re-parses the envelope
+    // into brand-new objects; it must not resurrect the week filter the user
+    // just cleared. Waiting for the bumped timestamp to land proves the new
+    // snapshot was actually applied before asserting the filter survived it.
+    server.use(
+      http.get("/api/dashboard", () =>
+        HttpResponse.json({
+          ...dashboardEnvelopeFixture,
+          snapshot: {
+            ...dashboardEnvelopeFixture.snapshot,
+            generated_at: "2026-07-30T11:27:00Z",
+          },
+        }),
+      ),
+    );
+    await user.click(screen.getByRole("button", { name: "Làm mới" }));
+    await waitFor(() =>
+      expect(document.getElementById("updatedAt")).toHaveTextContent(
+        "30/7/26",
+      ),
+    );
+
+    expect(explorerWeek).toHaveValue("");
+  });
+
   it("shows identical decision values across cohorts without an explanatory aside", async () => {
     const user = userEvent.setup();
     server.use(

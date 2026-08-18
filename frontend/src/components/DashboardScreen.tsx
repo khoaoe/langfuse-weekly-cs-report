@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { WeekDefinition } from "../lib/dashboard-schema";
@@ -133,18 +133,27 @@ function DashboardBody() {
     [activeFilters],
   );
 
-  // Global report scope flows into Explorer once. A later local Explorer week
-  // change deliberately does not flow back into the report.
+  // Global report scope flows into Explorer once per distinct scope value. A
+  // later local Explorer change (a different week, or an opened-date range)
+  // deliberately does not flow back into the report, and must survive
+  // background snapshot refreshes: every successful poll produces a new
+  // `currentExplorerWeekPatch` object even when its cohort_week/cohort_weeks
+  // strings are unchanged, so comparing by object identity (or re-running
+  // this effect on every such object) would silently clobber the user's own
+  // filter choice on the next refresh. Tracking the last-applied scope by
+  // value, not by object reference, makes the "once" in the comment above
+  // actually true.
+  const syncedWeekPatchKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!hasSnapshot) {
       return;
     }
-    setFilters((current) =>
-      current.cohort_week === currentExplorerWeekPatch.cohort_week &&
-      current.cohort_weeks === currentExplorerWeekPatch.cohort_weeks
-        ? current
-        : updateTicketFilters(current, currentExplorerWeekPatch),
-    );
+    const patchKey = `${currentExplorerWeekPatch.cohort_week}|${currentExplorerWeekPatch.cohort_weeks}`;
+    if (syncedWeekPatchKeyRef.current === patchKey) {
+      return;
+    }
+    syncedWeekPatchKeyRef.current = patchKey;
+    setFilters((current) => updateTicketFilters(current, currentExplorerWeekPatch));
   }, [currentExplorerWeekPatch, hasSnapshot]);
 
   useEffect(() => {
