@@ -197,56 +197,6 @@ export function buildNarrativeInput(
   };
 }
 
-export const COVERAGE_LABELS: Readonly<Record<string, string>> = {
-  issue_category: "Category",
-  app: "App",
-  product_code: "Product Code",
-  tpe: "Transstatus",
-  intent: "Intent",
-  skill: "Skill",
-};
-
-export function coverageLabel(name: string): string {
-  return COVERAGE_LABELS[name] ?? name;
-}
-
-/** Below this share, a coverage dimension is unsafe to act on. */
-const COVERAGE_BADGE_FLOOR = 0.8;
-
-export interface WeakestCoverage {
-  readonly name: string;
-  readonly label: string;
-  readonly missingShare: number;
-}
-
-/**
- * The single coverage dimension that most needs a reader's attention.
- *
- * A blended score across five unlike quantities (structural validity,
- * Category, Transstatus, Skill, freshness) tells the reader a number without
- * telling them what to do about it. Naming the weakest dimension does. Null
- * when every dimension already clears the floor — nothing to name.
- */
-export function selectWeakestCoverage(
-  snapshot: DashboardSnapshot,
-): WeakestCoverage | null {
-  let weakestName: string | null = null;
-  let weakestValue = 1;
-  for (const [name, value] of Object.entries(snapshot.coverage)) {
-    if (value < COVERAGE_BADGE_FLOOR && value < weakestValue) {
-      weakestName = name;
-      weakestValue = value;
-    }
-  }
-  return weakestName === null
-    ? null
-    : {
-        name: weakestName,
-        label: coverageLabel(weakestName),
-        missingShare: 1 - weakestValue,
-      };
-}
-
 export type LedgerTone = "brand" | "neutral" | "warning" | "critical";
 
 export interface LedgerCell {
@@ -263,23 +213,6 @@ export interface LedgerCell {
    * something narrower than the number shown.
    */
   readonly filterPatch: Partial<TicketFilters> | null;
-}
-
-/**
- * The single sentence naming the weakest coverage dimension, shared by the
- * whole ledger rather than duplicated onto every cell.
- *
- * `selectWeakestCoverage()` is a snapshot-wide scalar — there is no mapping
- * from a coverage dimension (Category, TPE, Skill, ...) to one particular
- * ledger cell (AI First, Transfer, Reopen, >3 turns) — so the caveat belongs
- * once, next to the ledger, not repeated on every KPI. Null once every
- * dimension clears `COVERAGE_BADGE_FLOOR`.
- */
-export function selectCoverageNote(snapshot: DashboardSnapshot): string | null {
-  const weakest = selectWeakestCoverage(snapshot);
-  return weakest === null
-    ? null
-    : `Độ phủ ${weakest.label} ${formatRate(1 - weakest.missingShare)}`;
 }
 
 function share(numerator: number, denominator: number): string {

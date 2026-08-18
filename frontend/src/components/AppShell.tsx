@@ -265,17 +265,6 @@ export function AppShell({
                     ? "Dữ liệu cũ"
                     : "Sẵn sàng"}
             </span>
-            {snapshotQuality === null ? null : (
-              <span
-                data-testid="qualityChip"
-                data-tone={snapshotQuality.tone}
-                className={`${styles.quality} ${
-                  snapshotQuality.tone === "good" ? "" : styles.qualityWarning
-                }`}
-              >
-                {`Độ tin cậy ${snapshotQuality.score}/100`}
-              </span>
-            )}
             {freshdeskCookieState === "expired" ||
             freshdeskCookieState === "missing" ? (
               <button

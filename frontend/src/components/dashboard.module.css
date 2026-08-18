@@ -94,31 +94,6 @@
   color: var(--warning-text);
 }
 
-.quality {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-height: 44px;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-tight);
-  background: var(--surface);
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.quality:disabled {
-  color: var(--muted);
-  cursor: not-allowed;
-}
-
-.qualityWarning {
-  border-color: var(--warning-text);
-  color: var(--warning-text);
-}
-
 .runtimeChip {
   display: inline-flex;
   align-items: center;
@@ -736,8 +711,6 @@
 }
 
 .table {
-  width: 100%;
-  min-width: 100%;
   font-size: 14px;
 }
 
@@ -1028,11 +1001,6 @@
 
   .runtimeChip {
     display: none;
-  }
-
-  .quality {
-    width: 100%;
-    justify-content: space-between;
   }
 
   .main {

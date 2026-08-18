@@ -83,14 +83,12 @@ describe("App shell operating states", () => {
     expect(status?.className).toMatch(/runtimeReady/);
   });
 
-  it("never renders the retired per-dimension coverage badge, but does surface the governed quality chip", () => {
+  it("never renders the retired per-dimension coverage badge or the quality chip", () => {
     // 2026-08-01-dashboard-clarity-round2-design.md retired `#dqBadge` (a
     // single mismatched-scope coverage dimension, e.g. "Skill: thiếu 38,7%
-    // ticket"). That phrasing and id stay gone for good. Task 6 of the
-    // 2026-08-18 critique remediation is a separate, deliberate reversal: it
-    // re-surfaces the governed, five-dimension `calculateDataQualityScore`
-    // composite (previously computed and silently discarded) as
-    // `qualityChip`, so the "/100" text is now expected, not forbidden.
+    // ticket"). Task 6 of the 2026-08-18 critique remediation later added a
+    // governed `qualityChip` composite in its place; the 2026-08-18 request
+    // to drop "Độ tin cậy" retired that chip too. Both stay gone for good.
     const current = new Date().toISOString();
     const allHealthy: DashboardSnapshot = {
       ...baseSnapshot,
@@ -122,22 +120,16 @@ describe("App shell operating states", () => {
 
     view.rerender(shell(allHealthy));
     expect(document.getElementById("dqBadge")).toBeNull();
-    expect(screen.getByTestId("qualityChip")).toHaveTextContent(
-      `Độ tin cậy ${calculateDataQualityScore(allHealthy).score}/100`,
-    );
+    expect(screen.queryByTestId("qualityChip")).toBeNull();
 
     view.rerender(shell(oneWeak));
     expect(document.getElementById("dqBadge")).toBeNull();
     expect(screen.queryByText(/Skill: thiếu 50,0% ticket/)).toBeNull();
-    expect(screen.getByTestId("qualityChip")).toHaveTextContent(
-      `Độ tin cậy ${calculateDataQualityScore(oneWeak).score}/100`,
-    );
+    expect(screen.queryByTestId("qualityChip")).toBeNull();
 
     view.rerender(shell(weakerStill));
     expect(document.getElementById("dqBadge")).toBeNull();
-    expect(screen.getByTestId("qualityChip")).toHaveTextContent(
-      `Độ tin cậy ${calculateDataQualityScore(weakerStill).score}/100`,
-    );
+    expect(screen.queryByTestId("qualityChip")).toBeNull();
   });
 
   it("tracks the section whose top has scrolled under the sticky header, and stops updating after unmount", () => {
