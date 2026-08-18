@@ -358,13 +358,17 @@ def ticket_page(
         page_size=page_size,
     )
     selected_cohort_weeks = _parse_cohort_weeks_filter(cohort_weeks)
+    # opened_from/opened_to are calendar days in the picker's own timezone
+    # (Asia/Ho_Chi_Minh, same as every other date-derived field in this module
+    # -- cohort_week, is_weekend_start, ...). Bounding in UTC instead would
+    # shift the window by up to 7 hours and leak into the next local day.
     opened_from_bound = (
         None if opened_from is None
-        else datetime.combine(date.fromisoformat(opened_from), time.min, tzinfo=timezone.utc)
+        else datetime.combine(date.fromisoformat(opened_from), time.min, tzinfo=_VIETNAM_TIMEZONE)
     )
     opened_to_bound = (
         None if opened_to is None
-        else datetime.combine(date.fromisoformat(opened_to), time.max, tzinfo=timezone.utc)
+        else datetime.combine(date.fromisoformat(opened_to), time.max, tzinfo=_VIETNAM_TIMEZONE)
     )
     strings = {
         "issue_category": issue_category,

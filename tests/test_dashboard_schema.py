@@ -1349,17 +1349,25 @@ def test_ticket_page_rejects_invalid_multi_week_filters(cohort_weeks: str):
         )
 
 
-def test_ticket_page_filters_by_opened_date_range_inclusive_of_both_boundaries():
+def test_ticket_page_filters_by_opened_date_range_using_vietnam_calendar_days():
+    """opened_from/opened_to are Asia/Ho_Chi_Minh calendar days, matching
+    every other date-derived field in this module (cohort_week,
+    is_weekend_start, ...). Bounding in UTC instead would leak up to 7 hours
+    into the neighbouring local day -- regression for that exact bug."""
     snapshot = _snapshot()
     base = snapshot.tickets[0]
     ranged_snapshot = replace(
         snapshot,
         tickets=(
-            replace(base, ticket_id="10", opened_at="2026-07-19T23:59:59Z"),
-            replace(base, ticket_id="20", opened_at="2026-07-20T00:00:00Z"),
-            replace(base, ticket_id="30", opened_at="2026-07-25T12:00:00Z"),
-            replace(base, ticket_id="40", opened_at="2026-07-30T23:59:59.999999Z"),
-            replace(base, ticket_id="50", opened_at="2026-07-31T00:00:00Z"),
+            # 2026-07-19 23:59 ICT -- last instant still inside 19/07 ICT.
+            replace(base, ticket_id="10", opened_at="2026-07-19T16:59:59Z"),
+            # 2026-07-20 00:00:00 ICT -- first instant of 20/07 ICT.
+            replace(base, ticket_id="20", opened_at="2026-07-19T17:00:00Z"),
+            replace(base, ticket_id="30", opened_at="2026-07-25T05:00:00Z"),
+            # 2026-07-30 23:59:59.999999 ICT -- last instant of 30/07 ICT.
+            replace(base, ticket_id="40", opened_at="2026-07-30T16:59:59.999999Z"),
+            # 2026-07-31 00:00:00 ICT -- first instant of the NEXT day.
+            replace(base, ticket_id="50", opened_at="2026-07-30T17:00:00Z"),
         ),
     )
 
