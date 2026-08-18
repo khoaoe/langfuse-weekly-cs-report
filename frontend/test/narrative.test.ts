@@ -155,4 +155,35 @@ describe("deterministic narrative", () => {
     expect(labels).toContain("SUCCESSFUL");
     expect(labels).not.toMatch(/-217|-5025|Transstatus|Step result/);
   });
+
+  it("aggregates tpe rows that share the same status instead of listing them twice", () => {
+    // Many distinct (transstatus, step_result) pairs can resolve to the same
+    // status — e.g. PENDING here comes from three different rows. Without
+    // grouping by status first, PENDING would occupy two or three slots in
+    // the top-3 signal list, understating its true share and potentially
+    // evicting a genuinely distinct signal.
+    const signals = selectTransferSignals({
+      transfer_reasons: {
+        observed_transfer_denominator: 30,
+        triggers: [],
+        step_result_missing: { count: 0, denominator: 30 },
+        tpe: [
+          { transstatus: "1", step_result: "1", count: 5, status: "PENDING" },
+          { transstatus: "1", step_result: "2", count: 3, status: "PENDING" },
+          { transstatus: "2", step_result: "1", count: 2, status: "PENDING" },
+          { transstatus: "-217", step_result: "-5025", count: 4, status: "SUCCESSFUL" },
+        ],
+        guardrail: [],
+        escalation_guard_blocked: { count: 0, denominator: 30 },
+      },
+    });
+
+    const pendingEntries = signals.filter((signal) => signal.label === "PENDING");
+    expect(pendingEntries).toHaveLength(1);
+    expect(pendingEntries[0]?.count).toBe(10);
+    expect(signals).toEqual([
+      { label: "PENDING", count: 10 },
+      { label: "SUCCESSFUL", count: 4 },
+    ]);
+  });
 });

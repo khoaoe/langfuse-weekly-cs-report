@@ -114,9 +114,21 @@ export function selectPreviousWeek(
 export function selectTransferSignals(view: {
   readonly transfer_reasons: DashboardView["transfer_reasons"];
 }): NarrativeSignal[] {
-  const tpe = view.transfer_reasons.tpe
-    .filter((item) => item.status !== null)
-    .map((item) => ({ label: item.status as string, count: item.count }));
+  // Payload grain is (transstatus, step_result), so distinct rows can resolve
+  // to the same status (e.g. several pairs all mean PENDING). Group by status
+  // and sum counts first so each status appears once with its true total —
+  // otherwise the same label could occupy two slots in the top-N signal list.
+  const countByStatus = new Map<string, number>();
+  for (const item of view.transfer_reasons.tpe) {
+    if (item.status === null) {
+      continue;
+    }
+    countByStatus.set(
+      item.status,
+      (countByStatus.get(item.status) ?? 0) + item.count,
+    );
+  }
+  const tpe = Array.from(countByStatus, ([label, count]) => ({ label, count }));
   return tpe.sort((left, right) => right.count - left.count);
 }
 
