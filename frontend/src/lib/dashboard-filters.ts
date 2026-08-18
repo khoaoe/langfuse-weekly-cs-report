@@ -1,12 +1,16 @@
 import type { TransferTriggerReason, WeekDefinition } from "./dashboard-schema";
 import { csatSatisfactionLabel } from "./csat-labels";
-import { formatWeekRange } from "./format";
+import { formatDateRangeLabel, formatWeekRange } from "./format";
 import { transferReasonLabel } from "./transfer-copy";
 
 export interface TicketFilters {
   readonly cohort_week: string;
   /** Comma-separated report weeks used only by the global multi-week scope. */
   readonly cohort_weeks: string;
+  /** ISO date (YYYY-MM-DD), inclusive. Mutually exclusive with cohort_week/cohort_weeks. */
+  readonly opened_from: string;
+  /** ISO date (YYYY-MM-DD), inclusive. Mutually exclusive with cohort_week/cohort_weeks. */
+  readonly opened_to: string;
   readonly outcome: string;
   readonly csat_satisfaction: string;
   readonly ticket_id: string;
@@ -27,6 +31,8 @@ export type TicketFilterKey = keyof TicketFilters;
 export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   cohort_week: "",
   cohort_weeks: "",
+  opened_from: "",
+  opened_to: "",
   outcome: "",
   csat_satisfaction: "",
   ticket_id: "",
@@ -51,7 +57,10 @@ export const OUTCOME_FILTER_LABELS: Readonly<Record<string, string>> = {
 
 const FILTER_LABELS: Readonly<
   Record<
-    Exclude<TicketFilterKey, "cohort_week" | "cohort_weeks" | "outcome">,
+    Exclude<
+      TicketFilterKey,
+      "cohort_week" | "cohort_weeks" | "opened_from" | "opened_to" | "outcome"
+    >,
     string
   >
 > = {
@@ -72,6 +81,7 @@ const FILTER_LABELS: Readonly<
 const CHIP_ORDER: readonly TicketFilterKey[] = [
   "cohort_week",
   "cohort_weeks",
+  "opened_from",
   "ticket_id",
   "outcome",
   "csat_satisfaction",
@@ -90,6 +100,9 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
 export interface ActiveFilterChip {
   readonly key: TicketFilterKey;
   readonly label: string;
+  /** Keys to clear together when this chip's remove button is clicked.
+   * Defaults to just `key` when omitted (see the combined date-range chip). */
+  readonly clearKeys?: readonly TicketFilterKey[];
 }
 
 export interface TpeOptionSource {
@@ -147,10 +160,27 @@ export function findTpeOptionSource(
   return matches[0];
 }
 
+/**
+ * The week filter (`cohort_week`/`cohort_weeks`) and the opened-date range
+ * filter (`opened_from`/`opened_to`) are mutually exclusive: picking one
+ * clears the other, so only one scoping mechanism is ever active.
+ */
 export function updateTicketFilters(
   current: TicketFilters,
   patch: Partial<TicketFilters>,
 ): TicketFilters {
+  const setsWeekFilter =
+    (patch.cohort_week !== undefined && patch.cohort_week !== "") ||
+    (patch.cohort_weeks !== undefined && patch.cohort_weeks !== "");
+  const setsDateRangeFilter =
+    (patch.opened_from !== undefined && patch.opened_from !== "") ||
+    (patch.opened_to !== undefined && patch.opened_to !== "");
+  if (setsWeekFilter) {
+    return { ...current, opened_from: "", opened_to: "", ...patch };
+  }
+  if (setsDateRangeFilter) {
+    return { ...current, cohort_week: "", cohort_weeks: "", ...patch };
+  }
   return { ...current, ...patch };
 }
 
@@ -190,7 +220,22 @@ export function activeTicketFilterChips(
   filters: TicketFilters,
   weekDefinition: WeekDefinition,
 ): ActiveFilterChip[] {
-  return CHIP_ORDER.flatMap((key) => {
+  return CHIP_ORDER.flatMap((key): ActiveFilterChip[] => {
+    if (key === "opened_from") {
+      if (filters.opened_from === "" && filters.opened_to === "") {
+        return [];
+      }
+      return [
+        {
+          key: "opened_from",
+          label: `Ngày mở: ${formatDateRangeLabel(filters.opened_from, filters.opened_to)}`,
+          clearKeys: ["opened_from", "opened_to"],
+        },
+      ];
+    }
+    if (key === "opened_to") {
+      return [];
+    }
     const value = filters[key];
     if (value === "") {
       return [];

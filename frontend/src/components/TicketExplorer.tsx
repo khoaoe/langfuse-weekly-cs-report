@@ -35,6 +35,7 @@ import {
   writeVisibleTicketColumns,
 } from "../lib/ticket-columns";
 import { DataTableSortButton } from "./DataTableSortButton";
+import { DateRangeField } from "./DateRangeField";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
 import {
@@ -249,6 +250,8 @@ export function TicketExplorer({
       ticket_id: filters.ticket_id.trim(),
       cohort_week: filters.cohort_week,
       cohort_weeks: filters.cohort_weeks,
+      opened_from: filters.opened_from,
+      opened_to: filters.opened_to,
       issue_category: filters.issue_category,
       app: filters.app,
       product_code: filters.product_code,
@@ -483,7 +486,13 @@ export function TicketExplorer({
               <button
                 type="button"
                 aria-label={`Bỏ lọc ${filter.label} (Ticket Explorer)`}
-                onClick={() => update({ [filter.key]: "" } as Partial<TicketFilters>)}
+                onClick={() =>
+                  update(
+                    Object.fromEntries(
+                      (filter.clearKeys ?? [filter.key]).map((key) => [key, ""]),
+                    ) as Partial<TicketFilters>,
+                  )
+                }
               >
                 ×
               </button>
@@ -522,6 +531,10 @@ export function TicketExplorer({
             ))}
           </select>
         </label>
+        <DateRangeField
+          value={{ opened_from: filters.opened_from, opened_to: filters.opened_to }}
+          onChange={(range) => update(range)}
+        />
         <label className={ticketStyles.field} htmlFor="ticketIdInput">
           Mã ticket
           <input

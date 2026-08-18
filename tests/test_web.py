@@ -685,6 +685,11 @@ def test_ticket_endpoint_is_fixed_503_before_first_snapshot(manager_factory):
         ("page_size=101", "page_size"),
         ("cohort_week=sk-secret-value", "cohort_week"),
         ("cohort_weeks=2026-07-20", "cohort_weeks"),
+        ("opened_from=sk-secret-value", "opened_from"),
+        ("opened_to=sk-secret-value", "opened_to"),
+        ("opened_from=2026-07-30&opened_to=2026-07-20", "opened_from"),
+        ("opened_from=2026-07-20&cohort_week=2026-07-20", "opened_from"),
+        ("opened_to=2026-07-20&cohort_weeks=2026-07-13,2026-07-20", "opened_from"),
         ("outcome=sk-secret-value", "outcome"),
         ("ticket_id=0901234567%21", "ticket_id"),
         ("page=1&page=0901234567", "page"),
@@ -880,9 +885,9 @@ def test_ticket_endpoint_accepts_the_full_18_unique_query_pair_contract(manager_
     [
         ("page=" + ("9" * 5000), "page"),
         ("page=1234567890", "page"),
-        ("&".join(["page=1"] * 21), "unknown"),
+        ("&".join(["page=1"] * 23), "unknown"),
     ],
-    ids=("five-thousand-digit-value", "ten-digit-number", "nine-pairs"),
+    ids=("five-thousand-digit-value", "ten-digit-number", "more-pairs-than-allowlisted-names"),
 )
 def test_ticket_query_resource_bounds_fail_fast_with_sanitized_422(
     manager_factory, query: str, parameter: str

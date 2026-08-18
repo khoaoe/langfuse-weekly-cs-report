@@ -60,6 +60,8 @@ _ALLOWED_IDENTITY_HEADERS = frozenset(
 _QUERY_NAMES = (
     "cohort_week",
     "cohort_weeks",
+    "opened_from",
+    "opened_to",
     "outcome",
     "ticket_id",
     "issue_category",
