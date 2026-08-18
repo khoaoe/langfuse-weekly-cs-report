@@ -6,7 +6,6 @@ import {
   COHORT_LABELS,
   buildNarrativeInput,
   selectAttentionItems,
-  selectCoverageNote,
   selectLedger,
   selectScope,
   selectView,
@@ -41,7 +40,6 @@ export function DecisionLedger({
   const scope = selectScope(snapshot, weekDefinition, activeWeek);
   const latest = scope.week;
   const cells = selectLedger(snapshot, weekDefinition, activeWeek);
-  const coverageNote = selectCoverageNote(snapshot);
   const attention = selectAttentionItems(snapshot, weekDefinition, activeWeek);
   const narrative = buildDeterministicNarrative(
     buildNarrativeInput(snapshot, weekDefinition, activeWeek),
@@ -86,9 +84,6 @@ export function DecisionLedger({
                 {line}
               </p>
             ))}
-            {coverageNote === null ? null : (
-              <p id="ledger-coverage-note">{coverageNote}</p>
-            )}
           </div>
         </div>
 

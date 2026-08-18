@@ -14,7 +14,6 @@ import {
   selectAttentionItems,
   selectLedger,
   selectScope,
-  selectWeakestCoverage,
 } from "../src/lib/selectors";
 
 const baseSnapshot = DashboardEnvelopeSchema.parse(dashboardEnvelopeFixture)
@@ -181,41 +180,6 @@ describe("selected-week decision scope", () => {
     expect(screen.queryByText(/Cần lưu ý/i)).toBeNull();
   });
 
-  it("names the single weakest coverage dimension instead of a blended score", () => {
-    // A 78/100 aggregate hides which dimension is actually short and what
-    // it costs. Naming the weakest one — Category 50%, tpe 50%, skill 50%
-    // tied in this fixture, first-in-schema-order wins deterministically —
-    // tells the reader something they can act on.
-    const weak: DashboardSnapshot = {
-      ...baseSnapshot,
-      coverage: {
-        ...baseSnapshot.coverage,
-        issue_category: 0.5,
-        tpe: 0.5,
-        skill: 0.5,
-      },
-    };
-    expect(selectWeakestCoverage(weak)).toEqual({
-      name: "issue_category",
-      label: "Category",
-      missingShare: 0.5,
-    });
-  });
-
-  it("reports no weak dimension once every coverage stat clears the floor", () => {
-    const healthy: DashboardSnapshot = {
-      ...baseSnapshot,
-      coverage: {
-        issue_category: 0.9,
-        app: 0.8,
-        tpe: 0.85,
-        intent: 0.82,
-        skill: 0.8,
-      },
-    };
-    expect(selectWeakestCoverage(healthy)).toBeNull();
-  });
-
   it("drops the share line on a count cell that measured nothing", () => {
     const zeroed: DashboardSnapshot = {
       ...baseSnapshot,
@@ -281,44 +245,6 @@ describe("selected-week decision scope", () => {
       },
       { id: "ledger-gt4", value: "0", support: null },
     ]);
-  });
-
-  it("renders the weakest-coverage note once, shared across the ledger rather than per cell", () => {
-    const weak: DashboardSnapshot = {
-      ...baseSnapshot,
-      coverage: {
-        ...baseSnapshot.coverage,
-        issue_category: 0.856,
-        tpe: 0.783,
-        skill: 0.704,
-        app: 0.9,
-        intent: 0.9,
-      },
-    };
-
-    const { rerender } = render(
-      <DecisionLedger snapshot={weak} weekDefinition="mon_sun" />,
-    );
-
-    // Exactly one occurrence in the whole render, not once per KPI cell.
-    expect(screen.getAllByText(/Độ phủ Skill 70,4%/)).toHaveLength(1);
-    expect(document.getElementById("ledger-coverage-note")).toHaveTextContent(
-      "Độ phủ Skill 70,4%",
-    );
-    expect(document.getElementById("ledger-ai-first")).not.toHaveTextContent(
-      /Độ phủ/,
-    );
-
-    // Still exactly one occurrence once the <button>-wrapped interactive
-    // branch is exercised too.
-    rerender(
-      <DecisionLedger
-        snapshot={weak}
-        weekDefinition="mon_sun"
-        onCellSelect={vi.fn()}
-      />,
-    );
-    expect(screen.getAllByText(/Độ phủ Skill 70,4%/)).toHaveLength(1);
   });
 
   it("renders critical rail items with a direct ticket filter", () => {
