@@ -86,6 +86,9 @@ export function DecisionLedger({
                 {line}
               </p>
             ))}
+            {coverageNote === null ? null : (
+              <p id="ledger-coverage-note">{coverageNote}</p>
+            )}
           </div>
         </div>
 
@@ -140,15 +143,6 @@ export function DecisionLedger({
               ),
             )}
           </div>
-
-          {coverageNote === null ? null : (
-            <p
-              id="ledger-coverage-note"
-              className={`${styles.tableCaption} ${styles.ledgerCoverageNote}`}
-            >
-              {coverageNote}
-            </p>
-          )}
         </div>
       </div>
 
