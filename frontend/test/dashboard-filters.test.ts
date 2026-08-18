@@ -37,6 +37,54 @@ describe("dashboard filter state", () => {
     expect(current.product_code).toBe("IBFT");
   });
 
+  it("selecting an opened-date range clears the week filter, and vice versa", () => {
+    const withWeek = updateTicketFilters(EMPTY_TICKET_FILTERS, {
+      cohort_week: "2026-07-20",
+    });
+    expect(withWeek.cohort_week).toBe("2026-07-20");
+
+    const withRange = updateTicketFilters(withWeek, {
+      opened_from: "2026-07-06",
+      opened_to: "2026-07-30",
+    });
+    expect(withRange.opened_from).toBe("2026-07-06");
+    expect(withRange.opened_to).toBe("2026-07-30");
+    expect(withRange.cohort_week).toBe("");
+    expect(withRange.cohort_weeks).toBe("");
+
+    const backToWeek = updateTicketFilters(withRange, {
+      cohort_weeks: "2026-07-13,2026-07-20",
+    });
+    expect(backToWeek.cohort_weeks).toBe("2026-07-13,2026-07-20");
+    expect(backToWeek.opened_from).toBe("");
+    expect(backToWeek.opened_to).toBe("");
+  });
+
+  it("shows one combined chip for the opened-date range and clears both bounds together", () => {
+    const current = {
+      ...EMPTY_TICKET_FILTERS,
+      opened_from: "2026-07-06",
+      opened_to: "2026-07-30",
+    };
+
+    expect(activeTicketFilterChips(current, "mon_sun")).toEqual([
+      {
+        key: "opened_from",
+        label: "Ngày mở: 06/07–30/07",
+        clearKeys: ["opened_from", "opened_to"],
+      },
+    ]);
+
+    const chip = activeTicketFilterChips(current, "mon_sun")[0];
+    const cleared = updateTicketFilters(
+      current,
+      Object.fromEntries((chip?.clearKeys ?? []).map((key) => [key, ""])),
+    );
+    expect(cleared.opened_from).toBe("");
+    expect(cleared.opened_to).toBe("");
+    expect(activeTicketFilterChips(cleared, "mon_sun")).toEqual([]);
+  });
+
   it("nhan option Transstatus uu tien status, giu ma trong ngoac", () => {
     expect(tpeOptionLabel({ transstatus: "1", step_result: "1", status: "SUCCESSFUL" }))
       .toBe("SUCCESSFUL (1 / 1)");

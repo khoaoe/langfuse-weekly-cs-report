@@ -146,6 +146,22 @@ export function formatWeekRange(
   return `${compactDate(start)}–${compactDate(end)}`;
 }
 
+/** `from`/`to` are ISO dates (YYYY-MM-DD) or "" when that bound is unset. */
+export function formatDateRangeLabel(from: string, to: string): string {
+  const start = parseIsoDate(from || null);
+  const end = parseIsoDate(to || null);
+  if (start !== null && end !== null) {
+    return `${compactDate(start)}–${compactDate(end)}`;
+  }
+  if (start !== null) {
+    return `Từ ${compactDate(start)}`;
+  }
+  if (end !== null) {
+    return `Đến ${compactDate(end)}`;
+  }
+  return "—";
+}
+
 export function formatUpdatedAt(value: string | null | undefined): string {
   if (!value) {
     return "—";

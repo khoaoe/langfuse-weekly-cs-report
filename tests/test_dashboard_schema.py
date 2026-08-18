@@ -1349,6 +1349,55 @@ def test_ticket_page_rejects_invalid_multi_week_filters(cohort_weeks: str):
         )
 
 
+def test_ticket_page_filters_by_opened_date_range_inclusive_of_both_boundaries():
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(base, ticket_id="10", opened_at="2026-07-19T23:59:59Z"),
+            replace(base, ticket_id="20", opened_at="2026-07-20T00:00:00Z"),
+            replace(base, ticket_id="30", opened_at="2026-07-25T12:00:00Z"),
+            replace(base, ticket_id="40", opened_at="2026-07-30T23:59:59.999999Z"),
+            replace(base, ticket_id="50", opened_at="2026-07-31T00:00:00Z"),
+        ),
+    )
+
+    page = ticket_page(
+        ranged_snapshot,
+        opened_from="2026-07-20",
+        opened_to="2026-07-30",
+        page_size=100,
+    )
+
+    assert {item["ticket_id"] for item in page["items"]} == {"20", "30", "40"}
+
+    from_only = ticket_page(ranged_snapshot, opened_from="2026-07-25", page_size=100)
+    assert {item["ticket_id"] for item in from_only["items"]} == {"30", "40", "50"}
+
+    to_only = ticket_page(ranged_snapshot, opened_to="2026-07-20", page_size=100)
+    assert {item["ticket_id"] for item in to_only["items"]} == {"10", "20"}
+
+
+def test_ticket_page_rejects_invalid_or_conflicting_opened_date_range():
+    snapshot = _snapshot()
+
+    with pytest.raises(ValueError, match="opened_from is invalid"):
+        ticket_page(snapshot, opened_from="not-a-date")
+
+    with pytest.raises(ValueError, match="opened_to is invalid"):
+        ticket_page(snapshot, opened_to="2026-13-40")
+
+    with pytest.raises(ValueError, match="opened_from must not be after opened_to"):
+        ticket_page(snapshot, opened_from="2026-07-30", opened_to="2026-07-20")
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        ticket_page(snapshot, opened_from="2026-07-20", cohort_week="2026-07-20")
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        ticket_page(snapshot, opened_to="2026-07-20", cohort_weeks="2026-07-13,2026-07-20")
+
+
 def test_ticket_page_filters_by_strict_transfer_reason_enum():
     snapshot = _snapshot()
     expected = [

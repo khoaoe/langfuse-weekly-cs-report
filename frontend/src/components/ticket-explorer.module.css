@@ -52,6 +52,133 @@
   font: inherit;
 }
 
+.dateRangeDetails {
+  position: relative;
+  min-width: 0;
+  color: var(--ink);
+}
+
+.dateRangeSummary {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  color: var(--ink);
+  background: var(--surface);
+  font: inherit;
+  cursor: pointer;
+  list-style: none;
+}
+
+.dateRangeSummary::-webkit-details-marker {
+  display: none;
+}
+
+.dateRangeSummary:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
+  outline-offset: 2px;
+  border-color: var(--interactive);
+}
+
+.dateRangePanel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + var(--space-2));
+  left: 0;
+  width: min(340px, calc(100vw - 2 * var(--gutter)));
+  padding: var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  box-shadow: var(--shell-shadow);
+}
+
+.dateRangeQuick {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.dateRangeQuickButton {
+  min-height: 40px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dateRangeQuickButton:hover {
+  border-color: var(--interactive);
+}
+
+.dateRangeCalendarHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.dateRangeCalendarHeader button {
+  min-width: 32px;
+  min-height: 32px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.dateRangeWeekdays,
+.dateRangeWeek {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.dateRangeWeekdays {
+  margin-bottom: var(--space-1);
+  color: var(--muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.dateRangeDay {
+  min-height: 32px;
+  border: none;
+  border-radius: var(--radius-tight);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.dateRangeDay:hover {
+  background: var(--surface-sunken);
+}
+
+.dateRangeDay[data-outside="true"] {
+  color: var(--muted);
+}
+
+.dateRangeDay[data-in-range="true"] {
+  background: color-mix(in srgb, var(--interactive) 12%, var(--surface));
+}
+
+.dateRangeDay[data-selected="true"] {
+  background: var(--interactive);
+  color: var(--surface);
+}
+
 .pager {
   display: flex;
   flex-wrap: wrap;

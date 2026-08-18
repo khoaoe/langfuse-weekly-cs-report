@@ -10,7 +10,7 @@ accidentally grow an unreviewed JSON surface.
 from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 import re
 from typing import Mapping
 from unicodedata import category, decimal, normalize
@@ -321,6 +321,8 @@ def ticket_page(
     *,
     cohort_week: str | None = None,
     cohort_weeks: str | None = None,
+    opened_from: str | None = None,
+    opened_to: str | None = None,
     outcome: str | None = None,
     ticket_id: str | None = None,
     issue_category: str | None = None,
@@ -348,12 +350,22 @@ def ticket_page(
     _validate_ticket_filters(
         cohort_week=cohort_week,
         cohort_weeks=cohort_weeks,
+        opened_from=opened_from,
+        opened_to=opened_to,
         outcome=outcome,
         ticket_id=ticket_id,
         page=page,
         page_size=page_size,
     )
     selected_cohort_weeks = _parse_cohort_weeks_filter(cohort_weeks)
+    opened_from_bound = (
+        None if opened_from is None
+        else datetime.combine(date.fromisoformat(opened_from), time.min, tzinfo=timezone.utc)
+    )
+    opened_to_bound = (
+        None if opened_to is None
+        else datetime.combine(date.fromisoformat(opened_to), time.max, tzinfo=timezone.utc)
+    )
     strings = {
         "issue_category": issue_category,
         "app": app,
@@ -396,6 +408,14 @@ def ticket_page(
         and (
             selected_cohort_weeks is None
             or row.cohort_week in selected_cohort_weeks
+        )
+        and (
+            opened_from_bound is None
+            or _parse_utc_iso(row.opened_at, "opened_at") >= opened_from_bound
+        )
+        and (
+            opened_to_bound is None
+            or _parse_utc_iso(row.opened_at, "opened_at") <= opened_to_bound
         )
         and (outcome is None or row.outcome == outcome)
         and (ticket_id is None or row.ticket_id == ticket_id)
@@ -1713,6 +1733,8 @@ def _validate_ticket_filters(
     page: int,
     page_size: int,
     cohort_weeks: str | None = None,
+    opened_from: str | None = None,
+    opened_to: str | None = None,
 ) -> None:
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
         raise ValueError("page must be at least 1")
@@ -1734,6 +1756,29 @@ def _validate_ticket_filters(
         if parsed.weekday() != 0:
             raise ValueError("cohort_week must be a Monday")
     _parse_cohort_weeks_filter(cohort_weeks)
+    if (opened_from is not None or opened_to is not None) and (
+        cohort_week is not None or cohort_weeks is not None
+    ):
+        raise ValueError("opened_from cannot be combined with cohort_week")
+    parsed_opened_from = _parsed_ticket_date(opened_from, "opened_from")
+    parsed_opened_to = _parsed_ticket_date(opened_to, "opened_to")
+    if (
+        parsed_opened_from is not None
+        and parsed_opened_to is not None
+        and parsed_opened_from > parsed_opened_to
+    ):
+        raise ValueError("opened_from must not be after opened_to")
+
+
+def _parsed_ticket_date(value: str | None, name: str) -> date | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{name} is invalid")
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(f"{name} is invalid") from error
 
 
 def _ticket_from_storage(value: object) -> TicketRow:

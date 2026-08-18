@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatCount,
+  formatDateRangeLabel,
   formatRate,
   formatRateAxis,
   formatWeekRange,
@@ -22,6 +23,13 @@ describe("dashboard formatting", () => {
     expect(formatRate(null)).toBe("—");
     expect(formatCount(null)).toBe("—");
     expect(formatWeekStart("not-a-week")).toBe("—");
+  });
+
+  it("formats an opened-date range, one open bound, or neither", () => {
+    expect(formatDateRangeLabel("2026-07-06", "2026-07-30")).toBe("06/07–30/07");
+    expect(formatDateRangeLabel("2026-07-06", "")).toBe("Từ 06/07");
+    expect(formatDateRangeLabel("", "2026-07-30")).toBe("Đến 30/07");
+    expect(formatDateRangeLabel("", "")).toBe("—");
   });
 
   it("drops the decimal when a rate carries no fractional information", () => {
