@@ -1,7 +1,7 @@
 # Đo tap target mobile (Ticket Explorer) + truy nguồn CSP `eval` — 2026-08-18
 
 **Nhiệm vụ:** Task 12/13 của kế hoạch remediation (`docs/superpowers/plans/2026-08-18-dashboard-critique-remediation.md`), theo dõi hai mục còn treo trong
-`docs/superpowers/reports/2026-08-18-stakeholder-persona-critique-report.md` — item #5 (form control nhỏ trên mobile) và item #8 ("chưa xác nhận được nguồn `eval()`").
+`docs/superpowers/reports/2026-08-18-stakeholder-persona-critique-report.md` — item #7 (tap target mobile Ticket Explorer) và item #8 ("chưa xác nhận được nguồn `eval()`").
 Đây là báo cáo điều tra thuần — không sửa code, không tạo task fix nếu không có căn cứ.
 
 **Kết luận nhanh:** Cả hai đều **không có vấn đề thật**. Tap target trong Ticket Explorer đạt chuẩn 44×44 ở mọi control người dùng thực sự bấm; 22 phần tử "dưới 44px" đo được đều là control cùng một loại (checkbox ẩn trong `<label>` 44px) không phải checkbox chọn dòng ticket như giả thuyết ban đầu. `eval()` bị CSP chặn là do chính zod tự dò khả năng JIT của môi trường — hành vi được zod tài liệu hoá, tự bắt lỗi, không ảnh hưởng chức năng.
