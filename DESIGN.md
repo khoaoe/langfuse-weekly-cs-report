@@ -184,8 +184,16 @@ Critical rail items use critical tone, not a severity prefix.
 7. ② Trends, with one shared `Cùng kỳ đến Tn` / `Tuần đủ` control for both
    aligned panels when a same-period comparison is available. ③ `So sánh theo
    thuộc tính ticket` with Category / App / Product Code / Skill / Intent.
-   ④ Transfer and rule diagnostics.
-   ⑤ Data quality. ⑥ Ticket Explorer.
+   ④ CSAT (`Mức hài lòng`). ⑤ Transfer and rule diagnostics. ⑥ Ticket Explorer.
+
+The standalone "data quality" section (per-dimension `#dqBadge` breakdown) and
+its own nav entry stay retired; they do not reappear here. The reader's "is
+this data trustworthy" question is now answered by two narrower signals
+instead of one section: the shell's `Độ tin cậy X/100` chip (item 1 above;
+`calculateDataQualityScore` in `AppShell.tsx`) states one blended score, and
+`selectCoverageNote()` (`selectors.ts`) names the single weakest coverage
+dimension next to the decision ledger whenever any dimension falls under the
+0,8 floor — never a full section of its own.
 
 The segment caption is fixed product copy:
 
@@ -418,6 +426,15 @@ better.
    not prove runtime image behaviour.
 8. **No CS user task test.** The spec's release gate asks for at least two CS
    users to complete the defined task test; that has not happened.
+9. Nhãn trạng thái TPE hiển thị bằng enum tiếng Anh (`SUCCESSFUL`, `FAILED_NFC`, ...)
+   thay vì dịch sang tiếng Việt. Đi ngược SPEC-v2 §5.3 (cấm trộn nhãn tiếng Anh
+   trong câu tiếng Việt) và ngược convention `DATA_QUALITY_LABELS`
+   (`frontend/src/lib/data-quality.ts:5-8`). PO quyết định giữ tiếng Anh ngày
+   2026-08-18 sau khi được trình bày cả hai điểm trên. Xem lại nếu có phản hồi
+   từ người dùng CS.
+10. `--critical: #b42318` (đã gỡ ở bản này) và `--critical-text: #b42318` là màu đỏ
+    không có trong palette Zalopay — guideline không có màu đỏ nào. Giữ lại vì
+    ngữ nghĩa cảnh báo, theo Product Principle 4.
 
 ## Rollback
 
