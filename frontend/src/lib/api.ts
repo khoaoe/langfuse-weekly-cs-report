@@ -155,6 +155,32 @@ export async function fetchTraceExplanation(
   }
 }
 
+/** Throws DashboardRequestError(status) for 400/404/503 domain errors, same
+ * as fetchTraceExplanation -- separate request so the deterministic dossier
+ * (and its own cache) never blocks on the trace_explain payload or vice versa. */
+export async function fetchWhyExplanation(
+  ticketId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const response = await fetch(
+    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}/why`,
+    {
+      method: "GET",
+      credentials: "same-origin",
+      headers: JSON_HEADERS,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  if (response.status !== 200) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
+}
+
 /** Throws DashboardRequestError(status) for 400/503 domain errors, same as
  * every other endpoint here -- the caller inspects `.status` to choose a
  * Vietnamese message instead of showing the raw code. */

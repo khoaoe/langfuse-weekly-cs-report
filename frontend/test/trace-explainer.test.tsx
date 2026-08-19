@@ -12,6 +12,73 @@ import {
 import type { TraceExplanation } from "../src/lib/trace-explain-schema";
 import { server } from "./msw/server";
 
+const WHY_EXPLANATION = {
+  ticket_id: "7068785",
+  escalation_class: "NONE",
+  dossier: {
+    ticket_id: "7068785",
+    escalation_class: "NONE",
+    escalated_turn: null,
+    guardrail_reason: null,
+    blocking_rule: null,
+    skills_loaded: ["withdraw"],
+    sub_skills_read: [],
+    tool_evidence: [],
+    ticket_facts: [],
+    rule_candidates: [],
+    coverage: { app_id: null, expected_skill: null, loaded_skills: ["withdraw"], mismatch: false },
+    turn_deltas: [],
+    drift_changed: false,
+    phases: [
+      {
+        key: "tiep_nhan",
+        title: "Tiếp nhận câu hỏi",
+        summary: "2 bước kiểm tra · đạt",
+        rows: [],
+        state: "dat",
+        collapsed: true,
+      },
+      {
+        key: "nhan_dien",
+        title: "Nhận diện vấn đề",
+        summary: "1 bước kiểm tra · đạt",
+        rows: [],
+        state: "dat",
+        collapsed: true,
+      },
+      {
+        key: "doc_quy_dinh",
+        title: "Đọc quy định",
+        summary: "Không có bước nào",
+        rows: [],
+        state: "dat",
+        collapsed: true,
+      },
+      {
+        key: "tra_du_lieu",
+        title: "Tra dữ liệu",
+        summary: "",
+        rows: [
+          { label: "Ngân hàng", value: "VCB", evidence: { bank: "VCB" } },
+        ],
+        state: "thong_tin",
+        collapsed: false,
+      },
+      {
+        key: "ket_qua",
+        title: "TRẢ LỜI KHÁCH",
+        summary: "",
+        rows: [],
+        state: "quyet_dinh",
+        collapsed: false,
+      },
+    ],
+  },
+  narration: null,
+  llm_status: "disabled",
+  drift: { changed: false },
+};
+
 function renderExplainer(ticketId: string | null) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -97,21 +164,29 @@ describe("TraceExplainer", () => {
       http.get("/api/trace-explain/:ticketId", () =>
         HttpResponse.json(EXPLANATION),
       ),
+      http.get("/api/trace-explain/:ticketId/why", () =>
+        HttpResponse.json(WHY_EXPLANATION),
+      ),
     );
 
     renderExplainer("7068785");
 
     expect(await screen.findByText("Đã trả lời")).toBeInTheDocument();
     expect(screen.getByText("Agent đã trả lời khách")).toBeInTheDocument();
-    expect(screen.getByText("Tra dữ liệu: get_bank_info")).toBeInTheDocument();
+    // Timeline now comes from the separate /why dossier (spec 11.1).
+    expect(await screen.findByText("Ngân hàng")).toBeInTheDocument();
+    expect(screen.getByText("VCB")).toBeInTheDocument();
     // The blocked first turn must not be shown until selected.
     expect(screen.queryByText("Câu hỏi vướng rule off_topic")).not.toBeInTheDocument();
   });
 
-  it("switches turns via the turn selector and re-renders that turn's steps", async () => {
+  it("switches turns via the turn selector without losing the shared timeline", async () => {
     server.use(
       http.get("/api/trace-explain/:ticketId", () =>
         HttpResponse.json(EXPLANATION),
+      ),
+      http.get("/api/trace-explain/:ticketId/why", () =>
+        HttpResponse.json(WHY_EXPLANATION),
       ),
     );
     const user = userEvent.setup();
@@ -121,15 +196,19 @@ describe("TraceExplainer", () => {
     await user.click(screen.getByRole("tab", { name: "Lượt 1" }));
 
     expect(screen.getByText("Chuyển CS")).toBeInTheDocument();
-    // The conclusion sentence and the blocking step's own summary happen to
-    // read identically for a guard-blocked verdict -- both must be present.
-    expect(screen.getAllByText("Câu hỏi vướng rule off_topic")).toHaveLength(2);
+    expect(screen.getByText("Câu hỏi vướng rule off_topic")).toBeInTheDocument();
+    // The timeline reflects the session's dossier, not the selected tab --
+    // it must not disappear when switching to an earlier turn.
+    expect(screen.getByText("Ngân hàng")).toBeInTheDocument();
   });
 
-  it("expands a step to show its raw evidence", async () => {
+  it("expands a timeline row to show its raw evidence", async () => {
     server.use(
       http.get("/api/trace-explain/:ticketId", () =>
         HttpResponse.json(EXPLANATION),
+      ),
+      http.get("/api/trace-explain/:ticketId/why", () =>
+        HttpResponse.json(WHY_EXPLANATION),
       ),
     );
     const user = userEvent.setup();
@@ -137,7 +216,7 @@ describe("TraceExplainer", () => {
     await screen.findByText("Đã trả lời");
 
     expect(screen.queryByText(/"bank": "VCB"/)).not.toBeInTheDocument();
-    await user.click(screen.getAllByText("Xem chi tiết")[1]!);
+    await user.click(await screen.findByText("Xem bằng chứng"));
 
     expect(screen.getByText(/"bank": "VCB"/)).toBeInTheDocument();
   });

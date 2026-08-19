@@ -1,0 +1,44 @@
+{
+  "ticket_id": "9001005",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001005-0",
+        "sessionId": "9001005",
+        "timestamp": "2026-08-19T06:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Giao dich da xu ly xong chua",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001005",
+            "title": "Hoi lai giao dich"
+          }
+        },
+        "output": {
+          "response": null,
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001005-0",
+          "startTime": "2026-08-19T06:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": true
+          }
+        }
+      ]
+    }
+  ]
+}

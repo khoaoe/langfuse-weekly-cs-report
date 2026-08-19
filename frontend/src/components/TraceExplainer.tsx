@@ -8,14 +8,19 @@ import {
 } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { DashboardRequestError, fetchTraceExplanation } from "../lib/api";
+import {
+  DashboardRequestError,
+  fetchTraceExplanation,
+  fetchWhyExplanation,
+} from "../lib/api";
 import {
   parseTraceExplanation,
-  type TraceExplanation,
   type TraceTurn,
 } from "../lib/trace-explain-schema";
+import { parseWhyExplanation, type TimelinePhase } from "../lib/why-schema";
 import { formatUpdatedAt } from "../lib/format";
 import { isValidFreshdeskTicketId } from "./FreshdeskTicketLink";
+import { WhyTimeline } from "./WhyTimeline";
 import styles from "./dashboard.module.css";
 import traceStyles from "./trace-explainer.module.css";
 
@@ -128,43 +133,15 @@ export function renderSafeResponse(html: string): ReactNode {
   );
 }
 
-function TraceStepItem({ step }: { readonly step: TraceExplanation["turns"][number]["steps"][number] }) {
-  const [expanded, setExpanded] = useState(false);
-  const blocked = step.outcome === "chan";
-  return (
-    <li className={blocked ? traceStyles.stepBlocked : traceStyles.step}>
-      <span
-        className={blocked ? traceStyles.stepDotBlocked : traceStyles.stepDot}
-        aria-hidden="true"
-      />
-      <div className={traceStyles.stepBody}>
-        <p className={traceStyles.stepSummary}>{step.summary}</p>
-        <p className={traceStyles.stepLabel}>{step.label}</p>
-        <button
-          type="button"
-          className={traceStyles.evidenceToggle}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Ẩn chi tiết" : "Xem chi tiết"}
-        </button>
-        {expanded ? (
-          <pre className={traceStyles.evidence}>
-            {JSON.stringify(step.evidence, null, 2)}
-          </pre>
-        ) : null}
-      </div>
-    </li>
-  );
-}
-
 function TraceTurnView({
   ticketId,
   turn,
+  phases,
   onCopyStatus,
 }: {
   readonly ticketId: string;
   readonly turn: TraceTurn;
+  readonly phases: readonly TimelinePhase[] | null;
   readonly onCopyStatus: (message: string) => void;
 }) {
   const copyLink = useCallback(() => {
@@ -212,12 +189,7 @@ function TraceTurnView({
         ) : null}
       </div>
 
-      <h3 className={traceStyles.timelineTitle}>Diễn biến xử lý</h3>
-      <ol className={traceStyles.timeline}>
-        {turn.steps.map((step, index) => (
-          <TraceStepItem key={`${step.key}-${index}`} step={step} />
-        ))}
-      </ol>
+      {phases !== null ? <WhyTimeline phases={phases} /> : null}
 
       <div className={traceStyles.actions}>
         <button type="button" className={styles.action} onClick={copyLink}>
@@ -254,6 +226,24 @@ export function TraceExplainer({
       return parsed.data;
     },
   });
+
+  // Separate request, same convention as the drawer: the timeline must not
+  // block on (or be blocked by) the trace_explain payload above.
+  const whyQuery = useQuery({
+    queryKey: ["trace-why", ticketId],
+    enabled: ticketId !== null,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const parsed = parseWhyExplanation(
+        await fetchWhyExplanation(ticketId as string, signal),
+      );
+      if (!parsed.ok) {
+        throw new Error(parsed.message);
+      }
+      return parsed.data;
+    },
+  });
+  const phases = whyQuery.data?.dossier.phases ?? null;
 
   const turns = query.data?.turns ?? [];
   const activeIndex = useMemo(() => {
@@ -346,6 +336,7 @@ export function TraceExplainer({
           <TraceTurnView
             ticketId={query.data.ticket_id}
             turn={activeTurn}
+            phases={phases}
             onCopyStatus={setCopyStatus}
           />
 

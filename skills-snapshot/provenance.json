@@ -1,0 +1,99 @@
+{
+  "files": {
+    "bank-linking/SKILL.md": {
+      "sha256": "0fca9be2a0c99c807d71433b3317c015b07a9ab01f94d3d6cec851cd8c042cea"
+    },
+    "bank-linking/references/sub-skill-AB.md": {
+      "sha256": "4fbf743f65b5fdf8ce0074976a26021463651a85cb95b2b1b08d6eac5cd72f5c"
+    },
+    "bank-linking/references/sub-skill-C.md": {
+      "sha256": "32069ea12176eb74144075a19ef0c3b144ed7513d83d02d0f5d02f1576b91415"
+    },
+    "bank-unlink/SKILL.md": {
+      "sha256": "95a4c8df20618a9a229865384a258fd1b5ef6304c297877828ec1e42e34b3d61"
+    },
+    "bank-unlink/references/sub-skill-AD.md": {
+      "sha256": "da6633064e2fe9e91f08e846b40c576f2d7c2d9c3faa6d14292b2babd1e7c9c2"
+    },
+    "bank-unlink/references/sub-skill-B.md": {
+      "sha256": "4d89c70d4c3b92d46b009a4c6e9e8c65786d6a862b3d0fea1019e8a665631392"
+    },
+    "bank-unlink/references/sub-skill-CE.md": {
+      "sha256": "307b6b6bd97e7d12b7175b9be83aba679c87a5d317ddd3655e57eec6013cbebe"
+    },
+    "ibft/SKILL.md": {
+      "sha256": "c39f7e036606fc233930987ad0c6b1abdc4ea8df8810506ee894e596ba6018aa"
+    },
+    "ibft/references/sub-skill-A.md": {
+      "sha256": "f9ff7f7d383e6d532c230492f2c8731b484b180d011e26aee8a2797e40bac95d"
+    },
+    "ibft/references/sub-skill-B.md": {
+      "sha256": "834806b54d6eaed82272c53d183ec021a1c4c4435b050231980eed7ce9bfcadc"
+    },
+    "ibft/references/sub-skill-CD.md": {
+      "sha256": "99bb356f9effc85f85444f86b49229becb3d0ed60dcd3774e9c78096eb74665d"
+    },
+    "ibft/references/sub-skill-E.md": {
+      "sha256": "55fa37616d306a1a5ec16021e1f5e925b746b27f9cef2e5e15acf697742a5028"
+    },
+    "ibft/references/sub-skill-FGH.md": {
+      "sha256": "575ccad3f208a7b7896bdec1d09b27b848892940137c295aba3ca9852f08fb19"
+    },
+    "ibft/references/sub-skill-I.md": {
+      "sha256": "783119c899967f098dcf8d8e5e1d9786165653281d0b51f65e214522792aa9fb"
+    },
+    "telco/SKILL.md": {
+      "sha256": "a480c41544a6a668d33346d0ef5f8b0b53d94a52b87ab725287a03c3de63e76c"
+    },
+    "telco/references/sub-skill-A.md": {
+      "sha256": "fbc7913ef3a20c142ecd49a98ee400a59e6879a10479302f3a76481267bdd5e2"
+    },
+    "telco/references/sub-skill-BC.md": {
+      "sha256": "263ae46c80b532a31ad2a5bd6bd78dec195f15b51835ee0839b9d4ed9710a570"
+    },
+    "telco/references/sub-skill-DEFG.md": {
+      "sha256": "3e12d0202fbcae2cca7f932b37ea62d95414de92b3da53e913903824c001d94f"
+    },
+    "telco/references/sub-skill-H.md": {
+      "sha256": "42a83f273188ad354cf709692eb84fd32f87ddbf8dbc24727a8d8833321e92da"
+    },
+    "topup/SKILL.md": {
+      "sha256": "d215fe4cd76c92febe7fc83e78f593d9b23b59497774dbd9f297cfb7ecc96f02"
+    },
+    "topup/references/sub-skill-A.md": {
+      "sha256": "1c5e9bf5be2953ae25c0430e060f7ebd05574698bb6e4400c52b13a050a34f36"
+    },
+    "topup/references/sub-skill-B.md": {
+      "sha256": "3d7f0f3704e33fe123e0e54e922979378e9f2b0f0df8f56a07502027bf13313c"
+    },
+    "topup/references/sub-skill-C.md": {
+      "sha256": "e67994d88510ddc4e78a91b360ea8076cc676b5158b177a3d75ff88299506ad7"
+    },
+    "topup/references/sub-skill-D.md": {
+      "sha256": "6963dbedf64387671baf2b63e1d081fcee6dcc4463d6636629c508dc31142137"
+    },
+    "topup/references/sub-skill-E.md": {
+      "sha256": "f5e896fbe5d2955413dff757e87d5ab5dcfe05b0d8e5fbb87c9bbeff6b0f856c"
+    },
+    "withdraw/SKILL.md": {
+      "sha256": "63f881a520f3bd8e0b7c91e5991f778c67d5dd45e85bac21f900a4102cf4c19d"
+    },
+    "withdraw/references/sub-skill-A.md": {
+      "sha256": "f7f729e6a172ed94b0bd2b17366ee1def144a1a0b510ced9b36cad84e280738a"
+    },
+    "withdraw/references/sub-skill-B.md": {
+      "sha256": "67ae15a96913aa7c8fea9beeedb46b9f9d0dc8f086e746908801174835b60a4e"
+    },
+    "withdraw/references/sub-skill-C.md": {
+      "sha256": "2023981015b4f331cf1f51e0ff0efb4182bf28f398efd16ea9149fafb33e451f"
+    },
+    "withdraw/references/sub-skill-D.md": {
+      "sha256": "c7a86d5e61b1722a0711ff904437e993affc52745e3193d2622b0092944d8a46"
+    },
+    "withdraw/references/sub-skill-E.md": {
+      "sha256": "94331d86445ac3d7e41fcf4325d0c433b5a3dad96625b1887d04867dec8c0aa7"
+    }
+  },
+  "source": "../docs/cs-agent-skills",
+  "synced_at": "2026-08-19"
+}
