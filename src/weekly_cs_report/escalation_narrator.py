@@ -9,7 +9,6 @@ and the backend cuts the literal text (spec section 8.2).
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import time
@@ -174,10 +173,7 @@ class ExplainLLMClient:
         for attempt in range(self._max_attempts):
             try:
                 response = self._client.post("/chat/completions", json=payload)
-            except httpx.HTTPError as exc:
-                logging.getLogger(__name__).warning(
-                    "[TEMP-DIAG] httpx error base_url=%s: %r", self._client.base_url, exc
-                )
+            except httpx.HTTPError:
                 response = None
             if response is not None and response.is_success:
                 try:
@@ -502,7 +498,6 @@ def narrate(
     try:
         chosen_index = _stage_a(client, dossier, shortlist)
     except Exception:
-        logging.getLogger(__name__).exception("[TEMP-DIAG] stage_a failed")
         return None
 
     bang_chung = _bang_chung(dossier)
