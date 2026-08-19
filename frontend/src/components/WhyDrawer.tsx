@@ -1,9 +1,10 @@
 import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 
-import { DashboardRequestError, fetchWhyExplanation } from "../lib/api";
+import { DashboardRequestError, fetchWhyExplanation, fetchWhyNarration } from "../lib/api";
 import {
   parseWhyExplanation,
+  parseWhyNarration,
   type EscalationDossier,
   type Narration,
 } from "../lib/why-schema";
@@ -86,9 +87,11 @@ function conclusionFor(dossier: EscalationDossier): string {
 function WhyCard({
   dossier,
   narration,
+  narrationLoading,
 }: {
   readonly dossier: EscalationDossier;
   readonly narration: Narration | null;
+  readonly narrationLoading: boolean;
 }) {
   const ketLuan = narration?.ket_luan ?? conclusionFor(dossier);
   const canCu = narration?.can_cu ?? null;
@@ -189,6 +192,7 @@ function WhyCard({
           <>
             <p className={styles.caseMeta}>
               Thuộc {undeterminedFileLabels.join(", ")} — Chưa xác định được kịch bản cụ thể
+              {narrationLoading ? " (đang chờ AI phân tích…)" : ""}
             </p>
             <div className={styles.caseListScroll}>
               {undeterminedCandidates.map((c) => (
@@ -269,13 +273,35 @@ export function WhyDrawer({
   const drawerRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
-  const query = useQuery({
+  // Deterministic dossier -- fast, no LLM wait. This is what renders
+  // immediately: THÔNG TIN TICKET, the sub-skill fallback listing, BẰNG
+  // CHỨNG, the timeline. llm_status "pending" means /why-narration is
+  // worth calling; any other value is already final on its own.
+  const dossierQuery = useQuery({
     queryKey: ["trace-why", ticketId],
     enabled: ticketId !== null,
     retry: false,
     queryFn: async ({ signal }) => {
       const parsed = parseWhyExplanation(
         await fetchWhyExplanation(ticketId as string, signal),
+      );
+      if (!parsed.ok) {
+        throw new Error(parsed.message);
+      }
+      return parsed.data;
+    },
+  });
+
+  // Separate, potentially slow (LLM) request -- only fired once the dossier
+  // says there is a real case to narrate. Its own loading state must never
+  // block the dossier above from rendering.
+  const narrationQuery = useQuery({
+    queryKey: ["trace-why-narration", ticketId],
+    enabled: ticketId !== null && dossierQuery.data?.llm_status === "pending",
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const parsed = parseWhyNarration(
+        await fetchWhyNarration(ticketId as string, signal),
       );
       if (!parsed.ok) {
         throw new Error(parsed.message);
@@ -330,11 +356,25 @@ export function WhyDrawer({
     return null;
   }
 
-  const dossier = query.data?.dossier ?? null;
+  const dossier = dossierQuery.data?.dossier ?? null;
   const title =
     dossier !== null
       ? (DRAWER_TITLE[dossier.escalation_class] ?? DEFAULT_TITLE)
       : DEFAULT_TITLE;
+
+  // "pending" from /why means /why-narration is worth calling; once it
+  // settles (success or error), that becomes the real, final status. Until
+  // then, stay "pending" -- never flash the "not ready" banner during the
+  // brief LLM wait, and never guess a narration that hasn't arrived yet.
+  const narrationWorthTrying = dossierQuery.data?.llm_status === "pending";
+  const narrationSettledStatus = narrationQuery.isError
+    ? "unavailable"
+    : (narrationQuery.data?.llm_status ?? null);
+  const finalLlmStatus = narrationWorthTrying
+    ? (narrationSettledStatus ?? "pending")
+    : (dossierQuery.data?.llm_status ?? null);
+  const isNarrationLoading = narrationWorthTrying && narrationSettledStatus === null;
+  const narration = finalLlmStatus === "ok" ? (narrationQuery.data?.narration ?? null) : null;
 
   return (
     <>
@@ -361,13 +401,13 @@ export function WhyDrawer({
           </button>
         </div>
 
-        {query.isLoading ? (
+        {dossierQuery.isLoading ? (
           <p role="status">Đang tải…</p>
-        ) : query.isError ? (
-          <p role="alert">{whyErrorMessage(query.error)}</p>
+        ) : dossierQuery.isError ? (
+          <p role="alert">{whyErrorMessage(dossierQuery.error)}</p>
         ) : dossier !== null ? (
           <>
-            {query.data?.llm_status !== "ok" ? (
+            {finalLlmStatus !== "ok" && finalLlmStatus !== "pending" ? (
               <p className={styles.caseMeta}>
                 Phần diễn giải tự động chưa sẵn sàng. Nội dung dưới đây lấy trực tiếp từ hệ thống.
               </p>
@@ -375,7 +415,8 @@ export function WhyDrawer({
             {dossier.escalation_class !== "NONE" ? (
               <WhyCard
                 dossier={dossier}
-                narration={query.data?.llm_status === "ok" ? (query.data.narration ?? null) : null}
+                narration={narration}
+                narrationLoading={isNarrationLoading}
               />
             ) : null}
             <WhyTimeline phases={dossier.phases} />
