@@ -95,7 +95,24 @@
   border-radius: var(--radius-tight);
   font-size: 14px;
   text-wrap: pretty;
-  white-space: pre-line;
+}
+
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.markdownParagraph {
+  margin: 0;
+}
+
+.markdownList {
+  margin: 0;
+  padding-left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
 }
 
 .caseMeta {

@@ -174,7 +174,10 @@ class ExplainLLMClient:
         for attempt in range(self._max_attempts):
             try:
                 response = self._client.post("/chat/completions", json=payload)
-            except httpx.HTTPError:
+            except httpx.HTTPError as exc:
+                logging.getLogger(__name__).warning(
+                    "[TEMP-DIAG] httpx error base_url=%s: %r", self._client.base_url, exc
+                )
                 response = None
             if response is not None and response.is_success:
                 try:
