@@ -121,6 +121,36 @@
   font-size: 12px;
 }
 
+.caseListScroll {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-tight);
+  background: var(--surface-sunken);
+}
+
+.caseListItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.caseListItem:not(:last-child) {
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--rule);
+}
+
+.caseListItemTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .evidenceList {
   display: grid;
   gap: var(--space-1);
