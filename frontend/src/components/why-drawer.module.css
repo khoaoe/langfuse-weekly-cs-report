@@ -1,0 +1,246 @@
+/* Shared by WhyDrawer, WhyCard (declared inline in WhyDrawer.tsx) and
+   WhyTimeline -- the timeline also renders standalone on the #trace/ route. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  display: flex;
+  flex-direction: column;
+  width: min(480px, 100vw);
+  padding: var(--space-4);
+  overflow-y: auto;
+  border-left: 1px solid var(--rule-strong);
+  background: var(--surface);
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
+}
+
+.drawerHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.drawerTitle {
+  margin: 0;
+  font-size: 17px;
+  text-wrap: pretty;
+}
+
+.closeButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.closeButton:hover {
+  background: var(--surface-sunken);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.cardSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.cardLabel {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.cardConclusion {
+  margin: 0;
+  font-size: 15px;
+  text-wrap: pretty;
+}
+
+.quote {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--interactive);
+  background: color-mix(in srgb, var(--interactive) 6%, var(--surface));
+  border-radius: var(--radius-tight);
+  font-size: 14px;
+  text-wrap: pretty;
+  white-space: pre-line;
+}
+
+.caseMeta {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.evidenceList {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+}
+
+.evidenceRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 14px;
+}
+
+.evidenceRowLabel {
+  color: var(--muted);
+}
+
+.evidenceRowValue {
+  font-weight: 600;
+  color: var(--ink);
+  text-align: right;
+}
+
+.driftNote {
+  margin: 0;
+  color: var(--warning-text);
+  font-size: 12px;
+}
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.phase {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-tight);
+}
+
+.phaseHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.phaseHeadStatic {
+  composes: phaseHead;
+  cursor: default;
+}
+
+.phaseTitle {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.phaseTitleDecisive {
+  composes: phaseTitle;
+  color: var(--warning-text);
+}
+
+.phaseSummary {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.phaseBlocked {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+
+.phaseRows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.phaseRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 13px;
+}
+
+.phaseRowLabel {
+  color: var(--muted);
+}
+
+.phaseRowValue {
+  font-weight: 500;
+  color: var(--ink);
+  text-align: right;
+}
+
+.evidenceToggle {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius-tight);
+  background: none;
+  font-size: 12px;
+  color: var(--interactive);
+  cursor: pointer;
+}
+
+.rawEvidence {
+  margin: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  background: var(--surface-sunken);
+  padding: var(--space-2);
+  border-radius: var(--radius-tight);
+  font-size: 11px;
+  color: var(--ink);
+}
+
+@media (max-width: 768px) {
+  .drawer {
+    width: 100vw;
+  }
+}

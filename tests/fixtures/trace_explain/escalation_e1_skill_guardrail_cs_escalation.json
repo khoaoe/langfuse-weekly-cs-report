@@ -1,0 +1,215 @@
+{
+  "ticket_id": "9001001",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001001-0",
+        "sessionId": "9001001",
+        "timestamp": "2026-08-19T02:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Rut tien bi treo 3 ngay roi chua thay tien ve",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001001",
+            "title": "Rut tien bi treo",
+            "meta": {
+              "App": "452",
+              "Mô tả": "Rut tien treo qua 3 ngay chua duoc xu ly",
+              "Tên ngân hàng": "Vietcombank",
+              "UserID": "u-900100112345"
+            }
+          }
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o2",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o3",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.300Z",
+          "name": "input_guardrail",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "blocked": false,
+            "rule": "input_compliant"
+          }
+        },
+        {
+          "id": "o4",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.400Z",
+          "name": "route",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "agents": [
+              "withdraw"
+            ],
+            "needs_planning": false
+          }
+        },
+        {
+          "id": "o5",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.500Z",
+          "name": "skills_loaded",
+          "input": {
+            "plugin": "withdraw"
+          },
+          "output": {
+            "skills": [
+              "withdraw"
+            ]
+          }
+        },
+        {
+          "id": "o6",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.600Z",
+          "name": "tool:list_skill_references__withdraw",
+          "input": {
+            "tool_name": "list_skill_references",
+            "input": {}
+          },
+          "output": {
+            "result": {
+              "files": [
+                "sub-skill-A.md",
+                "sub-skill-B.md",
+                "sub-skill-C.md",
+                "sub-skill-D.md",
+                "sub-skill-E.md"
+              ]
+            }
+          }
+        },
+        {
+          "id": "o7",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.700Z",
+          "name": "tool:load_skill_reference__withdraw",
+          "input": {
+            "tool_name": "load_skill_reference",
+            "input": {
+              "filename": "sub-skill-C.md"
+            }
+          },
+          "output": {
+            "result": {
+              "filename": "sub-skill-C.md",
+              "content": "### C1 - Giao dich dang xu ly\n- Neu da qua 3 ngay: Chuyen bo phan CSKH"
+            }
+          }
+        },
+        {
+          "id": "o8",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.800Z",
+          "name": "tool:calculate_time_difference__withdraw",
+          "input": {
+            "tool_name": "calculate_time_difference",
+            "input": {
+              "trans_time": "..."
+            }
+          },
+          "output": {
+            "result": {
+              "hours": 79,
+              "minutes": 0,
+              "seconds": 0,
+              "total_seconds": 284400,
+              "is_negative": false
+            }
+          }
+        },
+        {
+          "id": "o9",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:00.900Z",
+          "name": "tool:get_bank_name",
+          "input": {
+            "tool_name": "get_bank_name",
+            "input": {
+              "bank_code": "VCB"
+            }
+          },
+          "output": {
+            "result": {
+              "bank_code": "VCB",
+              "short_name": "Vietcombank",
+              "long_name": "Ngan hang Vietcombank",
+              "candidates": []
+            }
+          }
+        },
+        {
+          "id": "o10",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:01.000Z",
+          "name": "skill_guardrail_checked",
+          "input": {
+            "skill": "customer-service/withdraw",
+            "stage": "input"
+          },
+          "output": {
+            "passed": true,
+            "rule": "input_compliant"
+          }
+        },
+        {
+          "id": "o11",
+          "traceId": "trace-9001001-0",
+          "startTime": "2026-08-19T02:00:01.100Z",
+          "name": "skill_guardrail_checked",
+          "input": {
+            "skill": "customer-service/withdraw",
+            "stage": "output"
+          },
+          "output": {
+            "passed": false,
+            "rule": "cs_escalation"
+          },
+          "metadata": {
+            "reason": "Giao dich da qua 3 ngay lam viec, theo case C1 phai chuyen bo phan CSKH xu ly"
+          }
+        }
+      ]
+    }
+  ]
+}

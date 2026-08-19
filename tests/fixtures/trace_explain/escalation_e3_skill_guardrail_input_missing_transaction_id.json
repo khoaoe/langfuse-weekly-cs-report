@@ -1,0 +1,116 @@
+{
+  "ticket_id": "9001008",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001008-0",
+        "sessionId": "9001008",
+        "timestamp": "2026-08-19T09:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Toi rut tien nhung khong nho ma giao dich",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001008",
+            "title": "Rut tien thieu ma GD",
+            "meta": {
+              "App": "452",
+              "Mô tả": "Khong nho ma giao dich"
+            }
+          }
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 4.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o2",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o3",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.300Z",
+          "name": "input_guardrail",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "blocked": false,
+            "rule": "input_compliant"
+          }
+        },
+        {
+          "id": "o4",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.400Z",
+          "name": "route",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "agents": [
+              "withdraw"
+            ],
+            "needs_planning": false
+          }
+        },
+        {
+          "id": "o5",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.500Z",
+          "name": "skills_loaded",
+          "input": {
+            "plugin": "withdraw"
+          },
+          "output": {
+            "skills": [
+              "withdraw"
+            ]
+          }
+        },
+        {
+          "id": "o6",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T09:00:00.600Z",
+          "name": "skill_guardrail_checked",
+          "input": {
+            "skill": "customer-service/withdraw",
+            "stage": "input"
+          },
+          "output": {
+            "passed": false,
+            "rule": "missing_transaction_id"
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -371,24 +371,31 @@ def _string_list(value: object) -> list[str]:
 
 
 def _evidence(observation: Mapping[str, object]) -> dict[str, object]:
+    # load_skill_reference carries the full sub-skill markdown in output.result,
+    # and metadata (e.g. cs_escalation's `reason`) is never noisy in practice --
+    # both are exempt from the 2000-char cap that still applies to everything else.
+    name = observation.get("name")
+    truncate_body = not (isinstance(name, str) and name.startswith(_LOAD_SKILL_PREFIX))
     result: dict[str, object] = {}
     for key in ("input", "output"):
         if key in observation:
-            result[key] = _filtered_value(observation[key])
+            result[key] = _filtered_value(observation[key], truncate=truncate_body)
+    if "metadata" in observation:
+        result["metadata"] = _filtered_value(observation["metadata"], truncate=False)
     return result
 
 
-def _filtered_value(value: object) -> object:
+def _filtered_value(value: object, truncate: bool = True) -> object:
     if isinstance(value, Mapping):
         return {
-            key: _filtered_value(item)
+            key: _filtered_value(item, truncate=truncate)
             for key, item in value.items()
             if not _is_noise_key(key)
         }
     if isinstance(value, list):
-        return [_filtered_value(item) for item in value]
+        return [_filtered_value(item, truncate=truncate) for item in value]
     if isinstance(value, str):
-        return value[:_EVIDENCE_MAX_STRING_LENGTH]
+        return value[:_EVIDENCE_MAX_STRING_LENGTH] if truncate else value
     return value
 
 

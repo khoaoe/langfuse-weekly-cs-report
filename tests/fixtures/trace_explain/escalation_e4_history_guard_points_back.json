@@ -1,0 +1,208 @@
+{
+  "ticket_id": "9001004",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001004-0",
+        "sessionId": "9001004",
+        "timestamp": "2026-08-19T05:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Rut tien bi treo 3 ngay roi",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001004",
+            "title": "Rut tien bi treo",
+            "meta": {
+              "App": "452",
+              "Mô tả": "Rut tien treo qua 3 ngay",
+              "Tên ngân hàng": "Vietcombank"
+            }
+          }
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o2",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o3",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.300Z",
+          "name": "input_guardrail",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "blocked": false,
+            "rule": "input_compliant"
+          }
+        },
+        {
+          "id": "o4",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.400Z",
+          "name": "route",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "agents": [
+              "withdraw"
+            ],
+            "needs_planning": false
+          }
+        },
+        {
+          "id": "o5",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.500Z",
+          "name": "skills_loaded",
+          "input": {
+            "plugin": "withdraw"
+          },
+          "output": {
+            "skills": [
+              "withdraw"
+            ]
+          }
+        },
+        {
+          "id": "o6",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.600Z",
+          "name": "tool:load_skill_reference__withdraw",
+          "input": {
+            "tool_name": "load_skill_reference",
+            "input": {
+              "filename": "sub-skill-C.md"
+            }
+          },
+          "output": {
+            "result": {
+              "filename": "sub-skill-C.md",
+              "content": "### C1 - Giao dich dang xu ly\n- Neu da qua 3 ngay: Chuyen bo phan CSKH"
+            }
+          }
+        },
+        {
+          "id": "o7",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.700Z",
+          "name": "tool:calculate_time_difference__withdraw",
+          "input": {
+            "tool_name": "calculate_time_difference",
+            "input": {}
+          },
+          "output": {
+            "result": {
+              "hours": 79,
+              "minutes": 0,
+              "seconds": 0,
+              "total_seconds": 284400,
+              "is_negative": false
+            }
+          }
+        },
+        {
+          "id": "o8",
+          "traceId": "trace-9001004-0",
+          "startTime": "2026-08-19T05:00:00.800Z",
+          "name": "skill_guardrail_checked",
+          "input": {
+            "skill": "customer-service/withdraw",
+            "stage": "output"
+          },
+          "output": {
+            "passed": false,
+            "rule": "cs_escalation"
+          },
+          "metadata": {
+            "reason": "Giao dich da qua 3 ngay lam viec, theo case C1 phai chuyen bo phan CSKH xu ly"
+          }
+        }
+      ]
+    },
+    {
+      "trace": {
+        "id": "trace-9001004-1",
+        "sessionId": "9001004",
+        "timestamp": "2026-08-20T09:00:00.000Z",
+        "metadata": {
+          "turn": 1
+        },
+        "input": {
+          "user_input": "Sao van chua thay ai lien he toi vay",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001004",
+            "title": "Rut tien bi treo"
+          }
+        },
+        "output": {
+          "response": null,
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o9",
+          "traceId": "trace-9001004-1",
+          "startTime": "2026-08-20T09:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o10",
+          "traceId": "trace-9001004-1",
+          "startTime": "2026-08-20T09:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": true
+          }
+        }
+      ]
+    }
+  ]
+}

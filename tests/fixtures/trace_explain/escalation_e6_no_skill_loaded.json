@@ -1,0 +1,97 @@
+{
+  "ticket_id": "9001006",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001006-0",
+        "sessionId": "9001006",
+        "timestamp": "2026-08-19T07:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Toi can ho tro mot van de rat la vang",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001006",
+            "title": "Van de khong xac dinh",
+            "meta": {
+              "App": "5025",
+              "Mô tả": "Van de khong ro rang"
+            }
+          }
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001006-0",
+          "startTime": "2026-08-19T07:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o2",
+          "traceId": "trace-9001006-0",
+          "startTime": "2026-08-19T07:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": {
+            "source": "ticket"
+          },
+          "output": {
+            "blocked": false
+          }
+        },
+        {
+          "id": "o3",
+          "traceId": "trace-9001006-0",
+          "startTime": "2026-08-19T07:00:00.300Z",
+          "name": "input_guardrail",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "blocked": false,
+            "rule": "input_compliant"
+          }
+        },
+        {
+          "id": "o4",
+          "traceId": "trace-9001006-0",
+          "startTime": "2026-08-19T07:00:00.400Z",
+          "name": "route",
+          "input": {
+            "user_input": "..."
+          },
+          "output": {
+            "agents": [],
+            "needs_planning": false
+          }
+        },
+        {
+          "id": "o5",
+          "traceId": "trace-9001006-0",
+          "startTime": "2026-08-19T07:00:00.500Z",
+          "name": "general_response",
+          "input": {},
+          "output": {},
+          "metadata": {
+            "agent": "general"
+          }
+        }
+      ]
+    }
+  ]
+}

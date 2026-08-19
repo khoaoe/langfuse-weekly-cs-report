@@ -38,6 +38,15 @@ from .entry_coverage_cache import (
     EntryCoverageCacheError,
     load_entry_coverage_cache,
 )
+from .escalation_dossier import EscalationDossier, build_dossier, rank_candidates
+from .escalation_narrator import (
+    ExplainLLMClient,
+    Narration,
+    load_explain_settings,
+    narrate,
+)
+from .explain_context import load_explain_config
+from .narration_validator import validate as validate_narration
 from .langfuse_client import LangfuseAPIError, LangfuseClient
 from .reconciliation_cache import (
     ReconciliationCacheError,
@@ -45,6 +54,7 @@ from .reconciliation_cache import (
 )
 from .report import compute_report
 from .runtime_logging import configure_json_logging, emit_event
+from .skill_rules import parse_snapshot
 from .trace_explainer import build_trace_explanation
 
 
@@ -225,6 +235,57 @@ def _trace_explain_taxonomy():
     return load_taxonomy(PROJECT_ROOT / "config" / "taxonomy.v2.json")
 
 
+@lru_cache(maxsize=1)
+def _why_explain_config():
+    return load_explain_config(PROJECT_ROOT / "config" / "explain_context.v1.json")
+
+
+@lru_cache(maxsize=1)
+def _why_skill_rules():
+    return parse_snapshot(PROJECT_ROOT / "skills-snapshot")
+
+
+# E3/E5/E6 never carry a case to narrate (spec 8.2); NONE means nothing was
+# escalated at all. Calling the LLM with an empty enum is never valid.
+_NO_CANDIDATE_BRANCHES = frozenset({"E3", "E5", "E6", "NONE"})
+
+
+def _explain(dossier: EscalationDossier) -> tuple[Narration | None, str]:
+    """Tầng 2 + Tầng 3 orchestration for one dossier. Never raises."""
+
+    if dossier.escalation_class in _NO_CANDIDATE_BRANCHES or not dossier.rule_candidates:
+        return None, "skipped"
+
+    settings = load_explain_settings()
+    if settings is None:
+        return None, "disabled"
+
+    tools_called = tuple(
+        ev.step_key.removeprefix("tool:").split("__", 1)[0] for ev in dossier.tool_evidence
+    )
+    known_values = tuple(ev.value for ev in dossier.tool_evidence)
+    shortlist = rank_candidates(
+        list(dossier.rule_candidates), tools_called=tools_called, known_values=known_values
+    )
+
+    try:
+        client = ExplainLLMClient(settings)
+    except Exception:
+        return None, "unavailable"
+    try:
+        raw = narrate(client, dossier, shortlist)
+    finally:
+        client.close()
+
+    if raw is None:
+        return None, "unavailable"
+
+    quoted_line = raw.can_cu.trich_dan if raw.can_cu is not None else None
+    if not validate_narration(raw, dossier, quoted_line):
+        return None, "rejected"
+    return raw, "ok"
+
+
 class _AbTestBackgroundCache:
     """Refreshes the AB Test default window on its own schedule.
 
@@ -319,6 +380,7 @@ def create_app(
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
     app.state.trace_explain_cache = _TraceExplainCache()
+    app.state.why_cache = _TraceExplainCache()
     app.state.ab_test_cache = _TraceExplainCache(
         ttl_seconds=_AB_TEST_CACHE_TTL_SECONDS
     )
@@ -428,6 +490,56 @@ def create_app(
                 {"detail": {"code": "trace_not_found"}}, status_code=404
             )
         return JSONResponse(asdict(explanation))
+
+    @app.get("/api/trace-explain/{ticket_id}/why")
+    def trace_explain_why(ticket_id: str, request: Request):
+        # Sync for the same reason as trace_explain: a live Langfuse call.
+        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
+            return JSONResponse(
+                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
+            )
+
+        cached = app.state.why_cache.get(ticket_id)
+        if cached is _TRACE_EXPLAIN_CACHE_MISS:
+            langfuse_client = getattr(request.app.state, "langfuse_client", None)
+            if langfuse_client is None:
+                return JSONResponse(
+                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                )
+            try:
+                dossier = build_dossier(
+                    langfuse_client,
+                    ticket_id,
+                    _trace_explain_taxonomy(),
+                    _why_explain_config(),
+                    _why_skill_rules(),
+                    snapshot_root=PROJECT_ROOT / "skills-snapshot",
+                )
+            except LangfuseAPIError:
+                return JSONResponse(
+                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                )
+            result = None if dossier is None else _explain(dossier)
+            app.state.why_cache.set(ticket_id, (dossier, result))
+        else:
+            dossier, result = cached
+
+        if dossier is None:
+            return JSONResponse(
+                {"detail": {"code": "trace_not_found"}}, status_code=404
+            )
+        narration, llm_status = result
+
+        return JSONResponse(
+            {
+                "ticket_id": dossier.ticket_id,
+                "escalation_class": dossier.escalation_class,
+                "dossier": asdict(dossier),
+                "narration": asdict(narration) if narration is not None else None,
+                "llm_status": llm_status,
+                "drift": {"changed": dossier.drift_changed},
+            }
+        )
 
     @app.get("/api/ab-test")
     def ab_test(request: Request):
