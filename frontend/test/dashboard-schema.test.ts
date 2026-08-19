@@ -1103,6 +1103,7 @@ describe("dashboard API envelope", () => {
       escalation_guard_blocked: false,
       csat_satisfaction: null,
       data_quality: "valid",
+      model_core: null,
     };
 
     expect(TicketRowSchema.safeParse(row).success).toBe(false);

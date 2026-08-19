@@ -70,7 +70,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
                 "ai_first": {"count": 0, "rate": 0.0},
                 "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
                 "weekly": [],
-                "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
+                "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core")},
                 "transfer_reasons": _empty_transfer_reasons(),
                 "by_week": {},
                 "same_period": None,
@@ -885,7 +885,7 @@ def test_ticket_endpoint_accepts_the_full_18_unique_query_pair_contract(manager_
     [
         ("page=" + ("9" * 5000), "page"),
         ("page=1234567890", "page"),
-        ("&".join(["page=1"] * 23), "unknown"),
+        ("&".join(["page=1"] * 24), "unknown"),
     ],
     ids=("five-thousand-digit-value", "ten-digit-number", "more-pairs-than-allowlisted-names"),
 )

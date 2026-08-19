@@ -56,7 +56,7 @@ function view(weekDefinition: "mon_sun" | "mon_fri", total: number) {
     string,
     Record<string, { total: number; ai_first: number; transferred: number; reopen: number }>
   > = Object.fromEntries(
-    ["issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point"].map(
+    ["issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core"].map(
       (name) => [
         name,
         name === "skill"

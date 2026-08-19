@@ -402,6 +402,19 @@ def _parse_tpe(
     return code, status_raw, None
 
 
+def _model_core(first_trace: TraceRecord) -> str | None:
+    """The A/B arm this ticket ran on, straight from the root trace input.
+
+    Unlike the taxonomy-mapped dimensions above, this is a direct pass-through
+    -- older tickets predate the field and legitimately have none, projected
+    downstream as null (rendered "--" like any other absent dimension).
+    """
+    input_data = _mapping(first_trace.input_data)
+    model_info = _mapping(input_data.get("model_info")) if input_data is not None else None
+    model_core = model_info.get("model_core") if model_info is not None else None
+    return _string(model_core)
+
+
 def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDimensions:
     if taxonomy.version != "v2":
         raise ValueError("extract_dimensions requires taxonomy v2")
@@ -430,6 +443,7 @@ def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDi
         guardrail_rule=None,
         escalation_guard_blocked=False,
         tpe_signals=(),
+        model_core=_model_core(first_trace),
     )
 
 

@@ -1771,6 +1771,7 @@ describe("Ticket Explorer", () => {
       transfer_reason: null,
       escalation_guard_blocked: false,
       data_quality: "valid" as const,
+      model_core: null,
     };
     const tickets = states.map((state, index) => ({
       ...baseTicket,
@@ -1906,6 +1907,7 @@ describe("Ticket Explorer", () => {
               escalation_guard_blocked: false,
               csat_satisfaction: null,
               data_quality: "valid",
+              model_core: null,
             },
           ],
           page: 1,
@@ -2168,6 +2170,7 @@ describe("Ticket Explorer", () => {
               escalation_guard_blocked: false,
               csat_satisfaction: null,
               data_quality: "missing_turn0",
+              model_core: null,
             },
           ],
           page: 1,

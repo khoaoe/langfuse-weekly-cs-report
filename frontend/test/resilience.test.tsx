@@ -352,6 +352,7 @@ describe("bulk export", () => {
         escalation_guard_blocked: false,
         csat_satisfaction: null,
         data_quality: "valid",
+        model_core: null,
       }));
 
     const seen: string[] = [];

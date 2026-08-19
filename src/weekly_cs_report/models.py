@@ -94,6 +94,9 @@ class TicketDimensions:
     # combination through instead of discarding them.
     skill_count: int = 0
     skill_set: tuple[str, ...] = ()
+    # The A/B arm this ticket ran on (`input.model_info.model_core`). Older
+    # tickets predate the field and are null, not a data-quality problem.
+    model_core: str | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +131,7 @@ def _empty_ticket_dimensions() -> TicketDimensions:
         tpe_signals=(),
         skill_count=0,
         skill_set=(),
+        model_core=None,
     )
 
 

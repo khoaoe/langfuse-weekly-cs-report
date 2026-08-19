@@ -39,6 +39,7 @@ export const TICKET_COLUMNS = [
   { key: "skill", label: "Skill", core: false },
   { key: "intent", label: "Intent", core: false },
   { key: "tpe_code", label: "Transstatus", core: false },
+  { key: "model_core", label: "Model", core: false },
   {
     key: "escalation_guard_blocked",
     label: "Chặn chuyển CS trùng",

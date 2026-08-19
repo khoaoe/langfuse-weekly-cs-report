@@ -216,6 +216,7 @@ describe("sorting bảng dữ liệu", () => {
               escalation_guard_blocked: false,
               csat_satisfaction: "positive",
               data_quality: "valid",
+              model_core: null,
             },
           ],
           page: 1,

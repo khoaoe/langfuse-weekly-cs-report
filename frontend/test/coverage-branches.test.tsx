@@ -244,6 +244,7 @@ const sparseSegments: Segments = {
   tpe: {},
   guardrail_rule: {},
   entry_point: {},
+  model_core: {},
 };
 
 function belowFoldSnapshot(
@@ -457,6 +458,7 @@ function ticketRow(overrides: Partial<TicketRow>): TicketRow {
     escalation_guard_blocked: false,
     csat_satisfaction: null,
     data_quality: "valid",
+    model_core: null,
     ...overrides,
     transferred,
     transfer_reason: overrides.transfer_reason ?? (transferred ? "unknown" : null),

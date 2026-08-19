@@ -31,7 +31,7 @@ from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 21
+_STORAGE_VERSION = 22
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -125,6 +125,7 @@ _SEGMENTS = (
     "tpe",
     "guardrail_rule",
     "entry_point",
+    "model_core",
 )
 _MISSING = "Không xác định"
 # `skill` never used _MISSING accurately: a ticket with three distinct skills
@@ -153,7 +154,7 @@ _TICKET_KEYS = frozenset(
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
-        "data_quality",
+        "data_quality", "model_core",
     }
 )
 _WEEKLY_KEYS = frozenset(
@@ -196,6 +197,7 @@ class TicketRow:
     escalation_guard_blocked: bool
     csat_satisfaction: str | None
     data_quality: str
+    model_core: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ticket_values(self)
@@ -331,6 +333,7 @@ def ticket_page(
     skill: str | None = None,
     intent: str | None = None,
     tpe_code: str | None = None,
+    model_core: str | None = None,
     transfer_reason: str | None = None,
     csat_satisfaction: str | None = None,
     gt4_turn: bool | None = None,
@@ -377,6 +380,7 @@ def ticket_page(
         "skill": skill,
         "intent": intent,
         "tpe_code": tpe_code,
+        "model_core": model_core,
     }
     for name, value in strings.items():
         if value is None:
@@ -429,6 +433,7 @@ def ticket_page(
         and (skill is None or _ticket_filter_value(row, "skill") == skill)
         and (intent is None or _ticket_filter_value(row, "intent") == intent)
         and (tpe_code is None or _ticket_filter_value(row, "tpe_code") == tpe_code)
+        and (model_core is None or _ticket_filter_value(row, "model_core") == model_core)
         and (transfer_reason is None or row.transfer_reason == transfer_reason)
         and (
             csat_satisfaction is None
@@ -1540,6 +1545,7 @@ def _ticket_row(
         escalation_guard_blocked=dims.escalation_guard_blocked,
         csat_satisfaction=csat_satisfaction,
         data_quality=_quality_label(session.data_quality),
+        model_core=_safe_optional(dims.model_core),
     )
 
 
@@ -1857,7 +1863,11 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         raise ValueError("gt4_turn is inconsistent")
     for value, name in ((ticket.issue_category, "issue_category"), (ticket.app, "app"), (ticket.product_code, "product_code")):
         _safe_string(value, name)
-    for value, name in ((ticket.skill, "skill"), (ticket.guardrail_rule, "guardrail_rule")):
+    for value, name in (
+        (ticket.skill, "skill"),
+        (ticket.guardrail_rule, "guardrail_rule"),
+        (ticket.model_core, "model_core"),
+    ):
         if value is not None:
             _safe_string(value, name)
     if ticket.transferred:
