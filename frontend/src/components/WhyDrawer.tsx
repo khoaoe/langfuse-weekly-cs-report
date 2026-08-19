@@ -110,6 +110,16 @@ function WhyCard({
       ? { caseId: canCu.case_id, caseTitle: canCu.case_title, skill: canCu.skill, fileLabel: canCu.file_label }
       : null;
 
+  // No confirmed case, but we do know which sub-skill file(s) were loaded --
+  // show every case in it so a PO can read through and judge for themself,
+  // instead of a bare "don't know". Scrolls inside a fixed-height box so a
+  // long file never stretches the drawer.
+  const undeterminedCandidates =
+    canCu === null ? dossier.rule_candidates.filter((c) => c.source === "sub_skill") : [];
+  const undeterminedFileLabels = Array.from(
+    new Set(undeterminedCandidates.map((c) => `${c.skill}/${c.file_label}`)),
+  );
+
   const evidenceRows =
     narration && narration.bang_chung.length > 0
       ? narration.bang_chung.map((item) => ({
@@ -163,6 +173,25 @@ function WhyCard({
             <blockquote className={styles.quote}>
               <MarkdownLite text={quoteBody ?? ""} />
             </blockquote>
+          </>
+        ) : undeterminedCandidates.length > 0 ? (
+          <>
+            <p className={styles.caseMeta}>
+              Chưa xác định được kịch bản cụ thể — toàn bộ {undeterminedFileLabels.join(", ")}{" "}
+              đã đọc:
+            </p>
+            <div className={styles.caseListScroll}>
+              {undeterminedCandidates.map((c) => (
+                <div key={c.anchor} className={styles.caseListItem}>
+                  <p className={styles.caseListItemTitle}>
+                    {c.case_id ? `${c.case_id} — ` : ""}
+                    {c.case_title}
+                    {undeterminedFileLabels.length > 1 ? ` · ${c.skill}/${c.file_label}` : ""}
+                  </p>
+                  <MarkdownLite text={c.body} />
+                </div>
+              ))}
+            </div>
           </>
         ) : (
           <p className={styles.caseMeta}>Chưa xác định được kịch bản cụ thể</p>

@@ -38,12 +38,13 @@ const RULE_CANDIDATES = [
   },
 ];
 
-it("does not guess a case from rule_candidates[0] when there is no real narration", async () => {
+it("shows every case in the loaded sub-skill file instead of guessing one, when there is no real narration", async () => {
   // Regression for the bug reported on ticket 7090152: with no LLM
   // narration, CĂN CỨ used to silently show rule_candidates[0] (whichever
   // case happens to be first in the skill file) as if it were confirmed --
   // there it showed "đã hoàn tiền thành công" for a refund that was still
-  // processing. Must show "chưa xác định", never guess.
+  // processing. It must never present ONE candidate as the confirmed case;
+  // instead it shows the whole file so a PO can judge for themself.
   server.use(
     http.get("/api/trace-explain/:ticketId/why", () =>
       HttpResponse.json({
@@ -78,8 +79,46 @@ it("does not guess a case from rule_candidates[0] when there is no real narratio
 
   renderDrawer("9009001");
 
+  expect(await screen.findByText(/Chưa xác định được kịch bản cụ thể/)).toBeInTheDocument();
+  // Neither candidate is singled out as THE case -- both are shown, plainly
+  // labelled by their own case_id/case_title, not asserted as confirmed.
+  expect(screen.getByText(/Đã hoàn tiền thành công/)).toBeInTheDocument();
+  expect(screen.getByText(/Đang xử lý hoàn tiền/)).toBeInTheDocument();
+  expect(screen.getByText(/Chuyển bộ phận CSKH/)).toBeInTheDocument();
+});
+
+it("shows the plain 'chưa xác định' message with no file to fall back to", async () => {
+  server.use(
+    http.get("/api/trace-explain/:ticketId/why", () =>
+      HttpResponse.json({
+        ticket_id: "9009002",
+        escalation_class: "E3",
+        dossier: {
+          ticket_id: "9009002",
+          escalation_class: "E3",
+          escalated_turn: 0,
+          guardrail_reason: "Cau hoi nam ngoai pham vi ho tro cua tro ly tu dong",
+          blocking_rule: "off_topic_llm",
+          skills_loaded: [],
+          sub_skills_read: [],
+          tool_evidence: [],
+          ticket_facts: [],
+          rule_candidates: [],
+          coverage: { app_id: null, expected_skill: null, loaded_skills: [], mismatch: false },
+          turn_deltas: [],
+          drift_changed: false,
+          phases: [],
+          blocked_response_draft: null,
+          blocked_input_message: "Cho hoi phi chuyen tien quoc te la bao nhieu",
+        },
+        narration: null,
+        llm_status: "skipped",
+        drift: { changed: false },
+      }),
+    ),
+  );
+
+  renderDrawer("9009002");
+
   expect(await screen.findByText("Chưa xác định được kịch bản cụ thể")).toBeInTheDocument();
-  expect(screen.queryByText("Đã hoàn tiền thành công")).not.toBeInTheDocument();
-  expect(screen.queryByText("Đang xử lý hoàn tiền")).not.toBeInTheDocument();
-  expect(screen.queryByText(/Chuyển bộ phận CSKH/)).not.toBeInTheDocument();
 });
