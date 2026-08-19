@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import socket
@@ -145,6 +146,7 @@ class LangfuseClient:
         deadline: float | None = None,
         cancel_event: threading.Event | None = None,
         max_pages: int = 500,
+        fields: str = "core,io",
     ) -> Iterator[dict]:
         if (
             not isinstance(max_pages, int)
@@ -152,6 +154,8 @@ class LangfuseClient:
             or not 1 <= max_pages <= 500
         ):
             raise ValueError("max_pages must be an integer between 1 and 500")
+        if not isinstance(fields, str) or not fields:
+            raise ValueError("fields must be a non-empty string")
         from_utc = _serialize_utc(from_timestamp, "from_timestamp")
         to_utc = _serialize_utc(to_timestamp, "to_timestamp")
         page_number = 1
@@ -164,7 +168,7 @@ class LangfuseClient:
                 "fromTimestamp": from_utc,
                 "toTimestamp": to_utc,
                 "orderBy": "timestamp.asc",
-                "fields": "core,io",
+                "fields": fields,
             }
             response = self._request(
                 "GET",
@@ -282,6 +286,40 @@ class LangfuseClient:
                 return
             page_number += 1
 
+    def fetch_metrics(
+        self,
+        query: dict,
+        *,
+        deadline: float | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> list[dict]:
+        """Read one pre-aggregated metrics result set.
+
+        The metrics endpoint aggregates server-side, so a token/latency
+        comparison costs one request instead of paging every observation in
+        the window. It returns aggregates only -- never trace or observation
+        payloads -- so no raw content crosses this boundary.
+        """
+        if not isinstance(query, dict) or not query:
+            raise ValueError("query must be a non-empty mapping")
+        response = self._request(
+            "GET",
+            "/api/public/metrics",
+            params={"query": json.dumps(query, sort_keys=True)},
+            expected_status=200,
+            deadline=deadline,
+            cancel_event=cancel_event,
+        )
+        payload = self._parse_object(response, "GET", "/api/public/metrics")
+        data = payload.get("data")
+        if not isinstance(data, list) or not all(
+            isinstance(item, dict) for item in data
+        ):
+            raise LangfuseAPIError(
+                "GET", "/api/public/metrics", response.status_code
+            )
+        return data
+
     def ingest_events(self, events: Sequence[dict]) -> IngestionReceipt:
         raise ReadOnlyOperationError
 
@@ -312,6 +350,7 @@ class LangfuseClient:
         if (method, path) not in {
             ("GET", "/api/public/traces"),
             ("GET", "/api/public/observations"),
+            ("GET", "/api/public/metrics"),
         }:
             raise ReadOnlyOperationError
         for attempt in range(self._max_attempts):

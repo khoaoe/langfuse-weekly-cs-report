@@ -1422,17 +1422,12 @@ describe("Below-fold analysis", () => {
     expect(
       within(missingRow).getByText("Không có Step result"),
     ).toBeVisible();
-    expect(tpeRegion.querySelector("#stepResultCoverage")).toHaveTextContent(
-      "1/3 ticket chuyển CS (33,3%) không có Step result. Các ca này hiện chưa truy được tới bước lỗi cụ thể.",
-    );
-    // "taxonomy" now legitimately appears in the TPE status caption
-    // (#tpeStatusCaption); everything else in the section must still avoid
-    // the legacy map/case wording it replaced.
-    const tpeRegionWithoutStatusCaption = tpeRegion.cloneNode(true) as HTMLElement;
-    tpeRegionWithoutStatusCaption.querySelector("#tpeStatusCaption")?.remove();
-    expect(tpeRegionWithoutStatusCaption.textContent).not.toMatch(
-      /case|taxonomy|Đang xử lý/i,
-    );
+    // The Step-result coverage sentence and the TPE taxonomy caption were
+    // removed as redundant narration; the table itself already shows which
+    // rows have no Step result.
+    expect(tpeRegion.querySelector("#stepResultCoverage")).toBeNull();
+    expect(tpeRegion.querySelector("#tpeStatusCaption")).toBeNull();
+    expect(tpeRegion.textContent).not.toMatch(/case|taxonomy|Đang xử lý/i);
 
     const conditionRegion = screen.getByRole("region", {
       name: "Lý do chuyển CS",

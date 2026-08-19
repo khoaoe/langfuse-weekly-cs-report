@@ -13,6 +13,7 @@ export const ENTRY_COVERAGE_TICKETS_ENDPOINT =
 export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
+export const AB_TEST_ENDPOINT = "/api/ab-test";
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";
@@ -143,6 +144,31 @@ export async function fetchTraceExplanation(
       ...(signal ? { signal } : {}),
     },
   );
+  if (response.status !== 200) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
+}
+
+/** Throws DashboardRequestError(status) for 400/503 domain errors, same as
+ * every other endpoint here -- the caller inspects `.status` to choose a
+ * Vietnamese message instead of showing the raw code. */
+export async function fetchAbTest(
+  start: string,
+  end: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const params = new URLSearchParams({ start, end });
+  const response = await fetch(`${AB_TEST_ENDPOINT}?${params.toString()}`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: JSON_HEADERS,
+    ...(signal ? { signal } : {}),
+  });
   if (response.status !== 200) {
     throw new DashboardRequestError(response.status);
   }

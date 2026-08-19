@@ -1,0 +1,167 @@
+.scopeNote {
+  margin: 0 0 var(--space-3);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.rangeDetails {
+  margin-bottom: var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.rangeSummary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.rangePanel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+  width: fit-content;
+  max-width: 100%;
+  padding: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+
+.rangeField {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.rangeField input {
+  min-height: 44px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+}
+
+/* Table and chart answer the same question, so they sit on one row and the
+   reader compares without scrolling. Below the breakpoint they stack. */
+.compareRow {
+  display: grid;
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (min-width: 1180px) {
+  .compareRow {
+    grid-template-columns: minmax(0, auto) minmax(340px, 1fr);
+  }
+}
+
+/* Matches `.diagnosticTitle` in below-fold.module.css so every table on the
+   page is introduced the same way. */
+.tableTitle {
+  margin: 0 0 var(--space-3);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.chartCard {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  align-content: start;
+}
+
+/* Unlike the trend charts this one must shrink into its column, so it scales
+   with the viewBox instead of holding a 720px floor. */
+.chartSvg {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+}
+
+.chartNote {
+  max-width: 60ch;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.warningNote {
+  margin: 0 0 var(--space-2);
+  color: var(--warning-text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* A group divider inside the comparison table: it labels the rows beneath it
+   rather than carrying data, so it stays quiet next to the numbers. */
+.groupRow th {
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.metricHint,
+.sampleNote {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: normal;
+}
+
+.metricHint {
+  max-width: 42ch;
+}
+
+/* Direction, not category: green/red only ever mean better/worse here. */
+.deltaBetter {
+  color: var(--success-text);
+  font-weight: 600;
+}
+
+.deltaWorse {
+  color: var(--warning-text);
+  font-weight: 600;
+}
+
+.deltaNeutral {
+  color: var(--muted);
+}
+
+.disclosure {
+  margin-top: var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.disclosureSummary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 var(--space-3);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.disclosureBody {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border-top: 1px solid var(--rule);
+}
+

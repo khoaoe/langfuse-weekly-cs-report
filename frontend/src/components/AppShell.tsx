@@ -57,6 +57,7 @@ const SECTIONS = [
   { id: "csat", label: "Mức hài lòng" },
   { id: "diagnostics", label: "Chẩn đoán" },
   { id: "tickets", label: "Ticket Explorer" },
+  { id: "ab-test", label: "AB Test" },
 ] as const;
 
 export interface AppShellProps {
