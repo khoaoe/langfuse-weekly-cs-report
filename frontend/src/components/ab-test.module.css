@@ -135,6 +135,18 @@
   color: var(--muted);
 }
 
+/* Model ids are long and the column must not stretch to fit one. The name
+   truncates to a fixed width and the reader scrolls sideways inside the cell
+   to read the rest, same as any other overflowing-column table on the page. */
+.armLabel {
+  display: block;
+  max-width: 132px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  white-space: nowrap;
+  scrollbar-width: thin;
+}
+
 /* Mirrors .tabs/.tab in below-fold.module.css so the dimension switcher here
    matches "So sánh theo thuộc tính ticket" exactly. */
 .tabs {

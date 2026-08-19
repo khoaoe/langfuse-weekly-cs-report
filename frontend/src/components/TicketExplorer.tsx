@@ -438,12 +438,6 @@ export function TicketExplorer({
         </div>
       </div>
 
-      <p className={styles.sectionNote}>
-        Chỉ hiển thị dữ liệu dùng cho báo cáo, không có nội dung hội thoại hay
-        thông tin khách hàng. Một số ticket không có mã số hợp lệ vẫn được tính
-        trong KPI nhưng không xuất hiện trong bảng này.
-      </p>
-
       <div
         id="ticketQuickFilters"
         className={styles.controls}

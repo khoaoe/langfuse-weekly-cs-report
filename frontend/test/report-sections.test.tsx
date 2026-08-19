@@ -2029,10 +2029,8 @@ describe("Ticket Explorer", () => {
       await screen.findByText("Không có ticket nào khớp bộ lọc hiện tại."),
     ).toBeVisible();
     expect(
-      screen.getByText(
-        /Một số ticket không có mã số hợp lệ vẫn được tính trong KPI nhưng không xuất hiện trong bảng này/,
-      ),
-    ).toBeVisible();
+      screen.queryByText(/mã số hợp lệ vẫn được tính trong KPI/),
+    ).toBeNull();
     expect(document.getElementById("tickets")).not.toHaveTextContent(
       /session|trace ID|observation ID|prompt/i,
     );
