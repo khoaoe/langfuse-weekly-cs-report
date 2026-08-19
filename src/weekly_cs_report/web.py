@@ -24,7 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
-from .ab_test import AbTestSnapshot, compute_ab_test
+from .ab_test import AbTestSnapshot, compute_ab_test, default_window
 from .categories import load_taxonomy
 from .cli import ConfigurationError, PROJECT_ROOT, load_environment
 from .csat_cache import CSATCacheError, load_csat_cache
@@ -210,6 +210,66 @@ def _trace_explain_taxonomy():
     return load_taxonomy(PROJECT_ROOT / "config" / "taxonomy.v2.json")
 
 
+class _AbTestBackgroundCache:
+    """Refreshes the AB Test default window on its own schedule.
+
+    A custom time-range read still goes through the per-request path in
+    ``ab_test`` route (its own short-TTL cache); this class exists only so the
+    common case -- the default window every reader sees on first load -- is
+    already computed and instant, the same trade the main dashboard snapshot
+    makes. Unlike ``SnapshotManager`` this holds no disk state: a cold miss
+    after a restart costs one background cycle, not a 12-week rebuild, so the
+    persistence machinery that protects the main snapshot is not needed here.
+    """
+
+    def __init__(
+        self,
+        loader: Callable[[], dict[str, object]],
+        *,
+        interval_seconds: float = 300.0,
+        monotonic: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._loader = loader
+        self._interval_seconds = interval_seconds
+        self._monotonic = monotonic
+        self._lock = threading.Lock()
+        self._payload: dict[str, object] | None = None
+        self._last_success_at: float | None = None
+        self._last_error_code: str | None = None
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._refresh_once()
+            self._stop_event.wait(self._interval_seconds)
+
+    def _refresh_once(self) -> None:
+        try:
+            payload = self._loader()
+        except Exception:
+            with self._lock:
+                self._last_error_code = "refresh_failed"
+            emit_event("ab_test_background_refresh_failure")
+            return
+        with self._lock:
+            self._payload = payload
+            self._last_success_at = self._monotonic()
+            self._last_error_code = None
+        emit_event("ab_test_background_refresh_success")
+
+    def get(self) -> tuple[dict[str, object] | None, str | None]:
+        with self._lock:
+            return self._payload, self._last_error_code
+
+
 def create_app(
     manager: SnapshotManager,
     *,
@@ -224,6 +284,9 @@ def create_app(
         finally:
             try:
                 manager.close()
+                background = getattr(app.state, "ab_test_background", None)
+                if background is not None:
+                    background.close()
                 client = getattr(app.state, "langfuse_client", None)
                 if client is not None:
                     client.close()
@@ -389,6 +452,27 @@ def create_app(
         payload = _ab_test_payload(snapshot)
         app.state.ab_test_cache.set(cache_key, payload)
         return JSONResponse(payload)
+
+    @app.get("/api/ab-test/default")
+    async def ab_test_default():
+        background = getattr(app.state, "ab_test_background", None)
+        if background is None:
+            return JSONResponse(
+                {"status": "loading", "data": None}, status_code=202
+            )
+        payload, error_code = background.get()
+        if payload is None:
+            return JSONResponse(
+                {
+                    "status": "stale_error" if error_code else "loading",
+                    "data": None,
+                    "last_error_code": error_code,
+                },
+                status_code=202,
+            )
+        return JSONResponse(
+            {"status": "ready", "data": payload, "last_error_code": error_code}
+        )
 
     @app.get("/api/freshdesk-entry-coverage/tickets")
     async def freshdesk_entry_coverage_tickets(request: Request):
@@ -807,6 +891,22 @@ def main(argv: Sequence[str] | None = None) -> int:
             manager, settings=web_settings, runtime_directory=runtime_directory
         )
         app.state.langfuse_client = client
+
+        def load_ab_test_default() -> dict[str, object]:
+            window_start, window_end = default_window(datetime.now(timezone.utc))
+            snapshot = compute_ab_test(
+                client,
+                window_start,
+                window_end,
+                _trace_explain_taxonomy(),
+                csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
+                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+            )
+            return _ab_test_payload(snapshot)
+
+        ab_test_background = _AbTestBackgroundCache(load_ab_test_default)
+        ab_test_background.start()
+        app.state.ab_test_background = ab_test_background
         uvicorn.run(
             app,
             host=host,
@@ -823,6 +923,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             try:
                 if manager is not None:
                     manager.close()
+                if app is not None:
+                    background = getattr(app.state, "ab_test_background", None)
+                    if background is not None:
+                        background.close()
             finally:
                 client.close()
     return 0

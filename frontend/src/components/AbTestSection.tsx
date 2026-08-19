@@ -3,7 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { scaleLinear, scalePoint } from "@visx/scale";
 import { LinePath } from "@visx/shape";
 
-import { DashboardRequestError, fetchAbTest } from "../lib/api";
+import {
+  DashboardRequestError,
+  fetchAbTest,
+  fetchAbTestDefault,
+} from "../lib/api";
 import {
   parseAbTestSnapshot,
   type AbTestSnapshot,
@@ -532,10 +536,33 @@ export function AbTestSection({
   const effectiveWindow = override ?? defaultWindow;
   const startIso = toIsoWithOffset(effectiveWindow.start);
   const endIso = toIsoWithOffset(effectiveWindow.end);
+  const isDefaultView = override === null;
 
-  const query = useQuery({
+  // Default view: read the background-refreshed cache (instant, matches the
+  // main dashboard snapshot's trade-off). A custom range still costs a live
+  // Langfuse read, so it keeps the per-request path with its own short-TTL
+  // cache instead.
+  const defaultQuery = useQuery({
+    queryKey: ["ab-test-default"],
+    enabled: open && isDefaultView,
+    retry: false,
+    refetchInterval: 60_000,
+    queryFn: async ({ signal }) => {
+      const envelope = await fetchAbTestDefault(signal);
+      if (envelope.status !== "ready" || envelope.data === null) {
+        return null;
+      }
+      const parsed = parseAbTestSnapshot(envelope.data);
+      if (!parsed.ok) {
+        throw new Error(parsed.message);
+      }
+      return parsed.data;
+    },
+  });
+
+  const liveQuery = useQuery({
     queryKey: ["ab-test", startIso, endIso],
-    enabled: open,
+    enabled: open && !isDefaultView,
     retry: false,
     queryFn: async ({ signal }) => {
       const parsed = parseAbTestSnapshot(
@@ -548,7 +575,21 @@ export function AbTestSection({
     },
   });
 
-  const data = query.data;
+  const query = isDefaultView ? defaultQuery : liveQuery;
+  // The default query resolves successfully even while the background cache
+  // has nothing yet (`data: null`) -- that is still "loading" to the reader.
+  const isLoading = isDefaultView
+    ? defaultQuery.isLoading || (defaultQuery.isSuccess && defaultQuery.data === null)
+    : liveQuery.isLoading;
+  const data = query.data ?? undefined;
+  // The default view shows the window the server actually computed, not the
+  // client's guess -- they usually agree, but the payload is the truth.
+  const windowLabel = isDefaultView && data
+    ? {
+        start: data.window_start.slice(0, 16).replace("T", " "),
+        end: data.window_end.slice(0, 16).replace("T", " "),
+      }
+    : { start: effectiveWindow.start.replace("T", " "), end: effectiveWindow.end.replace("T", " ") };
   const arms = useMemo(
     () => (data ? data.arms.map((arm) => arm.arm) : []),
     [data],
@@ -637,7 +678,7 @@ export function AbTestSection({
         </div>
       </details>
 
-      {query.isLoading ? (
+      {isLoading ? (
         <p role="status">Đang tải…</p>
       ) : query.isError ? (
         <p role="alert">{abTestErrorMessage(query.error)}</p>
@@ -650,7 +691,7 @@ export function AbTestSection({
         ) : (
           <>
             <p className={abTestStyles.scopeNote}>
-              {`${formatCount(data.total_tickets)} ticket · ${effectiveWindow.start.replace("T", " ")} → ${effectiveWindow.end.replace("T", " ")}`}
+              {`${formatCount(data.total_tickets)} ticket · ${windowLabel.start} → ${windowLabel.end}`}
               {override === null ? " · theo Phạm vi báo cáo" : ""}
             </p>
             {data.unmatched_tickets > 0 ? (
