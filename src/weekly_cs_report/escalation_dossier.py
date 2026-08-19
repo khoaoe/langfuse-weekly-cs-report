@@ -36,6 +36,18 @@ _GENERAL_RESPONSE_KEY = "general_response"
 
 _CS_ESCALATION_RULE_FAMILY = {"cs_escalation", "cs_escalation_regex"}
 _CANDIDATE_CAP = 40
+
+# The running agent's tool/skill spans use the runtime skill name
+# ("interbank-fund-transfer"), but that skill's source doc folder --
+# ../docs/cs-agent-skills/ibft -- and skills-snapshot/ibft/ keep the short
+# alias. Translate before looking up `rules` (keyed by snapshot folder name)
+# so IBFT tickets actually get rule_candidates instead of silently coming
+# back empty.
+_SKILL_SNAPSHOT_ALIASES = {"interbank-fund-transfer": "ibft"}
+
+
+def _snapshot_skill_key(skill: str) -> str:
+    return _SKILL_SNAPSHOT_ALIASES.get(skill, skill)
 _ESCALATE_PHRASE_RE = re.compile(
     r"chuy[ểê]n\b.{0,20}\bcskh|chăm sóc khách hàng|\bcskh\b|\bcs\b",
     re.IGNORECASE,
@@ -313,12 +325,12 @@ def _rule_candidates_for_branch(
 
     for skill, filename in sub_skills:
         file_label = Path(filename).stem
-        for candidate in rules.get(skill, ()):
+        for candidate in rules.get(_snapshot_skill_key(skill), ()):
             if candidate.source == "sub_skill" and candidate.file_label == file_label:
                 candidates.append(candidate)
 
     for skill in turn.skills_used:
-        for candidate in rules.get(skill, ()):
+        for candidate in rules.get(_snapshot_skill_key(skill), ()):
             if candidate.source == "skill_md":
                 candidates.append(candidate)
 

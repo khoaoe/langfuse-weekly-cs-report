@@ -13,6 +13,10 @@ from .tpe_status import resolve_tpe_status
 
 _LONG_NUMERIC_RUN = re.compile(r"[0-9]{9,}")
 _TOOL_PREFIX = "tool:"
+# Real meta.App values are compound strings like "241 - Chuyển Tiền ATM", not
+# the bare numeric id the config's `app` list stores -- pull the leading
+# digits out before comparing.
+_APP_ID_PREFIX_RE = re.compile(r"^\s*(\d+)")
 
 
 @dataclass(frozen=True)
@@ -81,8 +85,10 @@ def load_explain_config(path: Path) -> ExplainConfig:
 def skill_for_app(config: ExplainConfig, app_id: str | None) -> str | None:
     if not app_id:
         return None
+    match = _APP_ID_PREFIX_RE.match(app_id)
+    numeric_id = match.group(1) if match else None
     for skill, field_config in config.skills.items():
-        if app_id in field_config.app:
+        if app_id in field_config.app or (numeric_id is not None and numeric_id in field_config.app):
             return skill
     return None
 
