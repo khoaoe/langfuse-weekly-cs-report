@@ -298,7 +298,9 @@ function ComparisonTable({
             <th scope="col">Chỉ số</th>
             {arms.map((arm) => (
               <th scope="col" className={styles.numeric} key={arm}>
-                <code>{shortArmLabel(arm)}</code>
+                <code className={abTestStyles.armLabel}>
+                  {shortArmLabel(arm)}
+                </code>
               </th>
             ))}
             <th scope="col" className={styles.numeric}>
@@ -466,7 +468,9 @@ function DimensionTable({
                 </th>
                 {arms.map((arm) => (
                   <th scope="col" className={styles.numeric} key={arm}>
-                    <code>{shortArmLabel(arm)}</code>
+                    <code className={abTestStyles.armLabel}>
+                  {shortArmLabel(arm)}
+                </code>
                   </th>
                 ))}
               </tr>
