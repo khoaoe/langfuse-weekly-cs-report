@@ -19,6 +19,7 @@ import {
   selectView,
 } from "../lib/selectors";
 import { scopeSnapshotToWeeks } from "../lib/report-scope";
+import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
 import { DecisionLedger } from "./DecisionLedger";
@@ -306,6 +307,13 @@ function DashboardBody() {
           />
         </>
       )}
+      {/* Independent of the weekly snapshot: this reads Langfuse directly on
+          its own time window, so it must not wait on the (slower, more
+          fragile) full weekly pipeline. */}
+      <AbTestSection
+        selectedReportWeeks={selectedReportWeeks}
+        weekDefinition={weekDefinition}
+      />
     </AppShell>
     <FreshdeskCookieDialog
       open={cookieDialogOpen}

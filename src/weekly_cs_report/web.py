@@ -5,7 +5,7 @@ import base64
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import hashlib
 import ipaddress
@@ -24,6 +24,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
+from .ab_test import AbTestSnapshot, compute_ab_test
 from .categories import load_taxonomy
 from .cli import ConfigurationError, PROJECT_ROOT, load_environment
 from .csat_cache import CSATCacheError, load_csat_cache
@@ -99,6 +100,9 @@ _INTEGER_QUERY = re.compile(r"[0-9]{1,9}\Z")
 _TRACE_EXPLAIN_TICKET_ID = re.compile(r"[0-9]{1,20}\Z")
 _TRACE_EXPLAIN_CACHE_TTL_SECONDS = 300.0
 _TRACE_EXPLAIN_CACHE_MISS = object()
+_AB_TEST_MAX_WINDOW_DAYS = 60
+_AB_TEST_CACHE_TTL_SECONDS = 300.0
+_AB_TEST_DEADLINE_SECONDS = 240.0
 _STATIC_ROOT = Path(__file__).with_name("static")
 _STATIC_INDEX = _STATIC_ROOT / "index.html"
 _SPA_ROOT = _STATIC_ROOT / "spa"
@@ -237,6 +241,9 @@ def create_app(
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
     app.state.trace_explain_cache = _TraceExplainCache()
+    app.state.ab_test_cache = _TraceExplainCache(
+        ttl_seconds=_AB_TEST_CACHE_TTL_SECONDS
+    )
 
     @app.middleware("http")
     async def security_boundary(request: Request, call_next):
@@ -343,6 +350,45 @@ def create_app(
                 {"detail": {"code": "trace_not_found"}}, status_code=404
             )
         return JSONResponse(asdict(explanation))
+
+    @app.get("/api/ab-test")
+    def ab_test(request: Request):
+        # Deliberately sync, same reasoning as trace-explain: a live Langfuse
+        # call must run in FastAPI's threadpool, not the shared event loop.
+        parsed = _parse_ab_test_query(request)
+        if parsed is None:
+            return JSONResponse(
+                {"detail": {"code": "invalid_query"}}, status_code=400
+            )
+        window_start, window_end = parsed
+        # A wide window costs hundreds of trace pages, and the reader pans
+        # across the same window repeatedly. Cache on the exact bounds.
+        cache_key = f"{_utc_iso(window_start)}|{_utc_iso(window_end)}"
+        cached = app.state.ab_test_cache.get(cache_key)
+        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+            return JSONResponse(cached)
+
+        langfuse_client = getattr(request.app.state, "langfuse_client", None)
+        if langfuse_client is None:
+            return JSONResponse(
+                {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+            )
+        try:
+            snapshot = compute_ab_test(
+                langfuse_client,
+                window_start,
+                window_end,
+                _trace_explain_taxonomy(),
+                csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
+                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+            )
+        except LangfuseAPIError:
+            return JSONResponse(
+                {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+            )
+        payload = _ab_test_payload(snapshot)
+        app.state.ab_test_cache.set(cache_key, payload)
+        return JSONResponse(payload)
 
     @app.get("/api/freshdesk-entry-coverage/tickets")
     async def freshdesk_entry_coverage_tickets(request: Request):
@@ -854,6 +900,132 @@ def _freshdesk_cookie_state_payload(
 
 def _utc_iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_ab_test_query(request: Request) -> tuple[datetime, datetime] | None:
+    items = list(request.query_params.multi_items())
+    if len(items) > 2 or any(name not in {"start", "end"} for name, _value in items):
+        return None
+    for _name, value in items:
+        if len(value) > _MAX_QUERY_VALUE_LENGTH:
+            return None
+    values = dict(items)
+    if "start" not in values or not values["start"]:
+        return None
+    start_raw = values["start"]
+    end_raw = values.get("end") or ""
+
+    normalized_start = (
+        start_raw[:-1] + "+00:00" if start_raw.endswith("Z") else start_raw
+    )
+    try:
+        window_start = datetime.fromisoformat(normalized_start)
+    except ValueError:
+        return None
+    if window_start.tzinfo is None:
+        return None
+    window_start = window_start.astimezone(timezone.utc)
+
+    if end_raw:
+        normalized_end = end_raw[:-1] + "+00:00" if end_raw.endswith("Z") else end_raw
+        try:
+            window_end = datetime.fromisoformat(normalized_end)
+        except ValueError:
+            return None
+        if window_end.tzinfo is None:
+            return None
+        window_end = window_end.astimezone(timezone.utc)
+    else:
+        window_end = datetime.now(timezone.utc)
+
+    if window_end <= window_start:
+        return None
+    if window_end - window_start > timedelta(days=_AB_TEST_MAX_WINDOW_DAYS):
+        return None
+    return window_start, window_end
+
+
+def _csat_buckets_by_ticket(
+    runtime_directory: Path | None,
+) -> dict[str, str] | None:
+    """Latest satisfaction bucket per ticket, or None when no cache exists.
+
+    Only the bucket travels: no comment text, survey id, or response key.
+    """
+    if runtime_directory is None:
+        return None
+    try:
+        cache = load_csat_cache(runtime_directory / _CSAT_CACHE_FILENAME)
+    except CSATCacheError:
+        return None
+    if cache is None:
+        return None
+    latest: dict[str, tuple[str, str]] = {}
+    for response in cache.responses:
+        responded_at = response.responded_at or ""
+        previous = latest.get(response.ticket_id)
+        if previous is None or responded_at >= previous[0]:
+            latest[response.ticket_id] = (responded_at, response.satisfaction_bucket)
+    return {
+        ticket_id: bucket for ticket_id, (_at, bucket) in latest.items()
+    }
+
+
+def _ab_test_payload(snapshot: AbTestSnapshot) -> dict[str, object]:
+    return {
+        "window_start": _utc_iso(snapshot.window_start),
+        "window_end": _utc_iso(snapshot.window_end),
+        "total_tickets": snapshot.total_tickets,
+        "unmatched_tickets": snapshot.unmatched_tickets,
+        "csat_available": snapshot.csat_available,
+        "arms": [
+            {
+                "arm": arm.arm,
+                "ticket_count": arm.ticket_count,
+                "share": arm.share,
+                "low_sample": arm.low_sample,
+                "ai_end_to_end": arm.ai_end_to_end,
+                "ai_then_cs": arm.ai_then_cs,
+                "direct_cs": arm.direct_cs,
+                "unclassified": arm.unclassified,
+                "ai_first_count": arm.ai_first_count,
+                "transferred_count": arm.transferred_count,
+                "reopen_count": arm.reopen_count,
+                "reopen_denominator": arm.reopen_denominator,
+                "turn_total": arm.turn_total,
+                "latency_p50": arm.latency_p50,
+                "latency_p95": arm.latency_p95,
+                "llm_call_count": arm.llm_call_count,
+                "input_tokens": arm.input_tokens,
+                "output_tokens": arm.output_tokens,
+                "total_tokens": arm.total_tokens,
+                "llm_latency_p50": arm.llm_latency_p50,
+                "llm_latency_p95": arm.llm_latency_p95,
+                "csat_response_count": arm.csat_response_count,
+                "csat_positive_count": arm.csat_positive_count,
+                "csat_negative_count": arm.csat_negative_count,
+            }
+            for arm in snapshot.arms
+        ],
+        "daily": [
+            {
+                "date": item.date,
+                "arm": item.arm,
+                "ticket_count": item.ticket_count,
+                "ai_end_to_end": item.ai_end_to_end,
+            }
+            for item in snapshot.daily
+        ],
+        "categories": [
+            {
+                "issue_category": item.issue_category,
+                "arm": item.arm,
+                "ticket_count": item.ticket_count,
+                "ai_end_to_end": item.ai_end_to_end,
+            }
+            for item in snapshot.categories
+        ],
+    }
 
 
 def _parse_ticket_query(

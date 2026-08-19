@@ -1,4 +1,3 @@
-import { formatCount, formatRate } from "./format";
 import type { TransferTriggerReason } from "./dashboard-schema";
 
 const TRANSFER_REASON_LABELS: Readonly<Record<TransferTriggerReason, string>> = {
@@ -17,25 +16,4 @@ const TRANSFER_REASON_LABELS: Readonly<Record<TransferTriggerReason, string>> = 
 
 export function transferReasonLabel(reason: TransferTriggerReason): string {
   return TRANSFER_REASON_LABELS[reason];
-}
-
-export function formatMissingStepResult(
-  count: number,
-  denominator: number,
-): string {
-  const measured = `${formatCount(count)}/${formatCount(
-    denominator,
-  )} ticket chuyển CS`;
-  if (count === 0) {
-    return `${measured} không thiếu Step result.`;
-  }
-
-  const rate = count / denominator;
-  const consequence =
-    rate > 0.5
-      ? "Phần lớn ca chuyển CS hiện chưa truy được tới bước lỗi cụ thể."
-      : "Các ca này hiện chưa truy được tới bước lỗi cụ thể.";
-  return `${measured} (${formatRate(
-    rate,
-  )}) không có Step result. ${consequence}`;
 }

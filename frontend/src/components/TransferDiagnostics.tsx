@@ -13,10 +13,7 @@ import {
   formatRate,
   formatWeekRange,
 } from "../lib/format";
-import {
-  formatMissingStepResult,
-  transferReasonLabel,
-} from "../lib/transfer-copy";
+import { transferReasonLabel } from "../lib/transfer-copy";
 import {
   stableSortRows,
   toggleTableSort,
@@ -244,17 +241,6 @@ function TpeZone({
               </tbody>
             </table>
           </div>
-          <p id="stepResultCoverage" className={styles.sectionNote}>
-            {transfer.step_result_missing.denominator === 0
-              ? "Chưa có ticket chuyển CS trong phạm vi đang chọn để đo độ phủ Step result."
-              : formatMissingStepResult(
-                  transfer.step_result_missing.count,
-                  transfer.step_result_missing.denominator,
-                )}
-          </p>
-          <p id="tpeStatusCaption" className={styles.sectionNote}>
-            {'Trạng thái lấy từ bảng TPE của taxonomy. "Chưa phân loại" nghĩa là cặp mã chưa có trong bảng — không phải lỗi giao dịch.'}
-          </p>
         </div>
       </details>
     </section>

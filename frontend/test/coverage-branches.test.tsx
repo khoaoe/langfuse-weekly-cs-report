@@ -332,21 +332,13 @@ describe("below-fold degraded states", () => {
       screen.queryByRole("button", { name: />3 lượt xử lý chưa chuyển CS/ }),
     ).toBeNull();
     expect(screen.queryByText("Số lượt trả lời không hợp lệ: 2")).toBeNull();
-    expect(
-      screen.getAllByText(
-        "Chưa có ticket chuyển CS trong phạm vi đang chọn để đo độ phủ Step result.",
-      ),
-    ).toHaveLength(1);
+    // The Step-result coverage sentence was removed as redundant narration.
+    expect(document.getElementById("stepResultCoverage")).toBeNull();
     expect(document.getElementById("qualityGrid")).toBeNull();
     expect(document.getElementById("gateGrid")).toBeNull();
     expect(screen.queryByText("-999 · 1 ticket")).toBeNull();
     expect(screen.queryByText("-998 · Chờ map · 2 ticket")).toBeNull();
-    // "taxonomy" now legitimately appears in the TPE status caption
-    // (#tpeStatusCaption); only the legacy map/case wording it replaced is
-    // still disallowed here.
-    expect(
-      screen.queryByText(/taxonomy/i, { ignore: "#tpeStatusCaption" }),
-    ).toBeNull();
+    expect(screen.queryByText(/taxonomy/i)).toBeNull();
   });
 
   it("renders exact-source TPE signals without dividing by zero", async () => {
@@ -405,21 +397,15 @@ describe("below-fold degraded states", () => {
     renderBelowFold(snapshot);
 
     expect(screen.queryByRole("heading", { name: "Độ phủ Step result" })).toBeNull();
-    expect(
-      screen.getAllByText(
-        "2/5 ticket chuyển CS (40,0%) không có Step result. Các ca này hiện chưa truy được tới bước lỗi cụ thể.",
-      ),
-    ).toHaveLength(1);
+    // The coverage sentence was removed from both sections, so quality still
+    // must not grow its own copy of it.
+    expect(screen.queryByText(/không có Step result\./)).toBeNull();
+    expect(document.getElementById("stepResultCoverage")).toBeNull();
     expect(document.getElementById("stepResultCoveragePanel")).toBeNull();
-    // "taxonomy" now legitimately appears in the TPE status caption
-    // (#tpeStatusCaption); only the legacy map/case wording it replaced is
-    // still disallowed here.
-    expect(
-      screen.queryByText(/taxonomy/i, { ignore: "#tpeStatusCaption" }),
-    ).toBeNull();
+    expect(screen.queryByText(/taxonomy/i)).toBeNull();
   });
 
-  it("calls out a majority once in transfer diagnostics when most transfers lack Step result", () => {
+  it("never narrates Step result coverage, at any missing ratio", () => {
     const snapshot = belowFoldSnapshot({
       observed_transfer_denominator: 5,
       triggers: [
@@ -440,11 +426,8 @@ describe("below-fold degraded states", () => {
 
     renderBelowFold(snapshot);
 
-    expect(
-      screen.getAllByText(
-        "4/5 ticket chuyển CS (80,0%) không có Step result. Phần lớn ca chuyển CS hiện chưa truy được tới bước lỗi cụ thể.",
-      ),
-    ).toHaveLength(1);
+    expect(screen.queryByText(/không có Step result\./)).toBeNull();
+    expect(screen.queryByText(/Phần lớn ca chuyển CS/)).toBeNull();
   });
 });
 
