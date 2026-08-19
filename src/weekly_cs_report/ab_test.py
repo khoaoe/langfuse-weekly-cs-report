@@ -83,6 +83,16 @@ class DailyArmPoint:
     arm: str
     ticket_count: int
     ai_end_to_end: int
+    ai_first_count: int
+    transferred_count: int
+    direct_cs: int
+    reopen_count: int
+    reopen_denominator: int
+    turn_total: int
+    latency_p50: float | None
+    latency_p95: float | None
+    total_tokens: int
+    output_tokens: int
 
 
 @dataclass(frozen=True)
@@ -290,6 +300,34 @@ def _llm_metrics_query(
     }
 
 
+def _llm_metrics_query_hourly(window_start: datetime, window_end: datetime) -> dict:
+    """Same measures as `_llm_metrics_query`, bucketed by hour (in UTC --
+    the metrics endpoint's only granularity option). Token/output-token sums
+    aggregate correctly across hours, so `aggregate_ab_snapshot` re-buckets
+    them into Asia/Ho_Chi_Minh calendar days itself for the daily chart.
+
+    Latency deliberately is NOT requested here: a p95 does not sum or average
+    across sub-buckets into a valid daily p95, and the endpoint only returns
+    pre-aggregated percentiles, never raw samples -- so no daily latency
+    metric is derived from this query.
+    """
+    return {
+        "view": "observations",
+        "metrics": [
+            {"measure": "totalTokens", "aggregation": "sum"},
+            {"measure": "outputTokens", "aggregation": "sum"},
+        ],
+        "dimensions": [{"field": "providedModelName"}],
+        "fromTimestamp": window_start.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "toTimestamp": window_end.astimezone(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z"),
+        "timeDimension": {"granularity": "hour"},
+    }
+
+
 def _as_int(value: object) -> int:
     if isinstance(value, bool):
         return 0
@@ -319,6 +357,7 @@ def aggregate_ab_snapshot(
     taxonomy: Taxonomy,
     *,
     llm_rows: Sequence[Mapping[str, object]] = (),
+    llm_daily_rows: Sequence[Mapping[str, object]] = (),
     csat_by_ticket: Mapping[str, str] | None = None,
     trace_enrichment: Mapping[str, TraceEnrichment] = MappingProxyType({}),
 ) -> AbTestSnapshot:
@@ -389,19 +428,70 @@ def aggregate_ab_snapshot(
             )
         )
 
-    daily_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    # Every metric here comes straight off the same per-ticket facts used for
+    # the overall ArmMetrics -- reopen/latency keep their exact denominators
+    # (ai_first tickets, tickets with a measured latency) so a daily point
+    # means the same thing as the headline number, just narrowed to one day.
+    daily_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0, 0, 0])
+    daily_latencies: dict[tuple[str, str], list[float]] = defaultdict(list)
     for fact in facts:
         key = (
             fact.timestamp.astimezone(VIETNAM_TIMEZONE).date().isoformat(),
             fact.arm,
         )
-        daily_counts[key][0] += 1
-        daily_counts[key][1] += int(fact.outcome == "ai_end_to_end")
+        counts = daily_counts[key]
+        counts[0] += 1
+        counts[1] += int(fact.outcome == "ai_end_to_end")
+        counts[2] += int(fact.ai_first)
+        counts[3] += int(fact.transferred)
+        counts[4] += int(fact.outcome == "direct_cs")
+        counts[6] += fact.turn_count
+        if fact.reopen_lifetime is not None:
+            counts[5] += fact.reopen_lifetime
+            counts[7] += 1
+        if fact.latency is not None:
+            daily_latencies[key].append(fact.latency)
+
+    # The metrics endpoint only buckets by UTC hour, not by
+    # Asia/Ho_Chi_Minh day, so each hourly row is re-bucketed into the same
+    # VN calendar day as the ticket facts above before the two are merged --
+    # otherwise the token line would silently sit up to 7 hours off the
+    # ticket-count/rate lines sharing its x-axis. Sums aggregate correctly
+    # across the re-bucketed hours; this is why no percentile is included.
+    daily_tokens: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+    for row in llm_daily_rows:
+        arm = row.get("providedModelName")
+        time_dimension = row.get("time_dimension")
+        if not isinstance(arm, str) or not isinstance(time_dimension, str):
+            continue
+        try:
+            bucket_start = datetime.fromisoformat(time_dimension.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        key = (bucket_start.astimezone(VIETNAM_TIMEZONE).date().isoformat(), arm)
+        tokens = daily_tokens[key]
+        tokens[0] += _as_int(row.get("sum_totalTokens"))
+        tokens[1] += _as_int(row.get("sum_outputTokens"))
+
+    all_keys = sorted(set(daily_counts) | set(daily_tokens))
     daily = tuple(
         DailyArmPoint(
-            date=date_value, arm=arm, ticket_count=counts[0], ai_end_to_end=counts[1]
+            date=date_value,
+            arm=arm,
+            ticket_count=daily_counts[(date_value, arm)][0],
+            ai_end_to_end=daily_counts[(date_value, arm)][1],
+            ai_first_count=daily_counts[(date_value, arm)][2],
+            transferred_count=daily_counts[(date_value, arm)][3],
+            direct_cs=daily_counts[(date_value, arm)][4],
+            reopen_count=daily_counts[(date_value, arm)][5],
+            reopen_denominator=daily_counts[(date_value, arm)][7],
+            turn_total=daily_counts[(date_value, arm)][6],
+            latency_p50=_percentile(daily_latencies.get((date_value, arm), []), 0.5),
+            latency_p95=_percentile(daily_latencies.get((date_value, arm), []), 0.95),
+            total_tokens=daily_tokens[(date_value, arm)][0],
+            output_tokens=daily_tokens[(date_value, arm)][1],
         )
-        for (date_value, arm), counts in sorted(daily_counts.items())
+        for (date_value, arm) in all_keys
     )
 
     dimension_breakdown: dict[str, tuple[DimensionArmCount, ...]] = {}
@@ -487,6 +577,14 @@ def compute_ab_test(
         # metrics outage must not blank out the outcome comparison.
         llm_rows = []
     try:
+        llm_daily_rows = client.fetch_metrics(
+            _llm_metrics_query_hourly(window_start, window_end), deadline=deadline
+        )
+    except Exception:
+        # Daily token lines are an enrichment on top of an enrichment -- a
+        # failure here must not blank the (already-optional) window totals.
+        llm_daily_rows = []
+    try:
         observations_by_name = {
             name: list(
                 client.iter_observations_by_name(
@@ -506,6 +604,7 @@ def compute_ab_test(
         window_end,
         taxonomy,
         llm_rows=llm_rows,
+        llm_daily_rows=llm_daily_rows,
         csat_by_ticket=csat_by_ticket,
         trace_enrichment=trace_enrichment,
     )

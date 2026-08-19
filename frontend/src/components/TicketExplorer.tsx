@@ -36,6 +36,7 @@ import {
 } from "../lib/ticket-columns";
 import { DataTableSortButton } from "./DataTableSortButton";
 import { DateRangeField } from "./DateRangeField";
+import { MultiSelectField } from "./MultiSelectField";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
 import {
@@ -258,6 +259,7 @@ export function TicketExplorer({
       skill: filters.skill,
       intent: filters.intent,
       tpe_code: filters.tpe_code,
+      model_core: filters.model_core,
       transfer_reason: filters.transfer_reason,
       is_weekend_start: filters.is_weekend_start,
     }),
@@ -392,6 +394,27 @@ export function TicketExplorer({
         "vi",
       ),
     ),
+  } as const;
+
+  const multiSelectOptions = {
+    outcome: Object.entries(OUTCOME_FILTER_LABELS).map(([value, label]) => ({
+      value,
+      label,
+    })),
+    issue_category: filterOptions.issue_category.map((value) => ({ value, label: value })),
+    app: filterOptions.app.map((value) => ({ value, label: value })),
+    product_code: filterOptions.product_code.map((value) => ({ value, label: value })),
+    skill: filterOptions.skill.map((value) => ({ value, label: value })),
+    tpe_code: filterOptions.tpe_code.map((value) => {
+      const source = findTpeOptionSource(value, view.transfer_reasons.tpe);
+      return { value, label: source ? tpeOptionLabel(source) : value };
+    }),
+    model_core: filterOptions.model_core.map((value) => ({ value, label: value })),
+    transfer_reason: filterOptions.transfer_reason.map((value) => ({
+      value,
+      label: transferReasonLabel(value),
+    })),
+    csat_satisfaction: CSAT_SATISFACTION_OPTIONS,
   } as const;
 
   const explorerActiveFilters = activeTicketFilterChips(filters, weekDefinition);
@@ -540,98 +563,48 @@ export function TicketExplorer({
             onChange={(event) => update({ ticket_id: event.target.value })}
           />
         </label>
-        <label className={ticketStyles.field} htmlFor="outcomeInput">
-          Kết quả
-          <select
-            id="outcomeInput"
-            value={filters.outcome}
-            onChange={(event) => update({ outcome: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {Object.entries(OUTCOME_FILTER_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={ticketStyles.field} htmlFor="csatSatisfactionInput">
-          Mức độ hài lòng (CS Agent)
-          <select
-            id="csatSatisfactionInput"
-            value={filters.csat_satisfaction}
-            onChange={(event) =>
-              update({ csat_satisfaction: event.target.value })
-            }
-          >
-            <option value="">Tất cả</option>
-            {CSAT_SATISFACTION_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          Category
-          <select
-            id="issueCategoryInput"
-            value={filters.issue_category}
-            onChange={(event) => update({ issue_category: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.issue_category.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          App
-          <select
-            id="appInput"
-            value={filters.app}
-            onChange={(event) => update({ app: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.app.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          Product Code
-          <select
-            id="productCodeInput"
-            value={filters.product_code}
-            onChange={(event) => update({ product_code: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.product_code.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          Skill
-          <select
-            id="skillInput"
-            value={filters.skill}
-            onChange={(event) => update({ skill: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.skill.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelectField
+          id="outcomeInput"
+          label="Kết quả"
+          options={multiSelectOptions.outcome}
+          value={filters.outcome}
+          onChange={(value) => update({ outcome: value })}
+        />
+        <MultiSelectField
+          id="csatSatisfactionInput"
+          label="CSAT"
+          options={multiSelectOptions.csat_satisfaction}
+          value={filters.csat_satisfaction}
+          onChange={(value) => update({ csat_satisfaction: value })}
+        />
+        <MultiSelectField
+          id="issueCategoryInput"
+          label="Category"
+          options={multiSelectOptions.issue_category}
+          value={filters.issue_category}
+          onChange={(value) => update({ issue_category: value })}
+        />
+        <MultiSelectField
+          id="appInput"
+          label="App"
+          options={multiSelectOptions.app}
+          value={filters.app}
+          onChange={(value) => update({ app: value })}
+        />
+        <MultiSelectField
+          id="productCodeInput"
+          label="Product Code"
+          options={multiSelectOptions.product_code}
+          value={filters.product_code}
+          onChange={(value) => update({ product_code: value })}
+        />
+        <MultiSelectField
+          id="skillInput"
+          label="Skill"
+          options={multiSelectOptions.skill}
+          value={filters.skill}
+          onChange={(value) => update({ skill: value })}
+        />
         <label className={ticketStyles.field}>
           Intent
           <input
@@ -648,42 +621,20 @@ export function TicketExplorer({
             ))}
           </datalist>
         </label>
-        <label className={ticketStyles.field}>
-          Transstatus
-          <select
-            id="tpeCodeInput"
-            value={filters.tpe_code}
-            onChange={(event) => update({ tpe_code: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.tpe_code.map((value) => {
-              const source = findTpeOptionSource(
-                value,
-                view.transfer_reasons.tpe,
-              );
-              return (
-                <option key={value} value={value}>
-                  {source ? tpeOptionLabel(source) : value}
-                </option>
-              );
-            })}
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          Model
-          <select
-            id="modelCoreInput"
-            value={filters.model_core}
-            onChange={(event) => update({ model_core: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.model_core.map((value) => (
-              <option key={value} value={value}>
-                {value}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelectField
+          id="tpeCodeInput"
+          label="Transstatus"
+          options={multiSelectOptions.tpe_code}
+          value={filters.tpe_code}
+          onChange={(value) => update({ tpe_code: value })}
+        />
+        <MultiSelectField
+          id="modelCoreInput"
+          label="Model"
+          options={multiSelectOptions.model_core}
+          value={filters.model_core}
+          onChange={(value) => update({ model_core: value })}
+        />
         <label className={ticketStyles.field}>
           Hơn 3 lượt xử lý
           <select
@@ -708,23 +659,13 @@ export function TicketExplorer({
             <option value="false">Không</option>
           </select>
         </label>
-        <label className={ticketStyles.field}>
-          Lý do chuyển CS
-          <select
-            id="transferReasonInput"
-            value={filters.transfer_reason}
-            onChange={(event) =>
-              update({ transfer_reason: event.target.value })
-            }
-          >
-            <option value="">Tất cả</option>
-            {filterOptions.transfer_reason.map((value) => (
-              <option key={value} value={value}>
-                {transferReasonLabel(value)}
-              </option>
-            ))}
-          </select>
-        </label>
+        <MultiSelectField
+          id="transferReasonInput"
+          label="Lý do chuyển CS"
+          options={multiSelectOptions.transfer_reason}
+          value={filters.transfer_reason}
+          onChange={(value) => update({ transfer_reason: value })}
+        />
         <label className={ticketStyles.field}>
           Bắt đầu cuối tuần
           <select

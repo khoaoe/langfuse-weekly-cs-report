@@ -22,7 +22,7 @@ export const TICKET_COLUMNS = [
   { key: "outcome", label: "Kết quả", core: true },
   {
     key: "csat_satisfaction",
-    label: "Mức độ hài lòng (CS Agent)",
+    label: "CSAT",
     core: true,
   },
   { key: "ai_first", label: "AI First", core: false },

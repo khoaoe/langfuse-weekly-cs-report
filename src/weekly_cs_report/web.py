@@ -84,6 +84,20 @@ _QUERY_NAMES = (
     "page_size",
 )
 _QUERY_NAME_SET = frozenset(_QUERY_NAMES)
+_MULTI_SELECT_QUERY_NAMES = frozenset(
+    {
+        "cohort_weeks",
+        "outcome",
+        "issue_category",
+        "app",
+        "product_code",
+        "skill",
+        "tpe_code",
+        "model_core",
+        "transfer_reason",
+        "csat_satisfaction",
+    }
+)
 _ENTRY_QUERY_NAMES = (
     "week_definition",
     "cohort_weeks",
@@ -1118,6 +1132,16 @@ def _ab_test_payload(snapshot: AbTestSnapshot) -> dict[str, object]:
                 "arm": item.arm,
                 "ticket_count": item.ticket_count,
                 "ai_end_to_end": item.ai_end_to_end,
+                "ai_first_count": item.ai_first_count,
+                "transferred_count": item.transferred_count,
+                "direct_cs": item.direct_cs,
+                "reopen_count": item.reopen_count,
+                "reopen_denominator": item.reopen_denominator,
+                "turn_total": item.turn_total,
+                "latency_p50": item.latency_p50,
+                "latency_p95": item.latency_p95,
+                "total_tokens": item.total_tokens,
+                "output_tokens": item.output_tokens,
             }
             for item in snapshot.daily
         ],
@@ -1152,7 +1176,9 @@ def _parse_ticket_query(
     if any(name not in _QUERY_NAME_SET for name, _value in items):
         return {}, "unknown"
     for name, value in items:
-        max_length = 1024 if name == "cohort_weeks" else _MAX_QUERY_VALUE_LENGTH
+        # Multi-select dimension filters carry comma-separated values, same
+        # convention as cohort_weeks, so they need the same longer allowance.
+        max_length = 1024 if name in _MULTI_SELECT_QUERY_NAMES else _MAX_QUERY_VALUE_LENGTH
         if len(value) > max_length:
             return {}, name
     for name in _QUERY_NAMES:

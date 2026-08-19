@@ -355,7 +355,6 @@ def ticket_page(
         cohort_weeks=cohort_weeks,
         opened_from=opened_from,
         opened_to=opened_to,
-        outcome=outcome,
         ticket_id=ticket_id,
         page=page,
         page_size=page_size,
@@ -373,33 +372,33 @@ def ticket_page(
         None if opened_to is None
         else datetime.combine(date.fromisoformat(opened_to), time.max, tzinfo=_VIETNAM_TIMEZONE)
     )
-    strings = {
-        "issue_category": issue_category,
-        "app": app,
-        "product_code": product_code,
-        "skill": skill,
-        "intent": intent,
-        "tpe_code": tpe_code,
-        "model_core": model_core,
+    # Every dimension filter except `intent` (free-text with a datalist, not a
+    # closed option list) and the tri-state booleans accepts a comma-separated
+    # multi-select value, same convention as `cohort_weeks`: a bare single
+    # value parses identically to the old exact-match filter.
+    selected_outcomes = _parse_multi_ticket_filter(outcome, frozenset(_OUTCOMES), "outcome")
+    multi_strings = {
+        name: _parse_multi_ticket_filter(value, _ticket_filter_allowlist(snapshot, name), name)
+        for name, value in {
+            "issue_category": issue_category,
+            "app": app,
+            "product_code": product_code,
+            "skill": skill,
+            "tpe_code": tpe_code,
+            "model_core": model_core,
+        }.items()
     }
-    for name, value in strings.items():
-        if value is None:
-            continue
-        if (
-            not isinstance(value, str)
-            or value not in _ticket_filter_allowlist(snapshot, name)
-        ):
-            raise ValueError(f"{name} is invalid")
-    if (
-        transfer_reason is not None
-        and transfer_reason not in _TRANSFER_TRIGGER_REASONS
+    if intent is not None and (
+        not isinstance(intent, str)
+        or intent not in _ticket_filter_allowlist(snapshot, "intent")
     ):
-        raise ValueError("transfer_reason is invalid")
-    if (
-        csat_satisfaction is not None
-        and csat_satisfaction not in _CSAT_TICKET_STATES
-    ):
-        raise ValueError("csat_satisfaction is invalid")
+        raise ValueError("intent is invalid")
+    selected_transfer_reasons = _parse_multi_ticket_filter(
+        transfer_reason, _TRANSFER_TRIGGER_REASONS, "transfer_reason"
+    )
+    selected_csat_states = _parse_multi_ticket_filter(
+        csat_satisfaction, _CSAT_TICKET_STATES, "csat_satisfaction"
+    )
     for name, value in {
         "gt4_turn": gt4_turn,
         "transferred": transferred,
@@ -425,19 +424,19 @@ def ticket_page(
             opened_to_bound is None
             or _parse_utc_iso(row.opened_at, "opened_at") <= opened_to_bound
         )
-        and (outcome is None or row.outcome == outcome)
+        and (selected_outcomes is None or row.outcome in selected_outcomes)
         and (ticket_id is None or row.ticket_id == ticket_id)
-        and (issue_category is None or _ticket_filter_value(row, "issue_category") == issue_category)
-        and (app is None or _ticket_filter_value(row, "app") == app)
-        and (product_code is None or _ticket_filter_value(row, "product_code") == product_code)
-        and (skill is None or _ticket_filter_value(row, "skill") == skill)
+        and (multi_strings["issue_category"] is None or _ticket_filter_value(row, "issue_category") in multi_strings["issue_category"])
+        and (multi_strings["app"] is None or _ticket_filter_value(row, "app") in multi_strings["app"])
+        and (multi_strings["product_code"] is None or _ticket_filter_value(row, "product_code") in multi_strings["product_code"])
+        and (multi_strings["skill"] is None or _ticket_filter_value(row, "skill") in multi_strings["skill"])
         and (intent is None or _ticket_filter_value(row, "intent") == intent)
-        and (tpe_code is None or _ticket_filter_value(row, "tpe_code") == tpe_code)
-        and (model_core is None or _ticket_filter_value(row, "model_core") == model_core)
-        and (transfer_reason is None or row.transfer_reason == transfer_reason)
+        and (multi_strings["tpe_code"] is None or _ticket_filter_value(row, "tpe_code") in multi_strings["tpe_code"])
+        and (multi_strings["model_core"] is None or _ticket_filter_value(row, "model_core") in multi_strings["model_core"])
+        and (selected_transfer_reasons is None or row.transfer_reason in selected_transfer_reasons)
         and (
-            csat_satisfaction is None
-            or row.csat_satisfaction == csat_satisfaction
+            selected_csat_states is None
+            or row.csat_satisfaction in selected_csat_states
         )
         and (gt4_turn is None or row.gt4_turn == gt4_turn)
         and (transferred is None or row.transferred == transferred)
@@ -1738,7 +1737,6 @@ def _parse_cohort_weeks_filter(value: str | None) -> frozenset[str] | None:
 def _validate_ticket_filters(
     *,
     cohort_week: str | None,
-    outcome: str | None,
     ticket_id: str | None,
     page: int,
     page_size: int,
@@ -1752,8 +1750,6 @@ def _validate_ticket_filters(
         raise ValueError("page_size must be between 1 and 100")
     if ticket_id is not None and not _is_safe_ticket_id(ticket_id):
         raise ValueError("ticket_id is invalid")
-    if outcome is not None and outcome not in _OUTCOMES:
-        raise ValueError("outcome is invalid")
     if cohort_week is not None and cohort_weeks is not None:
         raise ValueError("cohort_weeks cannot be combined with cohort_week")
     if cohort_week is not None:
@@ -1778,6 +1774,26 @@ def _validate_ticket_filters(
         and parsed_opened_from > parsed_opened_to
     ):
         raise ValueError("opened_from must not be after opened_to")
+
+
+def _parse_multi_ticket_filter(
+    value: str | None,
+    allowed: frozenset[str],
+    name: str,
+) -> frozenset[str] | None:
+    """Comma-separated multi-select value, same convention as ``cohort_weeks``.
+
+    A bare single value (no comma) parses identically to the old exact-match
+    filter, so this is a superset of the previous single-select behaviour.
+    """
+    if value is None:
+        return None
+    pieces = value.split(",")
+    if not pieces or len(set(pieces)) != len(pieces):
+        raise ValueError(f"{name} is invalid")
+    if any(piece not in allowed for piece in pieces):
+        raise ValueError(f"{name} is invalid")
+    return frozenset(pieces)
 
 
 def _parsed_ticket_date(value: str | None, name: str) -> date | None:
@@ -1842,7 +1858,7 @@ def _validate_entry_coverage_records(
 
 
 def _validate_ticket_values(ticket: TicketRow) -> None:
-    _validate_ticket_filters(cohort_week=ticket.cohort_week, outcome=None, ticket_id=ticket.ticket_id, page=1, page_size=1)
+    _validate_ticket_filters(cohort_week=ticket.cohort_week, ticket_id=ticket.ticket_id, page=1, page_size=1)
     _parse_utc_iso(ticket.opened_at, "opened_at")
     if ticket.cohort_status not in {"complete", "wtd"}:
         raise ValueError("cohort_status is invalid")

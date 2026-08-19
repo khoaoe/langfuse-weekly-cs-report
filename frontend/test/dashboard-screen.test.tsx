@@ -10,6 +10,7 @@ import {
   tpeStatusDiagnosticsEnvelope,
 } from "./fixtures/cohort";
 import { dashboardEnvelopeFixture, loadingEnvelopeFixture } from "./fixtures/dashboard";
+import { multiSelectSummaryText, toggleMultiSelectOption } from "./multi-select";
 import { server } from "./msw/server";
 import { DashboardScreen } from "../src/components/DashboardScreen";
 
@@ -575,8 +576,11 @@ describe("DashboardScreen", () => {
     );
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
 
-    await user.selectOptions(
-      screen.getByRole("combobox", { name: "Category" }),
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "issueCategoryInput",
+      "Category",
       "Thanh toán-IBFT",
     );
 
@@ -664,14 +668,14 @@ describe("DashboardScreen", () => {
     expect(within(csatSection).queryByText("Phản hồi outcome B")).toBeNull();
     const ticketExplorer = document.getElementById("tickets") as HTMLElement;
     expect(ticketExplorer).not.toBeNull();
-    expect(within(ticketExplorer).getByRole("combobox", { name: "Kết quả" })).toHaveValue(
-      "ai_end_to_end",
+    expect(multiSelectSummaryText(ticketExplorer, "Kết quả")).toBe(
+      "AI xử lý trọn",
     );
 
     await user.selectOptions(outcomeFilter, "");
     expect(outcomeFilter).toHaveValue("");
     expect(screen.queryByText("Kết quả: AI xử lý trọn")).toBeNull();
-    expect(within(ticketExplorer).getByRole("combobox", { name: "Kết quả" })).toHaveValue("");
+    expect(multiSelectSummaryText(ticketExplorer, "Kết quả")).toBe("Tất cả");
     expect(within(csatSection).getByText("Phản hồi outcome A")).toBeVisible();
     expect(within(csatSection).getByText("Phản hồi outcome B")).toBeVisible();
 
@@ -684,7 +688,7 @@ describe("DashboardScreen", () => {
     expect(screen.getByRole("region", { name: "Bộ lọc đang áp dụng" })).toHaveTextContent(
       "Skill: interbank-fund-transfer",
     );
-    expect(within(ticketExplorer).getByRole("combobox", { name: "Skill" })).toHaveValue(
+    expect(multiSelectSummaryText(ticketExplorer, "Skill")).toBe(
       "interbank-fund-transfer",
     );
     expect(within(csatSection).getByText("Phản hồi outcome A")).toBeVisible();
@@ -701,7 +705,7 @@ describe("DashboardScreen", () => {
     expect(screen.getByRole("region", { name: "Bộ lọc đang áp dụng" })).toHaveTextContent(
       "Category: Chuyển tiền",
     );
-    expect(within(ticketExplorer).getByRole("combobox", { name: "Category" })).toHaveValue(
+    expect(multiSelectSummaryText(ticketExplorer, "Category")).toBe(
       "Chuyển tiền",
     );
 
@@ -712,7 +716,7 @@ describe("DashboardScreen", () => {
       }),
       "Nhiều skill",
     );
-    expect(within(ticketExplorer).getByRole("combobox", { name: "Skill" })).toHaveValue(
+    expect(multiSelectSummaryText(ticketExplorer, "Skill")).toBe(
       "Nhiều skill",
     );
     expect(within(csatSection).getByText("Phản hồi outcome B")).toBeVisible();
@@ -737,11 +741,11 @@ describe("DashboardScreen", () => {
     );
 
     expect(
-      within(document.getElementById("tickets") as HTMLElement).getByRole(
-        "combobox",
-        { name: "Kết quả" },
+      multiSelectSummaryText(
+        document.getElementById("tickets") as HTMLElement,
+        "Kết quả",
       ),
-    ).toHaveValue("ai_end_to_end");
+    ).toBe("AI xử lý trọn");
   });
 
   it("drills diagnostic values into clearable Ticket Explorer filters", async () => {
@@ -756,10 +760,10 @@ describe("DashboardScreen", () => {
         name: "Lọc Ticket Explorer theo Lý do chuyển CS: Skill đề xuất chuyển CS",
       }),
     );
-    expect(
-      within(explorer).getByRole("combobox", { name: "Lý do chuyển CS" }),
-    ).toHaveValue("skill_suggested_transfer");
-    expect(within(explorer).getByRole("combobox", { name: "Skill" })).toHaveValue(
+    expect(multiSelectSummaryText(explorer, "Lý do chuyển CS")).toBe(
+      "Skill đề xuất chuyển CS",
+    );
+    expect(multiSelectSummaryText(explorer, "Skill")).toBe(
       "interbank-fund-transfer",
     );
     expect(
@@ -776,9 +780,9 @@ describe("DashboardScreen", () => {
         name: "Lọc Ticket Explorer theo Transstatus: -365",
       }),
     );
-    expect(
-      within(explorer).getByRole("combobox", { name: "Transstatus" }),
-    ).toHaveValue("-365");
+    expect(multiSelectSummaryText(explorer, "Transstatus")).toBe(
+      "FAILED_FACE_AUTH (-365 / -1013)",
+    );
 
     await user.click(
       screen.getByRole("button", {

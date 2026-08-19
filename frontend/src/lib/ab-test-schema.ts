@@ -35,6 +35,16 @@ const DailyArmPointSchema = z
     arm: z.string(),
     ticket_count: z.number().int().nonnegative(),
     ai_end_to_end: z.number().int().nonnegative(),
+    ai_first_count: z.number().int().nonnegative(),
+    transferred_count: z.number().int().nonnegative(),
+    direct_cs: z.number().int().nonnegative(),
+    reopen_count: z.number().int().nonnegative(),
+    reopen_denominator: z.number().int().nonnegative(),
+    turn_total: z.number().int().nonnegative(),
+    latency_p50: z.number().nullable(),
+    latency_p95: z.number().nullable(),
+    total_tokens: z.number().int().nonnegative(),
+    output_tokens: z.number().int().nonnegative(),
   })
   .strict();
 
