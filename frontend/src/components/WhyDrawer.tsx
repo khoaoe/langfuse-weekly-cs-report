@@ -133,11 +133,22 @@ function WhyCard({
           value: ev.value,
         }));
 
-  const ticketFactRows = dossier.ticket_facts.map((fact, index) => ({
-    key: `${fact.label}-${index}`,
-    label: fact.label,
-    value: fact.value ?? (fact.present ? "Có" : "Không có"),
-  }));
+  // Ticket-field reading order: title, then App, then whatever else applies
+  // to this skill, ending on Mô tả -- matches how a PO actually reads a
+  // ticket (what/where, then the free-text description last).
+  const ticketFactRank = (label: string): number => {
+    if (label === "title") return 0;
+    if (label === "App") return 1;
+    if (label === "Mô tả") return 3;
+    return 2;
+  };
+  const ticketFactRows = [...dossier.ticket_facts]
+    .sort((a, b) => ticketFactRank(a.label) - ticketFactRank(b.label))
+    .map((fact, index) => ({
+      key: `${fact.label}-${index}`,
+      label: fact.label,
+      value: fact.value ?? (fact.present ? "Có" : "Không có"),
+    }));
 
   return (
     <div className={styles.card}>
