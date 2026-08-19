@@ -705,6 +705,8 @@
 .tableScroll {
   overflow: auto;
   max-height: 62vh;
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface);
