@@ -64,6 +64,8 @@ def _dossier(rule_candidates=(_CANDIDATE_C1, _CANDIDATE_C2)) -> EscalationDossie
         turn_deltas=(),
         drift_changed=False,
         phases=(),
+        blocked_response_draft=None,
+        blocked_input_message=None,
     )
 
 
@@ -212,6 +214,8 @@ def test_prompt_injection_in_customer_text_does_not_change_structural_stages():
         turn_deltas=(),
         drift_changed=False,
         phases=(),
+        blocked_response_draft=None,
+        blocked_input_message=None,
     )
     result = narrator.narrate(client, dossier, [_CANDIDATE_C1, _CANDIDATE_C2])
     # Stage A/B are enum-locked: injection cannot change the structural result.

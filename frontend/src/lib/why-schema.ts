@@ -69,7 +69,9 @@ const TimelinePhaseSchema = z
 const EscalationDossierSchema = z
   .object({
     ticket_id: z.string(),
-    escalation_class: z.enum(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "NONE"]),
+    escalation_class: z.enum([
+      "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "NONE",
+    ]),
     escalated_turn: z.number().int().nullable(),
     guardrail_reason: z.string().nullable(),
     blocking_rule: z.string().nullable(),
@@ -82,6 +84,8 @@ const EscalationDossierSchema = z
     turn_deltas: z.array(TurnDeltaSchema),
     drift_changed: z.boolean(),
     phases: z.array(TimelinePhaseSchema),
+    blocked_response_draft: z.string().nullable(),
+    blocked_input_message: z.string().nullable(),
   })
   .strict();
 
@@ -117,7 +121,9 @@ const NarrationSchema = z
 export const WhyExplanationSchema = z
   .object({
     ticket_id: z.string(),
-    escalation_class: z.enum(["E1", "E2", "E3", "E4", "E5", "E6", "E7", "NONE"]),
+    escalation_class: z.enum([
+      "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "E9", "NONE",
+    ]),
     dossier: EscalationDossierSchema,
     narration: NarrationSchema.nullable(),
     llm_status: z.enum(["ok", "rejected", "unavailable", "disabled", "skipped"]),

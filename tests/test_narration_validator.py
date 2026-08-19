@@ -50,6 +50,8 @@ def _dossier(rule_candidates=(_CANDIDATE,), tool_evidence=None) -> EscalationDos
         turn_deltas=(),
         drift_changed=False,
         phases=(),
+        blocked_response_draft=None,
+        blocked_input_message=None,
     )
 
 

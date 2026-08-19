@@ -54,6 +54,12 @@ class TraceTurn:
     steps: list[TraceStep]
     user_input: str
     response: str
+    # The bot's last drafted answer (llm_call:iter_N.output.text), unmasked --
+    # compact_trace_steps hides these spans entirely from `steps` (by design,
+    # for the general-purpose timeline), so this is the only place it survives.
+    # Consumers that need it for a customer-facing surface (escalation_dossier)
+    # must mask it themselves; this module stays PII-agnostic on purpose.
+    last_llm_call_text: str | None
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,7 @@ def fetch_trace_turns(
                 steps=steps,
                 user_input=_nested_string_field(trace, "input", "user_input"),
                 response=_nested_string_field(trace, "output", "response"),
+                last_llm_call_text=_last_llm_call_text(observations),
             )
         )
     return turns
@@ -129,6 +136,24 @@ def compact_trace_steps(
             continue
         steps.append(_step_for(name, observation, taxonomy))
     return steps
+
+
+def _last_llm_call_text(observations: Sequence[Mapping[str, object]]) -> str | None:
+    """Latest llm_call:iter_N generation's output.text, or None if there is
+    none -- there is exactly one final draft per turn, so no correlation to
+    a specific later guardrail block is needed."""
+
+    generations = [
+        o
+        for o in observations
+        if isinstance(o.get("name"), str) and o["name"].startswith("llm_call:")
+    ]
+    if not generations:
+        return None
+    latest = max(generations, key=lambda o: str(o.get("startTime") or ""))
+    output = latest.get("output")
+    text = output.get("text") if isinstance(output, Mapping) else None
+    return text if isinstance(text, str) and text.strip() else None
 
 
 def compute_verdict(steps: Sequence[TraceStep]) -> tuple[str, str]:
