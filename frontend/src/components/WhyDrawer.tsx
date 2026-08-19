@@ -73,12 +73,14 @@ function conclusionFor(dossier: EscalationDossier): string {
       return ruleTemplate;
     }
   }
-  const caseTitle = dossier.rule_candidates[0]?.case_title;
   const template = BRANCH_TEMPLATE[dossier.escalation_class];
   if (!template) {
     return "Chưa xác định được lý do cụ thể từ dữ liệu trợ lý.";
   }
-  return template.replace("{case_title}", caseTitle ?? "đã áp dụng");
+  // {case_title} used to fall back to dossier.rule_candidates[0] -- the same
+  // "guess the first candidate in file order" pattern removed from CĂN CỨ.
+  // Without a real narration, there is no confirmed case, so say so plainly.
+  return template.replace("{case_title}", "chưa xác định");
 }
 
 function WhyCard({
@@ -90,28 +92,23 @@ function WhyCard({
 }) {
   const ketLuan = narration?.ket_luan ?? conclusionFor(dossier);
   const canCu = narration?.can_cu ?? null;
-  const fallbackCandidate = dossier.rule_candidates[0] ?? null;
-  // narration.can_cu === null with narration present means stage A returned
-  // "khong_xac_dinh" -- a valid outcome, distinct from "no narration at all".
-  const stageAWasUndetermined = narration !== null && canCu === null;
 
+  // Only a real, LLM-confirmed case (narration.can_cu) is ever shown here.
+  // There used to be a fallback to dossier.rule_candidates[0] when there was
+  // no narration -- that is just "whichever case happens to be listed first
+  // in the skill markdown file", with zero connection to this ticket's own
+  // facts. Confirmed wrong on a real ticket (7090152: showed "đã hoàn tiền
+  // thành công" for a refund that was still processing). Must never guess.
   const quoteBody =
     canCu !== null
       ? (canCu.trich_dan ??
         dossier.rule_candidates.find((c) => c.anchor === canCu.nguon)?.body ??
         canCu.case_title)
-      : (fallbackCandidate?.body ?? null);
+      : null;
   const caseMeta =
     canCu !== null
       ? { caseId: canCu.case_id, caseTitle: canCu.case_title, skill: canCu.skill, fileLabel: canCu.file_label }
-      : fallbackCandidate !== null
-        ? {
-            caseId: fallbackCandidate.case_id,
-            caseTitle: fallbackCandidate.case_title,
-            skill: fallbackCandidate.skill,
-            fileLabel: fallbackCandidate.file_label,
-          }
-        : null;
+      : null;
 
   const evidenceRows =
     narration && narration.bang_chung.length > 0
@@ -155,9 +152,7 @@ function WhyCard({
 
       <div className={styles.cardSection}>
         <p className={styles.cardLabel}>CĂN CỨ</p>
-        {stageAWasUndetermined ? (
-          <p className={styles.caseMeta}>Không xác định được kịch bản cụ thể</p>
-        ) : caseMeta !== null ? (
+        {caseMeta !== null ? (
           <>
             <p className={styles.caseMeta}>
               {caseMeta.caseId ? `Kịch bản ${caseMeta.caseId} — ` : ""}
@@ -170,7 +165,7 @@ function WhyCard({
             </blockquote>
           </>
         ) : (
-          <p className={styles.caseMeta}>Không áp dụng kịch bản nghiệp vụ nào</p>
+          <p className={styles.caseMeta}>Chưa xác định được kịch bản cụ thể</p>
         )}
       </div>
 
