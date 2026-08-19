@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping
 
-from .categories import Taxonomy, load_taxonomy
-from .tpe_status import resolve_tpe_status
 
 _LONG_NUMERIC_RUN = re.compile(r"[0-9]{9,}")
 _TOOL_PREFIX = "tool:"
@@ -49,7 +47,6 @@ class ExplainConfig:
     field_policy_presence: frozenset[str]
     forbidden_words: tuple[str, ...]
     tool_labels: Mapping[str, ToolLabelConfig]
-    taxonomy: Taxonomy
 
 
 def load_explain_config(path: Path) -> ExplainConfig:
@@ -78,7 +75,6 @@ def load_explain_config(path: Path) -> ExplainConfig:
         field_policy_presence=frozenset(data["field_policy"]["presence"]),
         forbidden_words=tuple(data["forbidden_words"]),
         tool_labels=tool_labels,
-        taxonomy=load_taxonomy(path.parent / "taxonomy.v2.json"),
     )
 
 
@@ -160,13 +156,14 @@ def humanize_tool(
         return label_config.nhan, "Không tra được dữ liệu", True
 
     if label_config.mau == "tpe":
-        transstatus = result.get("transstatus") if isinstance(result, Mapping) else None
-        step_result = result.get("step_result") if isinstance(result, Mapping) else None
-        status = (
-            resolve_tpe_status(transstatus, step_result, config.taxonomy)
-            if isinstance(transstatus, str)
-            else None
-        )
+        # get_transaction_processing_engine_data's own payload already
+        # carries a governed-looking status string ("REFUNDING",
+        # "SUCCESSFUL", ...) -- confirmed on ticket 7090152's raw trace.
+        # Read it directly instead of re-deriving it via transstatus/
+        # step_result through the taxonomy, which was fragile (wrong types,
+        # wrong field name) and always resolved to "Không xác định".
+        status = result.get("status") if isinstance(result, Mapping) else None
+        status = status.strip() if isinstance(status, str) else None
         return label_config.nhan, status or "Không xác định", False
 
     if label_config.mau == "{len} kịch bản":

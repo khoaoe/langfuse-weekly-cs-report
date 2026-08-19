@@ -97,12 +97,15 @@ def test_humanize_tool_known_tools(config):
     )
     assert (nhan, value, failed) == ("Đọc kịch bản", "sub-skill-C.md", False)
 
+    # Real payload shape (ticket 7090152): the tool's own "status" field is
+    # read directly, no taxonomy re-derivation.
     nhan, value, failed = ec.humanize_tool(
         config,
         "tool:get_transaction_processing_engine_data",
-        {"transstatus": "-383", "step_result": None},
+        {"transstatus": -374, "stepresult": "-9999", "status": "REFUNDING"},
     )
     assert nhan == "Trạng thái giao dịch"
+    assert value == "REFUNDING"
     assert failed is False
 
 

@@ -26,7 +26,7 @@
     "list_skill_references": { "nhan": "Xem danh mục kịch bản", "duong_dan": ["files"],  "mau": "{len} kịch bản" },
     "calculate_time_difference": { "nhan": "Thời gian giao dịch", "duong_dan": ["hours"], "mau": "{0} giờ" },
     "get_transaction_processing_engine_data": {
-      "nhan": "Trạng thái giao dịch", "duong_dan": ["transstatus", "step_result"], "mau": "tpe" },
+      "nhan": "Trạng thái giao dịch", "duong_dan": ["status"], "mau": "tpe" },
     "get_bank_name": { "nhan": "Ngân hàng", "duong_dan": ["short_name"], "mau": "{0}" }
   }
 }
