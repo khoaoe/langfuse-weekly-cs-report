@@ -103,7 +103,7 @@ class ExplainLLMClient:
         settings: ExplainSettings,
         *,
         transport: httpx.BaseTransport | None = None,
-        timeout_s: float = 20.0,
+        timeout_s: float = 6.0,
         max_attempts: int = 2,
         backoff_base_s: float = 0.5,
         sleep: Callable[[float], None] = time.sleep,
