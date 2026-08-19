@@ -22,24 +22,34 @@ _dns_override_applied: str | None = None
 
 
 def _apply_dns_override() -> None:
-    """Resolve one hostname to a fixed IP when the platform has no route to it.
+    """Resolve one or more hostnames to a fixed IP when the platform has no
+    route to them (e.g. escalation_narrator's vllm.zalopay.vn, alongside
+    Langfuse itself).
 
     Some deploy platforms (e.g. a shared PaaS) reach the target host fine over
     TCP but have no DNS path to an internal-only name. This substitutes the
     DNS answer only, so TLS SNI/cert validation still runs against the real
-    hostname. Real production leaves LANGFUSE_DNS_OVERRIDE unset.
+    hostname. Real production leaves LANGFUSE_DNS_OVERRIDE unset. Format is
+    "host:ip" or a comma-separated list of "host:ip" pairs.
     """
     global _dns_override_applied
     raw = os.environ.get(_DNS_OVERRIDE_ENV, "")
     if not raw or raw == _dns_override_applied:
         return
-    host, sep, ip = raw.partition(":")
-    if not sep or not host or not ip:
-        raise ValueError(f"{_DNS_OVERRIDE_ENV} must be host:ip")
+
+    overrides: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        host, sep, ip = entry.partition(":")
+        if not sep or not host or not ip:
+            raise ValueError(f"{_DNS_OVERRIDE_ENV} must be host:ip[,host:ip...]")
+        overrides[host] = ip
 
     def _patched(getaddr_host: str, *args: Any, **kwargs: Any) -> Any:
         return _real_getaddrinfo(
-            ip if getaddr_host == host else getaddr_host, *args, **kwargs
+            overrides.get(getaddr_host, getaddr_host), *args, **kwargs
         )
 
     socket.getaddrinfo = _patched
