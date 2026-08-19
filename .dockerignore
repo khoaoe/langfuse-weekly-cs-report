@@ -13,6 +13,8 @@
 !config/**
 config/freshdesk_agents.v1.json
 config/freshdesk_reconciliation_agents.v1.json
+!skills-snapshot/
+!skills-snapshot/**
 !package.json
 !package-lock.json
 !tsconfig.json
