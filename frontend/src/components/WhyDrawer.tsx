@@ -7,6 +7,7 @@ import {
   type EscalationDossier,
   type Narration,
 } from "../lib/why-schema";
+import { MarkdownLite } from "./MarkdownLite";
 import { WhyTimeline } from "./WhyTimeline";
 import styles from "./why-drawer.module.css";
 
@@ -144,7 +145,9 @@ function WhyCard({
               {" · "}
               {caseMeta.skill}/{caseMeta.fileLabel}
             </p>
-            <blockquote className={styles.quote}>{quoteBody}</blockquote>
+            <blockquote className={styles.quote}>
+              <MarkdownLite text={quoteBody ?? ""} />
+            </blockquote>
           </>
         ) : (
           <p className={styles.caseMeta}>Không áp dụng kịch bản nghiệp vụ nào</p>
@@ -153,13 +156,17 @@ function WhyCard({
 
       {dossier.blocked_response_draft ? (
         <div className={styles.cardSection}>
-          <p className={styles.cardLabel}>NỘI DUNG TRỢ LÝ ĐỊNH TRẢ LỜI</p>
-          <blockquote className={styles.quote}>{dossier.blocked_response_draft}</blockquote>
+          <p className={styles.cardLabel}>NỘI DUNG AI ĐỊNH TRẢ LỜI</p>
+          <blockquote className={styles.quote}>
+            <MarkdownLite text={dossier.blocked_response_draft} />
+          </blockquote>
         </div>
       ) : dossier.blocked_input_message ? (
         <div className={styles.cardSection}>
           <p className={styles.cardLabel}>NỘI DUNG KHÁCH GỬI</p>
-          <blockquote className={styles.quote}>{dossier.blocked_input_message}</blockquote>
+          <blockquote className={styles.quote}>
+            <MarkdownLite text={dossier.blocked_input_message} />
+          </blockquote>
         </div>
       ) : null}
 
