@@ -87,6 +87,69 @@ it("shows every case in the loaded sub-skill file instead of guessing one, when 
   expect(screen.getByText(/Chuyển bộ phận CSKH/)).toBeInTheDocument();
 });
 
+it("renders the dossier immediately on llm_status='pending', then upgrades to the confirmed case once /why-narration resolves", async () => {
+  server.use(
+    http.get("/api/trace-explain/:ticketId/why", () =>
+      HttpResponse.json({
+        ticket_id: "9009003",
+        escalation_class: "E1",
+        dossier: {
+          ticket_id: "9009003",
+          escalation_class: "E1",
+          escalated_turn: 0,
+          guardrail_reason: "Phản hồi thông báo chuyển yêu cầu lên bộ phận Chăm sóc Khách hàng.",
+          blocking_rule: "cs_escalation",
+          skills_loaded: ["withdraw"],
+          sub_skills_read: ["sub-skill-C.md"],
+          tool_evidence: [],
+          ticket_facts: [],
+          rule_candidates: RULE_CANDIDATES,
+          coverage: { app_id: "452", expected_skill: "withdraw", loaded_skills: ["withdraw"], mismatch: false },
+          turn_deltas: [],
+          drift_changed: false,
+          phases: [],
+          blocked_response_draft: null,
+          blocked_input_message: null,
+        },
+        narration: null,
+        llm_status: "pending",
+        drift: { changed: false },
+      }),
+    ),
+    http.get("/api/trace-explain/:ticketId/why-narration", () =>
+      HttpResponse.json({
+        narration: {
+          ket_luan: "Giao dịch đã treo quá 3 ngày nên chuyển bộ phận chăm sóc khách hàng.",
+          can_cu: {
+            nguon: RULE_CANDIDATES[1].anchor,
+            case_id: "D1",
+            case_title: "Đang xử lý hoàn tiền",
+            file_label: "sub-skill-C",
+            skill: "withdraw",
+            trich_dan: "Nếu đã quá 3 ngày: Chuyển bộ phận CSKH.",
+            trich_dan_dong: 0,
+          },
+          bang_chung: [],
+          do_tin_cay: "cao",
+        },
+        llm_status: "ok",
+      }),
+    ),
+  );
+
+  renderDrawer("9009003");
+
+  // The dossier-based fallback (both candidates listed, undetermined) is
+  // what a fast render would show first, before /why-narration settles.
+  // What matters for the regression is the END state: once narration
+  // resolves, the confirmed case (D1) replaces the fallback listing, and
+  // the "not ready" banner never appears since the LLM did answer.
+  expect(await screen.findByText(/Kịch bản D1/)).toBeInTheDocument();
+  expect(
+    screen.queryByText("Phần diễn giải tự động chưa sẵn sàng. Nội dung dưới đây lấy trực tiếp từ hệ thống."),
+  ).not.toBeInTheDocument();
+});
+
 it("shows the plain 'chưa xác định' message with no file to fall back to", async () => {
   server.use(
     http.get("/api/trace-explain/:ticketId/why", () =>

@@ -92,7 +92,11 @@ def test_why_returns_503_when_no_langfuse_client_is_wired(tmp_path):
     assert response.json() == {"detail": {"code": "langfuse_unavailable"}}
 
 
-def test_why_returns_dossier_disabled_llm_status(tmp_path):
+def test_why_returns_dossier_pending_llm_status(tmp_path):
+    # /why no longer touches the LLM at all -- E1 has real rule_candidates,
+    # so it just says "pending" (worth calling /why-narration for), never a
+    # final status. That keeps this endpoint fast regardless of whether the
+    # LLM is reachable.
     fixture = _load_fixture("escalation_e1_skill_guardrail_cs_escalation")
     app = _app_with_client(tmp_path, _client_for_fixture(fixture))
 
@@ -104,7 +108,7 @@ def test_why_returns_dossier_disabled_llm_status(tmp_path):
     assert body["ticket_id"] == fixture["ticket_id"]
     assert body["escalation_class"] == "E1"
     assert body["narration"] is None
-    assert body["llm_status"] == "disabled"
+    assert body["llm_status"] == "pending"
     # The fixture's synthetic load_skill_reference content is intentionally
     # shorter than the real skills-snapshot file, so drift is expected here.
     assert body["drift"] == {"changed": True}
@@ -115,6 +119,53 @@ def test_why_returns_dossier_disabled_llm_status(tmp_path):
     assert "traceId" not in serialized
     assert "sessionId" not in serialized
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_why_returns_skipped_llm_status_when_branch_has_no_candidates(tmp_path):
+    # E3 never carries a case to narrate -- /why can say so immediately,
+    # final, no need for the frontend to ever call /why-narration.
+    fixture = _load_fixture("escalation_e3_input_guardrail_blocked")
+    app = _app_with_client(tmp_path, _client_for_fixture(fixture))
+
+    with TestClient(app) as client:
+        response = client.get(f"/api/trace-explain/{fixture['ticket_id']}/why")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["escalation_class"] == "E3"
+    assert body["narration"] is None
+    assert body["llm_status"] == "skipped"
+
+
+def test_why_narration_returns_disabled_when_explain_is_not_configured(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXPLAIN_API_KEY", raising=False)
+    monkeypatch.delenv("EXPLAIN_BASE_URL", raising=False)
+    monkeypatch.delenv("EXPLAIN_MODEL", raising=False)
+    fixture = _load_fixture("escalation_e1_skill_guardrail_cs_escalation")
+    app = _app_with_client(tmp_path, _client_for_fixture(fixture))
+
+    with TestClient(app) as client:
+        why = client.get(f"/api/trace-explain/{fixture['ticket_id']}/why")
+        assert why.json()["llm_status"] == "pending"
+        narration = client.get(f"/api/trace-explain/{fixture['ticket_id']}/why-narration")
+
+    assert narration.status_code == 200
+    body = narration.json()
+    assert body["narration"] is None
+    assert body["llm_status"] == "disabled"
+
+
+def test_why_narration_returns_404_without_a_prior_why_call(tmp_path):
+    # /why-narration relies on /why having already populated the dossier
+    # cache -- calling it cold for an unknown ticket must not silently
+    # succeed with empty data.
+    app = _app_with_client(tmp_path, _client_for_fixture({"traces": []}))
+
+    with TestClient(app) as client:
+        response = client.get("/api/trace-explain/7000099/why-narration")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": {"code": "trace_not_found"}}
 
 
 def test_why_second_request_is_served_from_cache(tmp_path):

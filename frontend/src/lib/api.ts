@@ -181,6 +181,32 @@ export async function fetchWhyExplanation(
   }
 }
 
+/** Separate from fetchWhyExplanation so its own (potentially slow, LLM-
+ * dependent) loading state never blocks the deterministic dossier from
+ * rendering. Only call once /why has returned llm_status === "pending". */
+export async function fetchWhyNarration(
+  ticketId: string,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const response = await fetch(
+    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}/why-narration`,
+    {
+      method: "GET",
+      credentials: "same-origin",
+      headers: JSON_HEADERS,
+      ...(signal ? { signal } : {}),
+    },
+  );
+  if (response.status !== 200) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
+}
+
 /** Throws DashboardRequestError(status) for 400/503 domain errors, same as
  * every other endpoint here -- the caller inspects `.status` to choose a
  * Vietnamese message instead of showing the raw code. */

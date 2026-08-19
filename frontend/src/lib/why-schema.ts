@@ -118,6 +118,12 @@ const NarrationSchema = z
   })
   .strict();
 
+// "pending" is /why-only -- it means "no LLM result attempted yet, call
+// /why-narration for one"; every other value is a final, settled outcome.
+const LLM_STATUS_ENUM = z.enum([
+  "ok", "rejected", "unavailable", "disabled", "skipped", "pending",
+]);
+
 export const WhyExplanationSchema = z
   .object({
     ticket_id: z.string(),
@@ -126,8 +132,15 @@ export const WhyExplanationSchema = z
     ]),
     dossier: EscalationDossierSchema,
     narration: NarrationSchema.nullable(),
-    llm_status: z.enum(["ok", "rejected", "unavailable", "disabled", "skipped"]),
+    llm_status: LLM_STATUS_ENUM,
     drift: z.object({ changed: z.boolean() }).strict(),
+  })
+  .strict();
+
+export const WhyNarrationSchema = z
+  .object({
+    narration: NarrationSchema.nullable(),
+    llm_status: LLM_STATUS_ENUM,
   })
   .strict();
 
@@ -139,6 +152,7 @@ export type TimelinePhase = z.infer<typeof TimelinePhaseSchema>;
 export type EscalationDossier = z.infer<typeof EscalationDossierSchema>;
 export type Narration = z.infer<typeof NarrationSchema>;
 export type WhyExplanation = z.infer<typeof WhyExplanationSchema>;
+export type WhyNarration = z.infer<typeof WhyNarrationSchema>;
 
 export type SafeParseResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -150,6 +164,16 @@ export function parseWhyExplanation(
   const parsed = WhyExplanationSchema.safeParse(value);
   if (!parsed.success) {
     return { ok: false, message: "Không thể đọc dữ liệu giải thích." };
+  }
+  return { ok: true, data: parsed.data };
+}
+
+export function parseWhyNarration(
+  value: unknown,
+): SafeParseResult<WhyNarration> {
+  const parsed = WhyNarrationSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, message: "Không thể đọc dữ liệu phân tích." };
   }
   return { ok: true, data: parsed.data };
 }

@@ -253,10 +253,20 @@ def _why_skill_rules():
 _NO_CANDIDATE_BRANCHES = frozenset({"E3", "E5", "E6", "E8", "E9", "NONE"})
 
 
+def _narration_possible(dossier: EscalationDossier) -> bool:
+    """Same early-exit check _explain() makes -- exposed so /why can decide,
+    without ever calling the LLM, whether /why-narration is worth fetching
+    at all (it never is for E3/E5/E6/E8/E9/NONE or a branch with no case)."""
+
+    return dossier.escalation_class not in _NO_CANDIDATE_BRANCHES and bool(
+        dossier.rule_candidates
+    )
+
+
 def _explain(dossier: EscalationDossier) -> tuple[Narration | None, str]:
     """Tầng 2 + Tầng 3 orchestration for one dossier. Never raises."""
 
-    if dossier.escalation_class in _NO_CANDIDATE_BRANCHES or not dossier.rule_candidates:
+    if not _narration_possible(dossier):
         return None, "skipped"
 
     settings = load_explain_settings()
@@ -383,7 +393,8 @@ def create_app(
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
     app.state.trace_explain_cache = _TraceExplainCache()
-    app.state.why_cache = _TraceExplainCache()
+    app.state.dossier_cache = _TraceExplainCache()
+    app.state.narration_cache = _TraceExplainCache()
     app.state.ab_test_cache = _TraceExplainCache(
         ttl_seconds=_AB_TEST_CACHE_TTL_SECONDS
     )
@@ -496,13 +507,17 @@ def create_app(
 
     @app.get("/api/trace-explain/{ticket_id}/why")
     def trace_explain_why(ticket_id: str, request: Request):
-        # Sync for the same reason as trace_explain: a live Langfuse call.
+        # Deterministic dossier only -- build_dossier() is a Langfuse fetch
+        # plus local computation, no LLM call, so this stays fast even when
+        # the LLM endpoint is unreachable. llm_status "pending" tells the
+        # frontend /why-narration is worth fetching; any other value here is
+        # already final (no case candidates at all -- "skipped").
         if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
             return JSONResponse(
                 {"detail": {"code": "invalid_ticket_id"}}, status_code=400
             )
 
-        cached = app.state.why_cache.get(ticket_id)
+        cached = app.state.dossier_cache.get(ticket_id)
         if cached is _TRACE_EXPLAIN_CACHE_MISS:
             langfuse_client = getattr(request.app.state, "langfuse_client", None)
             if langfuse_client is None:
@@ -522,25 +537,60 @@ def create_app(
                 return JSONResponse(
                     {"detail": {"code": "langfuse_unavailable"}}, status_code=503
                 )
-            result = None if dossier is None else _explain(dossier)
-            app.state.why_cache.set(ticket_id, (dossier, result))
+            app.state.dossier_cache.set(ticket_id, dossier)
         else:
-            dossier, result = cached
+            dossier = cached
 
         if dossier is None:
             return JSONResponse(
                 {"detail": {"code": "trace_not_found"}}, status_code=404
             )
-        narration, llm_status = result
 
+        llm_status = "pending" if _narration_possible(dossier) else "skipped"
         return JSONResponse(
             {
                 "ticket_id": dossier.ticket_id,
                 "escalation_class": dossier.escalation_class,
                 "dossier": asdict(dossier),
-                "narration": asdict(narration) if narration is not None else None,
+                "narration": None,
                 "llm_status": llm_status,
                 "drift": {"changed": dossier.drift_changed},
+            }
+        )
+
+    @app.get("/api/trace-explain/{ticket_id}/why-narration")
+    def trace_explain_why_narration(ticket_id: str):
+        # Separate, potentially slow (LLM) request. The frontend only calls
+        # this once /why has returned llm_status == "pending", so its own
+        # loading state never blocks the deterministic dossier from
+        # rendering immediately.
+        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
+            return JSONResponse(
+                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
+            )
+
+        cached = app.state.narration_cache.get(ticket_id)
+        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+            narration, llm_status = cached
+            return JSONResponse(
+                {
+                    "narration": asdict(narration) if narration is not None else None,
+                    "llm_status": llm_status,
+                }
+            )
+
+        dossier = app.state.dossier_cache.get(ticket_id)
+        if dossier is _TRACE_EXPLAIN_CACHE_MISS or dossier is None:
+            return JSONResponse(
+                {"detail": {"code": "trace_not_found"}}, status_code=404
+            )
+
+        narration, llm_status = _explain(dossier)
+        app.state.narration_cache.set(ticket_id, (narration, llm_status))
+        return JSONResponse(
+            {
+                "narration": asdict(narration) if narration is not None else None,
+                "llm_status": llm_status,
             }
         )
 
