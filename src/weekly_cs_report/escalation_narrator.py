@@ -9,6 +9,7 @@ and the backend cuts the literal text (spec section 8.2).
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -498,6 +499,7 @@ def narrate(
     try:
         chosen_index = _stage_a(client, dossier, shortlist)
     except Exception:
+        logging.getLogger(__name__).exception("[TEMP-DIAG] stage_a failed")
         return None
 
     bang_chung = _bang_chung(dossier)
