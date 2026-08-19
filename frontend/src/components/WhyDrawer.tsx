@@ -126,8 +126,28 @@ function WhyCard({
           value: ev.value,
         }));
 
+  const ticketFactRows = dossier.ticket_facts.map((fact, index) => ({
+    key: `${fact.label}-${index}`,
+    label: fact.label,
+    value: fact.value ?? (fact.present ? "Có" : "Không có"),
+  }));
+
   return (
     <div className={styles.card}>
+      {ticketFactRows.length > 0 ? (
+        <div className={styles.cardSection}>
+          <p className={styles.cardLabel}>THÔNG TIN TICKET</p>
+          <ul className={styles.evidenceList}>
+            {ticketFactRows.map((row) => (
+              <li key={row.key} className={styles.evidenceRow}>
+                <span className={styles.evidenceRowLabel}>{row.label}</span>
+                <span className={styles.evidenceRowValue}>{row.value}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       <div className={styles.cardSection}>
         <p className={styles.cardLabel}>VÌ SAO</p>
         <p className={styles.cardConclusion}>{ketLuan}</p>
