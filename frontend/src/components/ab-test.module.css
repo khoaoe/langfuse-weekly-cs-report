@@ -72,11 +72,17 @@
   font-weight: 500;
 }
 
+/* Same framing as .chart in trend.module.css, so this chart reads as one
+   family with the other two on the page instead of floating unboxed. */
 .chartCard {
   display: grid;
   gap: var(--space-2);
   margin: 0;
   align-content: start;
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
 }
 
 /* Unlike the trend charts this one must shrink into its column, so it scales

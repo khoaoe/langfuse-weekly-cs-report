@@ -237,6 +237,7 @@ export const SegmentsSchema = z
     tpe: SegmentBucketsSchema,
     guardrail_rule: SegmentBucketsSchema,
     entry_point: SegmentBucketsSchema,
+    model_core: SegmentBucketsSchema,
   })
   .strict();
 export type Segments = z.infer<typeof SegmentsSchema>;
@@ -1341,6 +1342,7 @@ export const TicketRowSchema = z
       .enum(["positive", "neutral", "negative", "unrated"])
       .nullable(),
     data_quality: QualityLabelSchema,
+    model_core: nullableSafeLabel,
   })
   .strict()
   .superRefine((row, context) => {

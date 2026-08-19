@@ -383,6 +383,7 @@ export function TicketExplorer({
         ...view.transfer_reasons.tpe.map((item) => item.transstatus),
       ]),
     ),
+    model_core: Object.keys(view.segments.model_core),
     transfer_reason: Array.from(
       new Set(view.transfer_reasons.triggers.map((item) => item.reason)),
     ).sort((left, right) =>
@@ -666,6 +667,21 @@ export function TicketExplorer({
                 </option>
               );
             })}
+          </select>
+        </label>
+        <label className={ticketStyles.field}>
+          Model
+          <select
+            id="modelCoreInput"
+            value={filters.model_core}
+            onChange={(event) => update({ model_core: event.target.value })}
+          >
+            <option value="">Tất cả</option>
+            {filterOptions.model_core.map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
           </select>
         </label>
         <label className={ticketStyles.field}>

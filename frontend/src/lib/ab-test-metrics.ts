@@ -61,7 +61,6 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
       direction: "neutral",
       values: map((arm) => arm.share),
       denominators: map((arm) => arm.ticket_count),
-      hint: "Lệch nhiều so với tỉ lệ rollout dự kiến là dấu hiệu chia mẫu sai.",
     },
     {
       key: "ai_end_to_end",
@@ -71,7 +70,6 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
       direction: "higher",
       values: map((arm) => rate(arm.ai_end_to_end, arm.ticket_count)),
       denominators: map((arm) => arm.ticket_count),
-      hint: "Ticket AI trả lời và không phải chuyển CS. Metric chính.",
     },
     {
       key: "ai_first",
@@ -108,7 +106,7 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
       direction: "lower",
       values: map((arm) => rate(arm.reopen_count, arm.reopen_denominator)),
       denominators: map((arm) => arm.reopen_denominator),
-      hint: "Mẫu số là ticket AI First. Cửa sổ ngắn bị cắt cụt: ticket cuối kỳ chưa đủ thời gian để reopen.",
+      hint: "Mẫu số là ticket AI First.",
     },
     {
       key: "csat_positive",
@@ -120,7 +118,7 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
         rate(arm.csat_positive_count, arm.csat_response_count),
       ),
       denominators: map((arm) => arm.csat_response_count),
-      hint: "Mẫu số là số phản hồi khảo sát, không phải số ticket. Cache CSAT chạy job riêng nên thường trễ hơn cửa sổ đang xem.",
+      hint: "Mẫu số là số phản hồi khảo sát, không phải số ticket.",
     },
     {
       key: "latency_p50",
@@ -176,7 +174,6 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
       direction: "lower",
       values: map((arm) => perTicket(arm.output_tokens, arm.ticket_count)),
       denominators: map((arm) => arm.ticket_count),
-      hint: "Token output thường đắt hơn input nhiều lần.",
     },
     {
       key: "turns_per_ticket",

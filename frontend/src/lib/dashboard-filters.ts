@@ -20,6 +20,7 @@ export interface TicketFilters {
   readonly skill: string;
   readonly intent: string;
   readonly tpe_code: string;
+  readonly model_core: string;
   readonly transfer_reason: string;
   readonly gt4_turn: string;
   readonly transferred: string;
@@ -42,6 +43,7 @@ export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   skill: "",
   intent: "",
   tpe_code: "",
+  model_core: "",
   transfer_reason: "",
   gt4_turn: "",
   transferred: "",
@@ -72,6 +74,7 @@ const FILTER_LABELS: Readonly<
   skill: "Skill",
   intent: "Intent",
   tpe_code: "Transstatus",
+  model_core: "Model",
   transfer_reason: "Lý do chuyển CS",
   gt4_turn: ">3 lượt xử lý",
   transferred: "Đã chuyển CS",
@@ -91,6 +94,7 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
   "skill",
   "intent",
   "tpe_code",
+  "model_core",
   "transfer_reason",
   "gt4_turn",
   "transferred",

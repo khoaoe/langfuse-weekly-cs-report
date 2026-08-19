@@ -71,6 +71,7 @@ _QUERY_NAMES = (
     "skill",
     "intent",
     "tpe_code",
+    "model_core",
     "transfer_reason",
     "csat_satisfaction",
     "gt4_turn",

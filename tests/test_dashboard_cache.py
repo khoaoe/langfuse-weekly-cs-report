@@ -85,7 +85,7 @@ def _snapshot(generated_at: datetime) -> DashboardSnapshot:
                     "ai_first": {"count": 0, "rate": 0.0},
                     "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
                     "weekly": [],
-                    "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point")},
+                    "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core")},
                     "transfer_reasons": _empty_transfer_reasons(),
                     "by_week": {},
                     "same_period": None,
@@ -823,7 +823,7 @@ def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path
     success = next(event for event in events if event["event"] == "refresh_success")
     assert success.items() >= {
         "event": "refresh_success",
-        "schema_version": 21,
+        "schema_version": 22,
         "ticket_count": 0,
         "trace_count": 0,
         "observation_count": 0,

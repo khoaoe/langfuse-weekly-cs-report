@@ -293,6 +293,7 @@ function csatTicketRows(): readonly TicketRow[] {
     escalation_guard_blocked: false,
     csat_satisfaction: ticket.satisfaction,
     data_quality: "valid",
+    model_core: null,
   }));
 }
 
