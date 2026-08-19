@@ -413,6 +413,32 @@ def test_dns_override_resolves_only_the_configured_host(monkeypatch):
     assert calls == ["10.30.94.60", "vngzalopay.freshdesk.com"]
 
 
+def test_dns_override_supports_a_comma_separated_list_of_hosts(monkeypatch):
+    """escalation_narrator's vllm.zalopay.vn shares this same override --
+    the value can carry more than one host:ip pair."""
+    from weekly_cs_report import langfuse_client as module
+
+    calls: list[str] = []
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        calls.append(host)
+        return []
+
+    monkeypatch.setattr(module, "_real_getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(module, "_dns_override_applied", None)
+    monkeypatch.setenv(
+        "LANGFUSE_DNS_OVERRIDE",
+        "langfuse.zalopay.vn:10.30.94.60,vllm.zalopay.vn:10.30.83.17",
+    )
+
+    module._apply_dns_override()
+    socket.getaddrinfo("langfuse.zalopay.vn", 443)
+    socket.getaddrinfo("vllm.zalopay.vn", 443)
+    socket.getaddrinfo("vngzalopay.freshdesk.com", 443)
+
+    assert calls == ["10.30.94.60", "10.30.83.17", "vngzalopay.freshdesk.com"]
+
+
 def test_dns_override_is_a_noop_when_unset(monkeypatch):
     from weekly_cs_report import langfuse_client as module
 
