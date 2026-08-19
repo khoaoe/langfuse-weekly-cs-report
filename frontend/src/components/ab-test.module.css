@@ -88,12 +88,6 @@
   height: auto;
 }
 
-.chartNote {
-  max-width: 60ch;
-  color: var(--muted);
-  font-size: 13px;
-}
-
 .warningNote {
   margin: 0 0 var(--space-2);
   color: var(--warning-text);
@@ -139,6 +133,32 @@
 
 .deltaNeutral {
   color: var(--muted);
+}
+
+/* Mirrors .tabs/.tab in below-fold.module.css so the dimension switcher here
+   matches "So sánh theo thuộc tính ticket" exactly. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.tab {
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.tab[aria-selected="true"] {
+  border-color: var(--interactive);
+  background: var(--interactive);
+  color: var(--interactive-ink);
 }
 
 .disclosure {

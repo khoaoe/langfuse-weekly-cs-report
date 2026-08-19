@@ -17,18 +17,35 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Iterable, Mapping, Sequence
 
 from .categories import Taxonomy, extract_dimensions
 from .classification import classify_session, normalize_trace
 from .cohort import VIETNAM_TIMEZONE
+from .enrichment import TraceEnrichment, apply_trace_enrichment, build_trace_enrichment
 from .langfuse_client import LangfuseClient
 from .models import CohortWindow, QualityIssue, TraceRecord
+
+# Bulk range queries, same shape as the weekly pipeline's own enrichment step
+# (`report.py`): one paginated fetch per observation name over the whole
+# window, never one call per ticket.
+_ENRICHMENT_OBSERVATION_NAMES = ("route", "execute")
+
+# Mirrors `SEGMENT_DIMENSIONS` in BelowFold.tsx so "So sánh theo thuộc tính
+# ticket" and this section always offer the same breakdown vocabulary.
+DIMENSIONS: tuple[str, ...] = (
+    "issue_category",
+    "app",
+    "product_code",
+    "skill",
+    "intent",
+)
 
 # Below this, a per-arm rate is noise: one flipped ticket moves it by whole
 # points. The UI degrades to raw counts rather than asserting a rate.
 _MIN_RELIABLE_SAMPLE = 30
-_TOP_CATEGORIES = 8
+_TOP_VALUES_PER_DIMENSION = 8
 _TRACE_FIELDS = "core,io,metrics"
 
 
@@ -69,8 +86,9 @@ class DailyArmPoint:
 
 
 @dataclass(frozen=True)
-class CategoryArmCount:
-    issue_category: str
+class DimensionArmCount:
+    dimension: str
+    value: str
     arm: str
     ticket_count: int
     ai_end_to_end: int
@@ -84,7 +102,7 @@ class AbTestSnapshot:
     unmatched_tickets: int
     arms: tuple[ArmMetrics, ...]
     daily: tuple[DailyArmPoint, ...]
-    categories: tuple[CategoryArmCount, ...]
+    dimensions: Mapping[str, tuple[DimensionArmCount, ...]]
     csat_available: bool
 
 
@@ -99,7 +117,7 @@ class _TicketFacts:
     reopen_lifetime: int | None
     turn_count: int
     latency: float | None
-    issue_category: str
+    dimension_values: Mapping[str, str]
 
 
 def _extract_arm(input_data: object) -> str | None:
@@ -178,6 +196,7 @@ def _ticket_facts(
     raw_traces: Iterable[Mapping[str, object]],
     window: CohortWindow,
     taxonomy: Taxonomy,
+    trace_enrichment: Mapping[str, TraceEnrichment],
 ) -> tuple[list[_TicketFacts], int]:
     """Group raw traces into per-ticket facts, one row per ticket."""
     by_ticket: dict[str, list[TraceRecord]] = defaultdict(list)
@@ -211,6 +230,9 @@ def _ticket_facts(
             continue
         ordered = sorted(traces, key=lambda item: (item.turn, item.timestamp, item.id))
         dimensions = extract_dimensions(ordered[0], taxonomy)
+        dimensions, _guardrail_rules = apply_trace_enrichment(
+            dimensions, ordered, trace_enrichment
+        )
         # The ticket's latency is the sum of its turns: that is what the
         # customer waited for across the whole conversation.
         turn_latencies = [
@@ -218,6 +240,16 @@ def _ticket_facts(
             for item in ordered
             if item.id in latency_by_trace
         ]
+        dimension_values = {
+            "issue_category": dimensions.issue_category or "unknown",
+            "app": dimensions.app or "unknown",
+            "product_code": dimensions.product_code or "unknown",
+            # None means either no skill ran or more than one distinct skill
+            # ran in the ticket -- both collapse to "unknown" here, same
+            # simplification the AB comparison already makes elsewhere.
+            "skill": dimensions.skill or "unknown",
+            "intent": dimensions.intent or "unknown",
+        }
         facts.append(
             _TicketFacts(
                 ticket_id=ticket_id,
@@ -229,7 +261,7 @@ def _ticket_facts(
                 reopen_lifetime=classified.reopen_lifetime,
                 turn_count=classified.turn_count,
                 latency=sum(turn_latencies) if turn_latencies else None,
-                issue_category=dimensions.issue_category or "unknown",
+                dimension_values=dimension_values,
             )
         )
     return facts, len(unmatched - set(by_ticket))
@@ -288,6 +320,7 @@ def aggregate_ab_snapshot(
     *,
     llm_rows: Sequence[Mapping[str, object]] = (),
     csat_by_ticket: Mapping[str, str] | None = None,
+    trace_enrichment: Mapping[str, TraceEnrichment] = MappingProxyType({}),
 ) -> AbTestSnapshot:
     if window_start.tzinfo is None or window_end.tzinfo is None:
         raise ValueError("window bounds must be timezone-aware")
@@ -295,7 +328,7 @@ def aggregate_ab_snapshot(
         raise ValueError("window_end must be after window_start")
 
     window = _full_window(window_start, window_end)
-    facts, unmatched = _ticket_facts(raw_traces, window, taxonomy)
+    facts, unmatched = _ticket_facts(raw_traces, window, taxonomy, trace_enrichment)
     total = len(facts)
 
     by_arm: dict[str, list[_TicketFacts]] = defaultdict(list)
@@ -371,30 +404,34 @@ def aggregate_ab_snapshot(
         for (date_value, arm), counts in sorted(daily_counts.items())
     )
 
-    category_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
-    category_totals: dict[str, int] = defaultdict(int)
-    for fact in facts:
-        category_counts[(fact.issue_category, fact.arm)][0] += 1
-        category_counts[(fact.issue_category, fact.arm)][1] += int(
-            fact.outcome == "ai_end_to_end"
+    dimension_breakdown: dict[str, tuple[DimensionArmCount, ...]] = {}
+    for dimension in DIMENSIONS:
+        value_counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
+        value_totals: dict[str, int] = defaultdict(int)
+        for fact in facts:
+            value = fact.dimension_values[dimension]
+            value_counts[(value, fact.arm)][0] += 1
+            value_counts[(value, fact.arm)][1] += int(
+                fact.outcome == "ai_end_to_end"
+            )
+            value_totals[value] += 1
+        top_values = {
+            value
+            for value, _count in sorted(
+                value_totals.items(), key=lambda item: (-item[1], item[0])
+            )[:_TOP_VALUES_PER_DIMENSION]
+        }
+        dimension_breakdown[dimension] = tuple(
+            DimensionArmCount(
+                dimension=dimension,
+                value=value,
+                arm=arm,
+                ticket_count=counts[0],
+                ai_end_to_end=counts[1],
+            )
+            for (value, arm), counts in sorted(value_counts.items())
+            if value in top_values
         )
-        category_totals[fact.issue_category] += 1
-    top_categories = {
-        name
-        for name, _count in sorted(
-            category_totals.items(), key=lambda item: (-item[1], item[0])
-        )[:_TOP_CATEGORIES]
-    }
-    categories = tuple(
-        CategoryArmCount(
-            issue_category=name,
-            arm=arm,
-            ticket_count=counts[0],
-            ai_end_to_end=counts[1],
-        )
-        for (name, arm), counts in sorted(category_counts.items())
-        if name in top_categories
-    )
 
     return AbTestSnapshot(
         window_start=window_start,
@@ -403,7 +440,7 @@ def aggregate_ab_snapshot(
         unmatched_tickets=unmatched,
         arms=tuple(arms),
         daily=daily,
-        categories=categories,
+        dimensions=dimension_breakdown,
         csat_available=bool(csat_by_ticket),
     )
 
@@ -433,6 +470,20 @@ def compute_ab_test(
         # Token/latency aggregates are an enrichment, not the answer. A
         # metrics outage must not blank out the outcome comparison.
         llm_rows = []
+    try:
+        observations_by_name = {
+            name: list(
+                client.iter_observations_by_name(
+                    name, window_start, window_end, deadline=deadline
+                )
+            )
+            for name in _ENRICHMENT_OBSERVATION_NAMES
+        }
+        trace_enrichment = build_trace_enrichment(observations_by_name, taxonomy)
+    except Exception:
+        # Skill/Intent breakdown is an enrichment, not the answer. A failed
+        # bulk fetch must fall back to "unknown" buckets, not blank the page.
+        trace_enrichment = {}
     return aggregate_ab_snapshot(
         traces,
         window_start,
@@ -440,4 +491,5 @@ def compute_ab_test(
         taxonomy,
         llm_rows=llm_rows,
         csat_by_ticket=csat_by_ticket,
+        trace_enrichment=trace_enrichment,
     )

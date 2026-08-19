@@ -276,10 +276,6 @@ function DailyRateChart({
           </span>
         ))}
       </div>
-      <p className={abTestStyles.chartNote}>
-        Ngày có dưới 10 ticket ở một model bị bỏ trống thay vì vẽ điểm — tỉ lệ
-        trên mẫu quá nhỏ không đọc được.
-      </p>
     </figure>
   );
 }
@@ -372,64 +368,141 @@ function ComparisonTable({
   );
 }
 
-function CategoryTable({
+/** Same vocabulary as `SEGMENT_DIMENSIONS` in BelowFold.tsx ("So sánh theo
+ * thuộc tính ticket"), so the two sections never disagree on what a
+ * dimension is called. */
+const DIMENSION_TABS = [
+  { key: "issue_category", label: "Category" },
+  { key: "app", label: "App" },
+  { key: "product_code", label: "Product Code" },
+  { key: "skill", label: "Skill" },
+  { key: "intent", label: "Intent" },
+] as const;
+type DimensionKey = (typeof DIMENSION_TABS)[number]["key"];
+
+function DimensionTable({
   data,
   arms,
 }: {
   readonly data: AbTestSnapshot;
   readonly arms: readonly string[];
 }) {
-  const names = [...new Set(data.categories.map((row) => row.issue_category))];
-  const lookup = new Map(
-    data.categories.map((row) => [`${row.issue_category}|${row.arm}`, row]),
-  );
+  const [dimension, setDimension] = useState<DimensionKey>("issue_category");
+  const rows = data.dimensions[dimension] ?? [];
+  const values = [...new Set(rows.map((row) => row.value))];
+  const lookup = new Map(rows.map((row) => [`${row.value}|${row.arm}`, row]));
+
   return (
-    <div className={styles.tableScroll}>
-      <table className={styles.table}>
-        <caption className={styles.tableCaption}>
-          Nếu 2 model gặp phân bố Category khác nhau, chênh lệch tổng có thể chỉ
-          là do mix chứ không phải do model.
-        </caption>
-        <thead>
-          <tr>
-            <th scope="col">Category</th>
-            {arms.map((arm) => (
-              <th scope="col" className={styles.numeric} key={arm}>
-                <code>{shortArmLabel(arm)}</code>
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {names.map((name) => (
-            <tr key={name}>
-              <th scope="row" className={styles.stickyColumn}>
-                {name}
-              </th>
-              {arms.map((arm) => {
-                const row = lookup.get(`${name}|${arm}`);
-                if (row === undefined || row.ticket_count === 0) {
-                  return (
-                    <td className={styles.numeric} key={arm}>
-                      —
-                    </td>
-                  );
-                }
-                return (
-                  <td className={styles.numeric} key={arm}>
-                    {formatCount(row.ticket_count)}
-                    <span className={abTestStyles.sampleNote}>
-                      {row.ticket_count >= 20
-                        ? `AI trọn ${formatRate(row.ai_end_to_end / row.ticket_count)}`
-                        : `AI trọn ${formatCount(row.ai_end_to_end)}`}
-                    </span>
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div>
+      <div
+        className={abTestStyles.tabs}
+        role="tablist"
+        aria-label="Thuộc tính so sánh"
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+            return;
+          }
+          event.preventDefault();
+          const current = DIMENSION_TABS.findIndex(
+            (item) => item.key === dimension,
+          );
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? DIMENSION_TABS.length - 1
+                : (current +
+                    (event.key === "ArrowRight" ? 1 : -1) +
+                    DIMENSION_TABS.length) %
+                  DIMENSION_TABS.length;
+          const item = DIMENSION_TABS[next];
+          if (item !== undefined) {
+            setDimension(item.key);
+            document.getElementById(`ab-test-dim-tab-${item.key}`)?.focus();
+          }
+        }}
+      >
+        {DIMENSION_TABS.map((item) => (
+          <button
+            key={item.key}
+            id={`ab-test-dim-tab-${item.key}`}
+            type="button"
+            role="tab"
+            className={abTestStyles.tab}
+            aria-selected={dimension === item.key}
+            aria-controls="ab-test-dim-panel"
+            tabIndex={dimension === item.key ? 0 : -1}
+            onClick={() => setDimension(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <p className={styles.tableCaption}>
+        Nếu 2 model gặp phân bố khác nhau ở thuộc tính này, chênh lệch tổng có
+        thể chỉ là do mix chứ không phải do model.
+      </p>
+      <div
+        id="ab-test-dim-panel"
+        className={styles.tableScroll}
+        role="tabpanel"
+        aria-label={
+          DIMENSION_TABS.find((item) => item.key === dimension)?.label ??
+          dimension
+        }
+      >
+        {values.length === 0 ? (
+          <p className={styles.emptyCell}>
+            Không có dữ liệu cho thuộc tính này trong khoảng thời gian đang
+            chọn.
+          </p>
+        ) : (
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th scope="col">
+                  {DIMENSION_TABS.find((item) => item.key === dimension)
+                    ?.label ?? dimension}
+                </th>
+                {arms.map((arm) => (
+                  <th scope="col" className={styles.numeric} key={arm}>
+                    <code>{shortArmLabel(arm)}</code>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {values.map((value) => (
+                <tr key={value}>
+                  <th scope="row" className={styles.stickyColumn}>
+                    {value}
+                  </th>
+                  {arms.map((arm) => {
+                    const row = lookup.get(`${value}|${arm}`);
+                    if (row === undefined || row.ticket_count === 0) {
+                      return (
+                        <td className={styles.numeric} key={arm}>
+                          —
+                        </td>
+                      );
+                    }
+                    return (
+                      <td className={styles.numeric} key={arm}>
+                        {formatCount(row.ticket_count)}
+                        <span className={abTestStyles.sampleNote}>
+                          {row.ticket_count >= 20
+                            ? `AI trọn ${formatRate(row.ai_end_to_end / row.ticket_count)}`
+                            : `AI trọn ${formatCount(row.ai_end_to_end)}`}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
     </div>
   );
 }
@@ -595,10 +668,10 @@ export function AbTestSection({
 
             <details className={abTestStyles.disclosure}>
               <summary className={abTestStyles.disclosureSummary}>
-                Phân bố Category theo model
+                So sánh theo thuộc tính ticket
               </summary>
               <div className={abTestStyles.disclosureBody}>
-                <CategoryTable data={data} arms={arms} />
+                <DimensionTable data={data} arms={arms} />
               </div>
             </details>
           </>
