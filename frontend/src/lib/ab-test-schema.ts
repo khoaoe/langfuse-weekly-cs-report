@@ -38,9 +38,9 @@ const DailyArmPointSchema = z
   })
   .strict();
 
-const CategoryArmCountSchema = z
+const DimensionArmCountSchema = z
   .object({
-    issue_category: z.string(),
+    value: z.string(),
     arm: z.string(),
     ticket_count: z.number().int().nonnegative(),
     ai_end_to_end: z.number().int().nonnegative(),
@@ -56,13 +56,13 @@ export const AbTestSnapshotSchema = z
     csat_available: z.boolean(),
     arms: z.array(ArmMetricsSchema),
     daily: z.array(DailyArmPointSchema),
-    categories: z.array(CategoryArmCountSchema),
+    dimensions: z.record(z.string(), z.array(DimensionArmCountSchema)),
   })
   .strict();
 
 export type ArmMetrics = z.infer<typeof ArmMetricsSchema>;
 export type DailyArmPoint = z.infer<typeof DailyArmPointSchema>;
-export type CategoryArmCount = z.infer<typeof CategoryArmCountSchema>;
+export type DimensionArmCount = z.infer<typeof DimensionArmCountSchema>;
 export type AbTestSnapshot = z.infer<typeof AbTestSnapshotSchema>;
 
 export type SafeParseResult<T> =

@@ -1016,15 +1016,18 @@ def _ab_test_payload(snapshot: AbTestSnapshot) -> dict[str, object]:
             }
             for item in snapshot.daily
         ],
-        "categories": [
-            {
-                "issue_category": item.issue_category,
-                "arm": item.arm,
-                "ticket_count": item.ticket_count,
-                "ai_end_to_end": item.ai_end_to_end,
-            }
-            for item in snapshot.categories
-        ],
+        "dimensions": {
+            dimension: [
+                {
+                    "value": item.value,
+                    "arm": item.arm,
+                    "ticket_count": item.ticket_count,
+                    "ai_end_to_end": item.ai_end_to_end,
+                }
+                for item in rows
+            ]
+            for dimension, rows in snapshot.dimensions.items()
+        },
     }
 
 
