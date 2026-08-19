@@ -56,6 +56,21 @@ def test_build_ticket_facts_splits_value_vs_presence(config):
     assert by_label["App"].value == "452"
 
 
+def test_build_ticket_facts_masks_transaction_id_in_title():
+    # Ticket 7090152's real title carried the raw 15-digit transaction id
+    # verbatim ("... Mã giao dịch: 260813002120041 ..."). "title" is
+    # customer/Freshdesk-subject free text just like "Mô tả" and must get
+    # the same masking, not just presence-only fields.
+    config = ec.load_explain_config(CONFIG_PATH)
+    facts = ec.build_ticket_facts(
+        config, {"App": "241"}, "Giao dich loi ( Ma giao dich: 260813002120041 )"
+    )
+    title = next(f for f in facts if f.label == "title")
+    assert title.value is not None
+    assert "260813002120041" not in title.value
+    assert "*" in title.value
+
+
 def test_build_ticket_facts_presence_field_never_leaks_value(config):
     meta = {"App": "999999", "UserID": "u-secret-1"}
     facts = ec.build_ticket_facts(config, meta, "")

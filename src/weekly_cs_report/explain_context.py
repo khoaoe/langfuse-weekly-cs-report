@@ -126,7 +126,10 @@ def build_ticket_facts(
             continue
 
         value = text_value if present else None
-        if name == "Mô tả" and value is not None:
+        # "title" is free text set by the customer/Freshdesk subject line,
+        # same as "Mô tả" -- ticket 7090152 showed it can carry the raw
+        # transaction id verbatim ("... Mã giao dịch: 260813002120041 ...").
+        if name in ("Mô tả", "title") and value is not None:
             value = mask_free_text(value)
         facts.append(TicketFact(label=name, value=value, present=present))
     return facts
