@@ -18,8 +18,6 @@ import {
   EMPTY_TICKET_FILTERS,
   OUTCOME_FILTER_LABELS,
   activeTicketFilterChips,
-  findTpeOptionSource,
-  tpeOptionLabel,
   type TicketFilters,
   updateTicketFilters,
 } from "../lib/dashboard-filters";
@@ -405,10 +403,7 @@ export function TicketExplorer({
     app: filterOptions.app.map((value) => ({ value, label: value })),
     product_code: filterOptions.product_code.map((value) => ({ value, label: value })),
     skill: filterOptions.skill.map((value) => ({ value, label: value })),
-    tpe_code: filterOptions.tpe_code.map((value) => {
-      const source = findTpeOptionSource(value, view.transfer_reasons.tpe);
-      return { value, label: source ? tpeOptionLabel(source) : value };
-    }),
+    tpe_code: filterOptions.tpe_code.map((value) => ({ value, label: value })),
     model_core: filterOptions.model_core.map((value) => ({ value, label: value })),
     transfer_reason: filterOptions.transfer_reason.map((value) => ({
       value,

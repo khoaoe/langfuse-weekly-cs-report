@@ -144,10 +144,26 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  min-height: 32px;
-  font-size: 13px;
+  min-height: 24px;
+  font-size: 12px;
+  line-height: 1.3;
   color: var(--ink);
   cursor: pointer;
+}
+
+/* `.field input` above forces width:100%/min-height:44px on every input
+   nested under a `.field` label -- including these checkboxes, since the
+   whole MultiSelectField sits inside one. Reset back to a normal checkbox. */
+.multiSelectOption input[type="checkbox"] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: 3px;
+  accent-color: var(--interactive);
 }
 
 .dateRangeCalendarHeader {
