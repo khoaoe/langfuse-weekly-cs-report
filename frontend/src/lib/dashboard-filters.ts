@@ -67,7 +67,7 @@ const FILTER_LABELS: Readonly<
   >
 > = {
   ticket_id: "Ticket ID",
-  csat_satisfaction: "Mức độ hài lòng (CS Agent)",
+  csat_satisfaction: "CSAT",
   issue_category: "Category",
   app: "App",
   product_code: "Product Code",
@@ -188,17 +188,22 @@ export function updateTicketFilters(
   return { ...current, ...patch };
 }
 
-function displayFilterValue(
-  key: TicketFilterKey,
-  value: string,
-  weekDefinition: WeekDefinition,
-): string {
-  if (key === "cohort_week") {
-    return formatWeekRange(value, weekDefinition);
-  }
-  if (key === "cohort_weeks") {
-    return `${value.split(",").filter(Boolean).length} tuần đã chọn`;
-  }
+/** Multi-select filters carry a comma-separated value; each piece is labelled
+ * on its own, then joined for the chip. Single-value filters take the fast
+ * path of labelling the whole string once. */
+const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
+  "outcome",
+  "csat_satisfaction",
+  "issue_category",
+  "app",
+  "product_code",
+  "skill",
+  "tpe_code",
+  "model_core",
+  "transfer_reason",
+]);
+
+function displayFilterValuePiece(key: TicketFilterKey, value: string): string {
   if (key === "outcome") {
     return OUTCOME_FILTER_LABELS[value] ?? value;
   }
@@ -210,12 +215,32 @@ function displayFilterValue(
   if (key === "transfer_reason") {
     return transferReasonLabel(value as TransferTriggerReason);
   }
+  return value;
+}
+
+function displayFilterValue(
+  key: TicketFilterKey,
+  value: string,
+  weekDefinition: WeekDefinition,
+): string {
+  if (key === "cohort_week") {
+    return formatWeekRange(value, weekDefinition);
+  }
+  if (key === "cohort_weeks") {
+    return `${value.split(",").filter(Boolean).length} tuần đã chọn`;
+  }
   if (
     key === "gt4_turn" ||
     key === "transferred" ||
     key === "is_weekend_start"
   ) {
     return value === "true" ? "Có" : "Không";
+  }
+  if (MULTI_SELECT_FILTER_KEYS.has(key)) {
+    return value
+      .split(",")
+      .map((piece) => displayFilterValuePiece(key, piece))
+      .join(", ");
   }
   return value;
 }

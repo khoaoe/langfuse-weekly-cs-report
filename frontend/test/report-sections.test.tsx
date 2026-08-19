@@ -14,6 +14,7 @@ import {
   type WeeklyReportRow,
 } from "../src/lib/dashboard-schema";
 import { EMPTY_TICKET_FILTERS, type TicketFilters } from "../src/lib/dashboard-filters";
+import { multiSelectSummaryText, toggleMultiSelectOption } from "./multi-select";
 import { WEEKLY_EXPORT_COLUMNS } from "../src/lib/weekly-export";
 import {
   selectAttentionItems,
@@ -1809,7 +1810,7 @@ describe("Ticket Explorer", () => {
       screen.getByRole("region", { name: "5 ticket khớp bộ lọc." }),
     ).toBeVisible();
     const headers = within(table).getAllByRole("columnheader").map((header) => header.textContent);
-    expect(headers.indexOf("Mức độ hài lòng (CS Agent)")).toBe(headers.indexOf("Kết quả") + 1);
+    expect(headers.indexOf("CSAT")).toBe(headers.indexOf("Kết quả") + 1);
     for (const label of labels.filter((item) => item !== "—")) {
       expect(within(table).getByText(label)).toBeVisible();
     }
@@ -1823,38 +1824,38 @@ describe("Ticket Explorer", () => {
       "unrated",
     );
 
-    const filter = screen.getByRole("combobox", { name: "Mức độ hài lòng (CS Agent)" });
-    expect(within(filter).getAllByRole("option").map((option) => option.textContent)).toEqual([
-      "Tất cả",
-      "Rất hài lòng",
-      "Bình thường",
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "csatSatisfactionInput",
+      "CSAT",
       "Rất tệ",
-      "Chưa có đánh giá",
-    ]);
-    await user.selectOptions(filter, "negative");
+    );
     await waitFor(() => {
       expect(requests.at(-1)?.searchParams.get("csat_satisfaction")).toBe("negative");
     });
     expect(screen.getByRole("region", {
       name: "Bộ lọc đang áp dụng trong Ticket Explorer",
-    })).toHaveTextContent("Mức độ hài lòng (CS Agent): Rất tệ");
+    })).toHaveTextContent("CSAT: Rất tệ");
     expect(await within(table).findByText("Rất tệ")).toBeVisible();
     expect(within(table).queryByText("Rất hài lòng")).toBeNull();
 
-    await user.selectOptions(filter, "");
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "csatSatisfactionInput",
+      "CSAT",
+      "Rất tệ",
+    );
+    expect(multiSelectSummaryText(document.body, "CSAT")).toBe("Tất cả");
     await waitFor(() => expect(within(table).getByText("Rất hài lòng")).toBeVisible());
 
-    const transferReasonFilter = screen.getByRole("combobox", {
-      name: "Lý do chuyển CS",
-    });
-    expect(
-      within(transferReasonFilter)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toContain("Skill đề xuất chuyển CS");
-    await user.selectOptions(
-      transferReasonFilter,
-      "skill_suggested_transfer",
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "transferReasonInput",
+      "Lý do chuyển CS",
+      "Skill đề xuất chuyển CS",
     );
     await waitFor(() => {
       expect(requests.at(-1)?.searchParams.get("transfer_reason")).toBe(
@@ -1866,7 +1867,13 @@ describe("Ticket Explorer", () => {
         name: "Bộ lọc đang áp dụng trong Ticket Explorer",
       }),
     ).toHaveTextContent("Lý do chuyển CS: Skill đề xuất chuyển CS");
-    await user.selectOptions(transferReasonFilter, "");
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "transferReasonInput",
+      "Lý do chuyển CS",
+      "Skill đề xuất chuyển CS",
+    );
 
     await user.click(screen.getByRole("button", { name: "Tải CSV ticket" }));
     const exported = await download.text();

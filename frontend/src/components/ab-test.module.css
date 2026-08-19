@@ -85,6 +85,37 @@
   background: var(--surface);
 }
 
+.chartHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.chartHeader .tableTitle {
+  margin: 0;
+}
+
+.chartMetricPicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.chartMetricPicker select {
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
 /* Unlike the trend charts this one must shrink into its column, so it scales
    with the viewBox instead of holding a 720px floor. */
 .chartSvg {

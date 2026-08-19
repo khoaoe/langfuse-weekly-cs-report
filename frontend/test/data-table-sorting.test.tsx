@@ -276,7 +276,7 @@ describe("sorting bảng dữ liệu", () => {
     );
 
     await user.click(await screen.findByRole("button", {
-      name: /Sắp xếp theo Mức độ hài lòng \(CS Agent\)/,
+      name: /Sắp xếp theo CSAT/,
     }));
     await waitFor(() => expect(requestedSorts.at(-1)).toBe("csat_satisfaction"));
   });

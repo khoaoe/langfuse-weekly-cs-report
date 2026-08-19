@@ -11,6 +11,7 @@ import {
 import {
   parseAbTestSnapshot,
   type AbTestSnapshot,
+  type DailyArmPoint,
 } from "../lib/ab-test-schema";
 import {
   buildMetricRows,
@@ -158,8 +159,115 @@ interface DailySeries {
   readonly byArm: ReadonlyMap<string, readonly (number | null)[]>;
 }
 
-/** One rate series per arm, aligned on a shared date axis. */
-function dailyRateSeries(data: AbTestSnapshot, arms: readonly string[]): DailySeries {
+type DailyMetricKind = "rate" | "seconds" | "number";
+
+interface DailyMetricOption {
+  readonly key: string;
+  readonly label: string;
+  readonly group: string;
+  readonly kind: DailyMetricKind;
+  /** Raw value for one day/arm, or null when the day's sample is too thin
+   * to trust -- left as a gap rather than a spike the reader would over-read. */
+  readonly value: (point: DailyArmPoint) => number | null;
+}
+
+/** Only metrics with a valid daily aggregation make the cut here. Token
+ * sums are re-bucketed from the metrics endpoint's UTC-hour granularity into
+ * Asia/Ho_Chi_Minh days server-side, same as the ticket-fact metrics, so
+ * every line on this chart shares the same day boundary. LLM-call latency
+ * (p95) stays comparison-table-only: a p95 does not sum or average across
+ * sub-buckets into a valid daily p95, and the endpoint returns only
+ * pre-aggregated percentiles, never raw samples to re-derive one from. */
+const DAILY_METRIC_OPTIONS: readonly DailyMetricOption[] = [
+  {
+    key: "ai_end_to_end",
+    label: "AI xử lý trọn",
+    group: "Kết quả xử lý",
+    kind: "rate",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.ai_end_to_end / point.ticket_count : null,
+  },
+  {
+    key: "ai_first",
+    label: "AI First",
+    group: "Kết quả xử lý",
+    kind: "rate",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.ai_first_count / point.ticket_count : null,
+  },
+  {
+    key: "transferred",
+    label: "Chuyển CS",
+    group: "Kết quả xử lý",
+    kind: "rate",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.transferred_count / point.ticket_count : null,
+  },
+  {
+    key: "direct_cs",
+    label: "Vào thẳng CS",
+    group: "Kết quả xử lý",
+    kind: "rate",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.direct_cs / point.ticket_count : null,
+  },
+  {
+    key: "reopen",
+    label: "Reopen",
+    group: "Kết quả xử lý",
+    kind: "rate",
+    value: (point) =>
+      point.reopen_denominator >= 10
+        ? point.reopen_count / point.reopen_denominator
+        : null,
+  },
+  {
+    key: "latency_p50",
+    label: "Thời gian xử lý p50",
+    group: "Tốc độ",
+    kind: "seconds",
+    value: (point) => (point.ticket_count >= 10 ? point.latency_p50 : null),
+  },
+  {
+    key: "latency_p95",
+    label: "Thời gian xử lý p95",
+    group: "Tốc độ",
+    kind: "seconds",
+    value: (point) => (point.ticket_count >= 10 ? point.latency_p95 : null),
+  },
+  {
+    key: "turns_per_ticket",
+    label: "Lượt / ticket",
+    group: "Chi phí",
+    kind: "number",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.turn_total / point.ticket_count : null,
+  },
+  {
+    key: "tokens_per_ticket",
+    label: "Token / ticket",
+    group: "Chi phí",
+    kind: "number",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.total_tokens / point.ticket_count : null,
+  },
+  {
+    key: "output_tokens_per_ticket",
+    label: "Token output / ticket",
+    group: "Chi phí",
+    kind: "number",
+    value: (point) =>
+      point.ticket_count >= 10 ? point.output_tokens / point.ticket_count : null,
+  },
+];
+const DAILY_METRIC_GROUPS = ["Kết quả xử lý", "Tốc độ", "Chi phí"] as const;
+
+/** One series per arm for the selected metric, aligned on a shared date axis. */
+function dailyMetricSeries(
+  data: AbTestSnapshot,
+  arms: readonly string[],
+  metric: DailyMetricOption,
+): DailySeries {
   const dates = [...new Set(data.daily.map((row) => row.date))].sort();
   const index = new Map(dates.map((date, position) => [date, position]));
   const byArm = new Map<string, (number | null)[]>(
@@ -171,20 +279,43 @@ function dailyRateSeries(data: AbTestSnapshot, arms: readonly string[]): DailySe
     if (position === undefined || series === undefined) {
       continue;
     }
-    // A day with a handful of tickets produces a rate that swings wildly;
-    // leave it as a gap rather than draw a spike the reader would trust.
-    series[position] =
-      row.ticket_count >= 10 ? row.ai_end_to_end / row.ticket_count : null;
+    series[position] = metric.value(row);
   }
   return { dates, byArm };
 }
 
-function DailyRateChart({
+function seriesMax(series: DailySeries): number {
+  let max = 0;
+  for (const values of series.byArm.values()) {
+    for (const value of values) {
+      if (value !== null && value > max) {
+        max = value;
+      }
+    }
+  }
+  return max;
+}
+
+function formatTickValue(kind: DailyMetricKind, tick: number): string {
+  if (kind === "rate") {
+    return `${Math.round(tick * 100)}%`;
+  }
+  if (kind === "seconds") {
+    return formatSeconds(tick);
+  }
+  return tick.toFixed(1);
+}
+
+function DailyMetricChart({
   series,
   arms,
+  metric,
+  onMetricChange,
 }: {
   readonly series: DailySeries;
   readonly arms: readonly string[];
+  readonly metric: DailyMetricOption;
+  readonly onMetricChange: (key: string) => void;
 }) {
   const { dates, byArm } = series;
   const xScale = scalePoint<string>({
@@ -192,11 +323,14 @@ function DailyRateChart({
     range: [CHART_PADDING.left, CHART_WIDTH - CHART_PADDING.right],
     padding: 0.5,
   });
+  const isRate = metric.kind === "rate";
+  const rawMax = isRate ? 1 : seriesMax(series);
+  const domainMax = isRate ? 1 : rawMax > 0 ? rawMax * 1.1 : 1;
   const yScale = scaleLinear<number>({
-    domain: [0, 1],
+    domain: [0, domainMax],
     range: [CHART_HEIGHT - CHART_PADDING.bottom, CHART_PADDING.top],
   });
-  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => fraction * domainMax);
   const strokeClass = [
     trendStyles.seriesPrimaryStroke ?? "",
     trendStyles.seriesSecondaryStroke ?? "",
@@ -206,13 +340,35 @@ function DailyRateChart({
 
   return (
     <figure className={abTestStyles.chartCard}>
-      <h3 className={abTestStyles.tableTitle}>Tỉ lệ AI xử lý trọn theo ngày</h3>
+      <div className={abTestStyles.chartHeader}>
+        <h3 className={abTestStyles.tableTitle}>{`${metric.label} theo ngày`}</h3>
+        <label className={abTestStyles.chartMetricPicker}>
+          Chỉ số
+          <select
+            id="abTestDailyMetric"
+            value={metric.key}
+            onChange={(event) => onMetricChange(event.target.value)}
+          >
+            {DAILY_METRIC_GROUPS.map((group) => (
+              <optgroup label={group} key={group}>
+                {DAILY_METRIC_OPTIONS.filter(
+                  (option) => option.group === group,
+                ).map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+      </div>
       <div>
         <svg
           className={abTestStyles.chartSvg}
           viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`}
           role="img"
-          aria-label="Biểu đồ tỉ lệ AI xử lý trọn theo ngày, tách theo model"
+          aria-label={`Biểu đồ ${metric.label} theo ngày, tách theo model`}
         >
           {ticks.map((tick) => (
             <g key={tick}>
@@ -229,7 +385,7 @@ function DailyRateChart({
                 y={yScale(tick) + 4}
                 textAnchor="end"
               >
-                {`${Math.round(tick * 100)}%`}
+                {formatTickValue(metric.kind, tick)}
               </text>
             </g>
           ))}
@@ -293,7 +449,7 @@ function ComparisonTable({
 }) {
   let lastGroup = "";
   return (
-    <div>
+    <div className={abTestStyles.chartCard}>
       <h3 className={abTestStyles.tableTitle}>So sánh 2 model</h3>
       <div className={styles.tableScroll}>
       <table className={styles.table}>
@@ -395,8 +551,16 @@ function DimensionTable({
 }) {
   const [dimension, setDimension] = useState<DimensionKey>("issue_category");
   const rows = data.dimensions[dimension] ?? [];
-  const values = [...new Set(rows.map((row) => row.value))];
   const lookup = new Map(rows.map((row) => [`${row.value}|${row.arm}`, row]));
+  const totalByValue = new Map<string, number>();
+  for (const row of rows) {
+    totalByValue.set(row.value, (totalByValue.get(row.value) ?? 0) + row.ticket_count);
+  }
+  // Busiest attribute value first, so the reader sees where the sample
+  // actually is before scanning down to the long tail.
+  const values = [...new Set(rows.map((row) => row.value))].sort(
+    (left, right) => (totalByValue.get(right) ?? 0) - (totalByValue.get(left) ?? 0),
+  );
 
   return (
     <div>
@@ -444,10 +608,6 @@ function DimensionTable({
           </button>
         ))}
       </div>
-      <p className={styles.tableCaption}>
-        Nếu 2 model gặp phân bố khác nhau ở thuộc tính này, chênh lệch tổng có
-        thể chỉ là do mix chứ không phải do model.
-      </p>
       <div
         id="ab-test-dim-panel"
         className={styles.tableScroll}
@@ -595,9 +755,13 @@ export function AbTestSection({
     [data],
   );
   const rows = useMemo(() => (data ? buildMetricRows(data.arms) : []), [data]);
+  const [dailyMetricKey, setDailyMetricKey] = useState<string>("ai_end_to_end");
+  const dailyMetric =
+    DAILY_METRIC_OPTIONS.find((option) => option.key === dailyMetricKey) ??
+    (DAILY_METRIC_OPTIONS[0] as DailyMetricOption);
   const series = useMemo(
-    () => (data ? dailyRateSeries(data, arms) : null),
-    [data, arms],
+    () => (data ? dailyMetricSeries(data, arms, dailyMetric) : null),
+    [data, arms, dailyMetric],
   );
 
   return (
@@ -708,7 +872,12 @@ export function AbTestSection({
 
             <div className={abTestStyles.compareRow}>
               <ComparisonTable rows={rows} arms={arms} />
-              <DailyRateChart series={series} arms={arms} />
+              <DailyMetricChart
+                series={series}
+                arms={arms}
+                metric={dailyMetric}
+                onMetricChange={setDailyMetricKey}
+              />
             </div>
 
             <details className={abTestStyles.disclosure}>

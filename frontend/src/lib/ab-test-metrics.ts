@@ -110,8 +110,8 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
     },
     {
       key: "csat_positive",
-      label: "CSAT hài lòng",
-      group: "Kết quả xử lý",
+      label: "Rất hài lòng",
+      group: "CSAT",
       kind: "rate",
       direction: "higher",
       values: map((arm) =>
@@ -119,6 +119,33 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
       ),
       denominators: map((arm) => arm.csat_response_count),
       hint: "Mẫu số là số phản hồi khảo sát, không phải số ticket.",
+    },
+    {
+      key: "csat_neutral",
+      label: "Bình thường",
+      group: "CSAT",
+      kind: "rate",
+      direction: "neutral",
+      values: map((arm) =>
+        rate(
+          arm.csat_response_count -
+            arm.csat_positive_count -
+            arm.csat_negative_count,
+          arm.csat_response_count,
+        ),
+      ),
+      denominators: map((arm) => arm.csat_response_count),
+    },
+    {
+      key: "csat_negative",
+      label: "Rất tệ",
+      group: "CSAT",
+      kind: "rate",
+      direction: "lower",
+      values: map((arm) =>
+        rate(arm.csat_negative_count, arm.csat_response_count),
+      ),
+      denominators: map((arm) => arm.csat_response_count),
     },
     {
       key: "latency_p50",
