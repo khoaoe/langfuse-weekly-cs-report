@@ -772,7 +772,7 @@ export function AbTestSection({
     >
       <div className={styles.sectionHead}>
         <h2 id="ab-test-title" className={styles.sectionTitle}>
-          AB Test model
+          A/B Test model
         </h2>
         <button
           type="button"

@@ -780,9 +780,7 @@ describe("DashboardScreen", () => {
         name: "Lọc Ticket Explorer theo Transstatus: -365",
       }),
     );
-    expect(multiSelectSummaryText(explorer, "Transstatus")).toBe(
-      "FAILED_FACE_AUTH (-365 / -1013)",
-    );
+    expect(multiSelectSummaryText(explorer, "Transstatus")).toBe("-365");
 
     await user.click(
       screen.getByRole("button", {
