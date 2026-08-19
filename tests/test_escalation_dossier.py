@@ -78,6 +78,21 @@ def test_e1_skill_guardrail_output_cs_escalation():
     assert "C1" in case_ids
 
 
+def test_e1_interbank_fund_transfer_skill_name_resolves_via_snapshot_alias():
+    # Ticket 7090152 (real production): the running agent's runtime skill
+    # name is "interbank-fund-transfer", but its doc source folder --
+    # ../docs/cs-agent-skills/ibft -- and skills-snapshot/ibft/ keep the short
+    # alias. Before the fix, rules.get("interbank-fund-transfer", ()) always
+    # came back empty, so rule_candidates was always [] for this skill.
+    dossier = _dossier("escalation_e1_ibft_skill_name_alias")
+    assert dossier.escalation_class == "E1"
+    assert dossier.skills_loaded == ("interbank-fund-transfer",)
+    assert dossier.sub_skills_read == ("sub-skill-CD.md",)
+
+    case_ids = {c.case_id for c in dossier.rule_candidates}
+    assert "D1, D2" in case_ids or {"D1", "D2"} & case_ids
+
+
 def test_e2_output_guardrail_cs_escalation_family():
     dossier = _dossier("escalation_e2_output_guardrail_cs_escalation_family")
     assert dossier.escalation_class == "E2"

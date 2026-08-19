@@ -24,6 +24,15 @@ def test_skill_for_app_unknown_returns_none(config):
     assert ec.skill_for_app(config, None) is None
 
 
+def test_skill_for_app_matches_real_compound_app_field(config):
+    # Real meta.App values look like "241 - Chuyển Tiền ATM", not the bare
+    # "241" the config stores -- ticket 7090152 showed coverage.expected_skill
+    # always resolving to None in production because of this.
+    assert ec.skill_for_app(config, "241 - Chuyển Tiền ATM") == "interbank-fund-transfer"
+    assert ec.skill_for_app(config, "452 - Rút tiền") == "withdraw"
+    assert ec.skill_for_app(config, "999999 - Unknown App") is None
+
+
 def test_mask_free_text_only_masks_nine_plus_digit_runs():
     assert ec.mask_free_text("ma so 12345678 con 8 chu so") == "ma so 12345678 con 8 chu so"
     masked = ec.mask_free_text("giao dich 123456789 loi")
