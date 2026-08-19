@@ -177,8 +177,7 @@ function WhyCard({
         ) : undeterminedCandidates.length > 0 ? (
           <>
             <p className={styles.caseMeta}>
-              Chưa xác định được kịch bản cụ thể — toàn bộ {undeterminedFileLabels.join(", ")}{" "}
-              đã đọc:
+              Thuộc {undeterminedFileLabels.join(", ")} — Chưa xác định được kịch bản cụ thể
             </p>
             <div className={styles.caseListScroll}>
               {undeterminedCandidates.map((c) => (
