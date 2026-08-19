@@ -14,6 +14,7 @@ export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
 export const AB_TEST_ENDPOINT = "/api/ab-test";
+export const AB_TEST_DEFAULT_ENDPOINT = "/api/ab-test/default";
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";
@@ -174,6 +175,33 @@ export async function fetchAbTest(
   }
   try {
     return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
+}
+
+/** Envelope shape mirrors /api/dashboard: 202 "not ready yet" is a normal
+ * read, not a failure -- only an unexpected status/body throws. */
+export interface AbTestDefaultEnvelope {
+  readonly status: "ready" | "loading" | "stale_error";
+  readonly data: unknown;
+  readonly last_error_code?: string | null;
+}
+
+export async function fetchAbTestDefault(
+  signal?: AbortSignal,
+): Promise<AbTestDefaultEnvelope> {
+  const response = await fetch(AB_TEST_DEFAULT_ENDPOINT, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: JSON_HEADERS,
+    ...(signal ? { signal } : {}),
+  });
+  if (response.status !== 200 && response.status !== 202) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as AbTestDefaultEnvelope;
   } catch {
     throw new DashboardRequestError(response.status);
   }

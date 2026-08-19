@@ -445,6 +445,22 @@ def aggregate_ab_snapshot(
     )
 
 
+def default_window(now: datetime) -> tuple[datetime, datetime]:
+    """The canonical "current week so far" window, Monday 00:00 VN to now.
+
+    Matches the frontend's own default (`defaultWindowFromReportScope` in
+    AbTestSection.tsx) for the common case -- Report Scope defaults to the
+    latest single week -- so the background-refreshed cache actually answers
+    what most readers see, not an arbitrary unrelated window.
+    """
+    if now.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    local_now = now.astimezone(VIETNAM_TIMEZONE)
+    monday = local_now.date() - timedelta(days=local_now.weekday())
+    start_local = datetime.combine(monday, datetime.min.time(), tzinfo=VIETNAM_TIMEZONE)
+    return start_local.astimezone(timezone.utc), now.astimezone(timezone.utc)
+
+
 def compute_ab_test(
     client: LangfuseClient,
     window_start: datetime,

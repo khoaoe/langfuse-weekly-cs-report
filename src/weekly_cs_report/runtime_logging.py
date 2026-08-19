@@ -35,6 +35,8 @@ _EVENT_FIELDS = {
     ),
     "refresh_failure": frozenset({"code"}),
     "refresh_cancelled": frozenset({"code"}),
+    "ab_test_background_refresh_success": frozenset(),
+    "ab_test_background_refresh_failure": frozenset(),
 }
 _FIXED_CODES = {
     "snapshot_load_ignored": frozenset(
