@@ -328,6 +328,7 @@ def test_dockerfile_has_an_explicit_secret_free_build_context():
         "COPY --from=python-deps /opt/venv/ /opt/venv/",
         "COPY --from=python-deps /app/src/ ./src/",
         "COPY config/ ./config/",
+        "COPY skills-snapshot/ ./skills-snapshot/",
         "COPY entrypoint.sh /app/entrypoint.sh",
     ]
     assert "LANGFUSE_" not in text

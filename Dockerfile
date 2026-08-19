@@ -45,6 +45,7 @@ WORKDIR /app
 COPY --from=python-deps /opt/venv/ /opt/venv/
 COPY --from=python-deps /app/src/ ./src/
 COPY config/ ./config/
+COPY skills-snapshot/ ./skills-snapshot/
 COPY entrypoint.sh /app/entrypoint.sh
 
 RUN groupadd --gid 10001 dashboard \
