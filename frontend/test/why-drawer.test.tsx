@@ -121,7 +121,7 @@ it("renders the dossier immediately on llm_status='pending', then upgrades to th
         narration: {
           ket_luan: "Giao dịch đã treo quá 3 ngày nên chuyển bộ phận chăm sóc khách hàng.",
           can_cu: {
-            nguon: RULE_CANDIDATES[1].anchor,
+            nguon: "withdraw/references/sub-skill-C.md#L10",
             case_id: "D1",
             case_title: "Đang xử lý hoàn tiền",
             file_label: "sub-skill-C",
