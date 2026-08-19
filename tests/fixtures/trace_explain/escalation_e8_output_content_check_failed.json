@@ -1,0 +1,86 @@
+{
+  "ticket_id": "9001008",
+  "traces": [
+    {
+      "trace": {
+        "id": "trace-9001008-0",
+        "sessionId": "9001008",
+        "timestamp": "2026-08-19T05:00:00.000Z",
+        "metadata": {
+          "turn": 0
+        },
+        "input": {
+          "user_input": "Giao dich cua toi bi loi",
+          "source": "ticket",
+          "other_info": {
+            "freshdesk_id": "9001008",
+            "title": "Giao dich loi",
+            "meta": {
+              "Mô tả": "Giao dich bi loi khong ro nguyen nhan"
+            }
+          }
+        },
+        "output": {
+          "response": "<p>Yeu cau cua Quy khach da duoc chuyen den bo phan Cham soc Khach hang.</p>",
+          "agents_used": [
+            "customer-service"
+          ],
+          "elapsed_s": 5.0
+        }
+      },
+      "observations": [
+        {
+          "id": "o1",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:00.100Z",
+          "name": "idempotency_guard",
+          "input": { "source": "ticket" },
+          "output": { "blocked": false }
+        },
+        {
+          "id": "o2",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:00.200Z",
+          "name": "escalation_history_guard",
+          "input": { "source": "ticket" },
+          "output": { "blocked": false }
+        },
+        {
+          "id": "o3",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:00.300Z",
+          "name": "input_guardrail",
+          "input": { "user_input": "..." },
+          "output": { "blocked": false, "rule": "input_compliant" }
+        },
+        {
+          "id": "o4",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:00.700Z",
+          "name": "llm_call:iter_1",
+          "input": { "messages_count": 5 },
+          "output": {
+            "text": "Ban tu doc huong dan di, giao dich 260813002120041 that bai roi."
+          }
+        },
+        {
+          "id": "o5",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:01.000Z",
+          "name": "skill_guardrail_checked",
+          "input": { "skill": "withdraw", "stage": "input" },
+          "output": { "passed": true, "rule": "input_compliant" }
+        },
+        {
+          "id": "o6",
+          "traceId": "trace-9001008-0",
+          "startTime": "2026-08-19T05:00:01.100Z",
+          "name": "skill_guardrail_checked",
+          "input": { "skill": "withdraw", "stage": "output" },
+          "output": { "passed": false, "rule": "customer_insult" },
+          "metadata": { "violation": "customer_insult", "matched": "insult" }
+        }
+      ]
+    }
+  ]
+}

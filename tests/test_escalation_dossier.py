@@ -107,6 +107,40 @@ def test_e3_input_guardrail_blocked_no_case():
     assert dossier.blocking_rule == "off_topic_llm"
     assert dossier.rule_candidates == ()
     assert dossier.skills_loaded == ()
+    # E3 has no drafted answer to show -- the customer's own message is what
+    # the input-stage guardrail actually inspected instead.
+    assert dossier.blocked_input_message == "Cho hoi phi chuyen tien quoc te la bao nhieu"
+    assert dossier.blocked_response_draft is None
+
+
+def test_e8_output_content_check_failed_shows_the_blocked_draft():
+    # skill_guardrail_checked stage=output blocked on customer_insult -- a
+    # real content problem with the bot's OWN drafted answer, unrelated to
+    # escalation intent. Must not fall into E3 (that template would falsely
+    # say "the customer's question was out of scope").
+    dossier = _dossier("escalation_e8_output_content_check_failed")
+    assert dossier.escalation_class == "E8"
+    assert dossier.blocking_rule == "customer_insult"
+    assert dossier.blocked_input_message is None
+    assert dossier.blocked_response_draft is not None
+    assert "Ban tu doc huong dan di" in dossier.blocked_response_draft
+    # mask_free_text must have redacted the 15-digit transaction id.
+    assert "260813002120041" not in dossier.blocked_response_draft
+    assert "*" in dossier.blocked_response_draft
+
+
+def test_e9_tone_check_error_is_an_infra_fault_not_bad_content():
+    # tone_check_error fires from ToneLlmModule's `except Exception` branch in
+    # cs-agent-master -- the guardrail LLM crashed, it never actually judged
+    # the draft. Must be its own branch so it is never counted as "bot wrote
+    # a bad response" alongside real content failures (E8).
+    dossier = _dossier("escalation_e9_tone_check_error")
+    assert dossier.escalation_class == "E9"
+    assert dossier.blocking_rule == "tone_check_error"
+    # The draft still existed (the checker crashed, the draft did not) --
+    # showing it lets a PO see there was nothing actually wrong with it.
+    assert dossier.blocked_response_draft is not None
+    assert "260813002120041" not in dossier.blocked_response_draft
 
 
 def test_e3_skill_guardrail_blocked_at_input_stage_is_not_e6():

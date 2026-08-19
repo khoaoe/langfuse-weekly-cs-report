@@ -73,6 +73,8 @@ const WHY_EXPLANATION = {
         collapsed: false,
       },
     ],
+    blocked_response_draft: null,
+    blocked_input_message: null,
   },
   narration: null,
   llm_status: "disabled",

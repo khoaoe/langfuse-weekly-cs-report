@@ -246,8 +246,11 @@ def _why_skill_rules():
 
 
 # E3/E5/E6 never carry a case to narrate (spec 8.2); NONE means nothing was
-# escalated at all. Calling the LLM with an empty enum is never valid.
-_NO_CANDIDATE_BRANCHES = frozenset({"E3", "E5", "E6", "NONE"})
+# escalated at all. E8 (output content check failed) and E9 (the tone_llm
+# guardrail itself crashed) are about the drafted response's content/an
+# infra fault, not a skill rule -- no case citation applies either. Calling
+# the LLM with an empty enum is never valid.
+_NO_CANDIDATE_BRANCHES = frozenset({"E3", "E5", "E6", "E8", "E9", "NONE"})
 
 
 def _explain(dossier: EscalationDossier) -> tuple[Narration | None, str]:

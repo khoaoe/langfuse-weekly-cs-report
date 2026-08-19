@@ -23,6 +23,8 @@ const BRANCH_TEMPLATE: Record<string, string> = {
   E5: "Ticket này đã được xử lý trước đó nên trợ lý không trả lời lại.",
   E6: "Nhóm dịch vụ của ticket này chưa có kịch bản nghiệp vụ nào phủ, nên trợ lý chuyển cho bộ phận chăm sóc khách hàng.",
   E7: "Trợ lý tra dữ liệu nhưng hệ thống không trả về thông tin cần thiết, nên theo hướng dẫn phải chuyển cho bộ phận chăm sóc khách hàng.",
+  E8: "Câu trả lời trợ lý soạn ra chưa đạt yêu cầu về nội dung, nên chuyển cho người xử lý.",
+  E9: "Bước kiểm duyệt giọng điệu câu trả lời gặp lỗi kỹ thuật, không phải do nội dung câu trả lời có vấn đề.",
 };
 
 // spec 17.9 -- rule-specific sentences that stand in for the generic E3
@@ -38,15 +40,22 @@ const RULE_TEMPLATE: Record<string, string> = {
     "Nội dung khách gửi có dấu hiệu bất thường về mặt an toàn, nên được chuyển cho người kiểm tra.",
   multilingual_jailbreak:
     "Nội dung khách gửi có dấu hiệu bất thường về mặt an toàn, nên được chuyển cho người kiểm tra.",
-  foreign_language: "Khách viết bằng ngôn ngữ trợ lý chưa hỗ trợ.",
   empty_input: "Ticket không có nội dung để trợ lý xử lý.",
   empty_message_marker: "Ticket không có nội dung để trợ lý xử lý.",
+  // profanity/customer_insult/foreign_language/inappropriate_tone_llm only
+  // ever fire from the OUTPUT guardrail (checking the bot's own draft, not
+  // the customer's message) -- cs-agent-master's input side uses different
+  // rule names (multilingual_jailbreak, off_topic...) for the same idea.
   profanity:
-    "Câu trả lời trợ lý soạn ra chưa đạt yêu cầu về nội dung, nên chuyển cho người xử lý.",
+    "Câu trả lời trợ lý soạn ra chứa từ ngữ không phù hợp, nên chuyển cho người xử lý.",
+  customer_insult:
+    "Câu trả lời trợ lý soạn ra có lời lẽ không phù hợp với khách, nên chuyển cho người xử lý.",
+  foreign_language:
+    "Câu trả lời trợ lý soạn ra dùng ngôn ngữ chưa được hỗ trợ, nên chuyển cho người xử lý.",
   inappropriate_tone_llm:
     "Câu trả lời trợ lý soạn ra chưa đạt yêu cầu về nội dung, nên chuyển cho người xử lý.",
   tone_check_error:
-    "Câu trả lời trợ lý soạn ra chưa đạt yêu cầu về nội dung, nên chuyển cho người xử lý.",
+    "Bước kiểm duyệt giọng điệu câu trả lời gặp lỗi kỹ thuật, không phải do nội dung câu trả lời có vấn đề.",
 };
 
 /** Ô ① when llm_status != "ok": a real guardrail_reason (system-generated
@@ -141,6 +150,18 @@ function WhyCard({
           <p className={styles.caseMeta}>Không áp dụng kịch bản nghiệp vụ nào</p>
         )}
       </div>
+
+      {dossier.blocked_response_draft ? (
+        <div className={styles.cardSection}>
+          <p className={styles.cardLabel}>NỘI DUNG TRỢ LÝ ĐỊNH TRẢ LỜI</p>
+          <blockquote className={styles.quote}>{dossier.blocked_response_draft}</blockquote>
+        </div>
+      ) : dossier.blocked_input_message ? (
+        <div className={styles.cardSection}>
+          <p className={styles.cardLabel}>NỘI DUNG KHÁCH GỬI</p>
+          <blockquote className={styles.quote}>{dossier.blocked_input_message}</blockquote>
+        </div>
+      ) : null}
 
       <div className={styles.cardSection}>
         <p className={styles.cardLabel}>BẰNG CHỨNG</p>

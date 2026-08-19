@@ -35,6 +35,7 @@ _ESCALATION_HISTORY_KEY = "escalation_history_guard"
 _GENERAL_RESPONSE_KEY = "general_response"
 
 _CS_ESCALATION_RULE_FAMILY = {"cs_escalation", "cs_escalation_regex"}
+_TONE_CHECK_ERROR_RULE = "tone_check_error"
 _CANDIDATE_CAP = 40
 
 # The running agent's tool/skill spans use the runtime skill name
@@ -98,7 +99,7 @@ class TimelinePhase:
 @dataclass(frozen=True)
 class EscalationDossier:
     ticket_id: str
-    escalation_class: str  # "E1".."E7" | "NONE"
+    escalation_class: str  # "E1".."E9" | "NONE"
     escalated_turn: int | None
     guardrail_reason: str | None
     blocking_rule: str | None
@@ -111,6 +112,14 @@ class EscalationDossier:
     turn_deltas: tuple[TurnDelta, ...]
     drift_changed: bool
     phases: tuple[TimelinePhase, ...]
+    # The guardrail that actually decided (skill_guardrail_checked stage=output,
+    # or the generic output_guardrail) only ever sees the drafted answer -- so
+    # that draft, not the mechanical case citation, is the real "why" for E1/
+    # E2/E8/E9. Masked with mask_free_text before this ever reaches the dossier.
+    blocked_response_draft: str | None
+    # E3 (input-stage block) has no drafted answer to show -- the customer's
+    # own message is the thing the guardrail actually inspected instead.
+    blocked_input_message: str | None
 
 
 # --------------------------------------------------------------------------
@@ -172,6 +181,28 @@ def _e7_tool_step(turn: TraceTurn) -> TraceStep | None:
     return None
 
 
+def _output_stage_branch(step: TraceStep, *, escalation_branch: str) -> str:
+    """Classify a blocked output-stage step (skill_guardrail output or the
+    generic output_guardrail) by what its `rule` actually means.
+
+    - cs_escalation / cs_escalation_regex: the bot's draft really did say
+      "chuyển giao cho người/bộ phận xử lý" -- E1 (per-skill) or E2 (generic).
+    - tone_check_error: the tone_llm guardrail itself crashed (except-branch
+      in cs-agent-master's ToneLlmModule) -- an infra fault, not a content
+      problem, so it must not be counted as "bot wrote badly" -- E9.
+    - anything else (profanity, customer_insult, foreign_language,
+      inappropriate_tone_llm, ...): the draft failed a real content check
+      that has nothing to do with escalation intent -- E8.
+    """
+
+    rule = _rule_of(step)
+    if rule in _CS_ESCALATION_RULE_FAMILY:
+        return escalation_branch
+    if rule == _TONE_CHECK_ERROR_RULE:
+        return "E9"
+    return "E8"
+
+
 def _decisive_step_and_branch(turn: TraceTurn) -> tuple[str, TraceStep | None]:
     """Find the branch AND the exact step that decided it, in one pass.
 
@@ -207,11 +238,11 @@ def _decisive_step_and_branch(turn: TraceTurn) -> tuple[str, TraceStep | None]:
 
     step = _first_blocked_step_at_stage(turn, _SKILL_GUARDRAIL_KEY, "output")
     if step is not None:
-        return ("E1" if _rule_of(step) == "cs_escalation" else "E3"), step
+        return _output_stage_branch(step, escalation_branch="E1"), step
 
     step = _first_blocked_step(turn, _OUTPUT_GUARDRAIL_KEY)
     if step is not None:
-        return ("E2" if _rule_of(step) in _CS_ESCALATION_RULE_FAMILY else "E3"), step
+        return _output_stage_branch(step, escalation_branch="E2"), step
 
     # No guardrail blocked at all -- but every guardrail-block source that
     # compute_verdict()/chuyen_cs can come from is already exhausted above,
@@ -564,6 +595,9 @@ def _drift_changed(
 # --------------------------------------------------------------------------
 
 
+_RESPONSE_DRAFT_BRANCHES = frozenset({"E1", "E2", "E8", "E9"})
+
+
 def _trace_meta(raw_trace: Mapping[str, object] | None) -> Mapping[str, object]:
     if raw_trace is None:
         return {}
@@ -611,6 +645,13 @@ def build_dossier(
 
     reason, rule = _guardrail_reason_and_rule(target_turn) if branch != "NONE" else (None, None)
 
+    blocked_response_draft: str | None = None
+    blocked_input_message: str | None = None
+    if branch in _RESPONSE_DRAFT_BRANCHES and target_turn.last_llm_call_text:
+        blocked_response_draft = explain_context.mask_free_text(target_turn.last_llm_call_text)
+    elif branch == "E3" and target_turn.user_input:
+        blocked_input_message = explain_context.mask_free_text(target_turn.user_input)
+
     return EscalationDossier(
         ticket_id=ticket_id,
         escalation_class=branch,
@@ -626,4 +667,6 @@ def build_dossier(
         turn_deltas=(),
         drift_changed=_drift_changed(sub_skills, target_turn, snapshot_root),
         phases=tuple(build_phases(last_turn, config)),
+        blocked_response_draft=blocked_response_draft,
+        blocked_input_message=blocked_input_message,
     )
