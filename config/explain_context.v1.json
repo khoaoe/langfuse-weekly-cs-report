@@ -1,21 +1,22 @@
 {
   "version": 1,
   "skills": {
-    "interbank-fund-transfer": { "app": [241], "fields": ["Mô tả", "App"] },
-    "topup":    { "app": [454], "fields": ["Mô tả", "App"] },
-    "withdraw": { "app": [452], "fields": ["Mô tả", "App"] },
+    "interbank-fund-transfer": { "app": [241], "fields": ["Mô tả", "App", "TransID", "UserID"] },
+    "topup":    { "app": [454], "fields": ["Mô tả", "App", "TransID", "UserID"] },
+    "withdraw": { "app": [452], "fields": ["Mô tả", "App", "TransID", "UserID"] },
     "telco": {
       "app": [12, 455, 1658, 1659, 2172, 2334, 2391, 4043, 4103, 4527, 4545,
               4609, 4610, 4639, 4666, 4698, 4712, 4856, 4923, 4982],
-      "fields": ["Mô tả", "App", "AppTransId", "Email KH cung cấp"]
+      "fields": ["Mô tả", "App", "TransID", "UserID", "AppTransId", "Email KH cung cấp"]
     }
   },
-  "default_fields": ["Mô tả", "App", "AppTransId", "Số điện thoại Zalopay cũ",
+  "default_fields": ["Mô tả", "App", "TransID", "AppTransId", "Số điện thoại Zalopay cũ",
                      "Tên ngân hàng", "Thời gian gặp lỗi", "UserID"],
   "always_include": ["title"],
   "field_policy": {
-    "value":    ["Mô tả", "App", "Tên ngân hàng", "Thời gian gặp lỗi", "title"],
-    "presence": ["UserID", "AppTransId", "Số điện thoại Zalopay cũ", "Email KH cung cấp"]
+    "value":    ["Mô tả", "App", "TransID", "UserID", "AppTransId", "Tên ngân hàng",
+                 "Thời gian gặp lỗi", "title"],
+    "presence": ["Số điện thoại Zalopay cũ", "Email KH cung cấp"]
   },
   "forbidden_words": ["guardrail", "rule", "trace", "span", "skill", "escalate",
                       "API", "tool", "log", "prompt", "LLM", "agent", "json",

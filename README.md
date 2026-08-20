@@ -133,8 +133,9 @@ chắn thất bại. Chỉ conversation Freshdesk `category=3`, `private=false`,
 `incoming=false` mới được tính là public agent reply. Job dùng per-ticket
 conversation fetch; không cần quyền bulk satisfaction ratings.
 
-Job dùng cache private trong `runtime/`, không đưa raw conversation, tên/email,
-UserID, TransID hoặc internal ID lên browser. `runtime/` không được commit.
+Job dùng cache private trong `runtime/`, không đưa raw conversation, tên/email lên
+browser (UserID, TransID, internal ID được phép hiển thị từ 2026-08-20). `runtime/`
+không được commit.
 Nếu dashboard chạy ở cổng khác `8765`:
 
 ```bash
@@ -252,10 +253,11 @@ DASHBOARD_FRONTEND_MODE=legacy \
 
 ## 8. Ranh giới dữ liệu và tài liệu
 
-Dashboard cho phép hiển thị Ticket ID để điều tra. Các trường sau **not browser fields**:
-User ID, Trans ID, phone, names/emails, conversation text,
-prompts/responses, raw payloads hoặc Langfuse internal IDs như `traceId` và
-`sessionId`.
+Dashboard cho phép hiển thị Ticket ID để điều tra. Từ 2026-08-20 (quyết định PO), User ID,
+Trans ID, TransAppID, và Langfuse internal IDs như `traceId`/`sessionId` cũng được phép
+hiển thị — không còn coi là rủi ro riêng tư trên UI dashboard nội bộ này. Các trường sau
+vẫn **not browser fields**: phone, names/emails, conversation text, prompts/responses,
+raw payloads.
 
 ## 9. Production
 

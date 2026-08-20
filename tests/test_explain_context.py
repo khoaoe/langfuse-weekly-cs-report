@@ -49,11 +49,12 @@ def test_build_ticket_facts_splits_value_vs_presence(config):
     }
     facts = ec.build_ticket_facts(config, meta, "Rut tien loi")
     by_label = {f.label: f for f in facts}
-    # withdraw's narrower field list only asks for Mô tả + App (+ title always).
-    assert set(by_label) == {"Mô tả", "App", "title"}
+    # withdraw's field list: Mô tả + App + TransID + UserID (+ title always).
+    assert set(by_label) == {"Mô tả", "App", "TransID", "UserID", "title"}
     assert by_label["Mô tả"].present is True
     assert "123456789012" not in by_label["Mô tả"].value
     assert by_label["App"].value == "452"
+    assert by_label["TransID"].present is False
 
 
 def test_build_ticket_facts_masks_transaction_id_in_title():
@@ -71,12 +72,16 @@ def test_build_ticket_facts_masks_transaction_id_in_title():
     assert "*" in title.value
 
 
-def test_build_ticket_facts_presence_field_never_leaks_value(config):
+def test_build_ticket_facts_userid_shows_real_value_since_2026_08_20(config):
+    # PO decision 2026-08-20: UserID/TransID/TransAppID/traceId/sessionId are no
+    # longer masked on this internal dashboard's UI (phone/name/email/conversation
+    # text remain hidden -- those weren't reversed). UserID moved from
+    # field_policy.presence to field_policy.value, so it now carries a real value.
     meta = {"App": "999999", "UserID": "u-secret-1"}
     facts = ec.build_ticket_facts(config, meta, "")
     userid = next(f for f in facts if f.label == "UserID")
     assert userid.present is True
-    assert userid.value is None
+    assert userid.value == "u-secret-1"
 
 
 def test_build_ticket_facts_missing_field_is_absent(config):

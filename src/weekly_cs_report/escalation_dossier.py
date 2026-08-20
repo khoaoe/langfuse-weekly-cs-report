@@ -274,8 +274,10 @@ def _classify_single_turn(turn: TraceTurn) -> str:
 def classify_branch(turns: Sequence[TraceTurn]) -> tuple[str, int | None]:
     """Return (escalation_class, escalated_turn). Session-scoped, not turn-scoped.
 
-    escalation_history_guard only ever says "already escalated last turn" --
-    the real reason lives earlier, so E4 walks backward to find it.
+    escalation_history_guard (E4) only ever says "already escalated last
+    turn", and idempotency_guard (E5) only ever says "already handled, won't
+    reply again" -- neither carries the real reason, which lives on an
+    earlier turn, so both walk backward to find it.
     """
 
     if not turns:
@@ -284,12 +286,12 @@ def classify_branch(turns: Sequence[TraceTurn]) -> tuple[str, int | None]:
     last = turns[-1]
     branch = _classify_single_turn(last)
 
-    if branch == "E4":
+    if branch in ("E4", "E5"):
         for turn in reversed(turns[:-1]):
             prior = _classify_single_turn(turn)
             if prior not in ("NONE", "E4", "E5"):
                 return prior, turn.turn
-        return "E4", last.turn
+        return branch, last.turn
 
     if branch == "NONE":
         return "NONE", None
