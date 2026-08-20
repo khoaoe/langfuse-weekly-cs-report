@@ -407,11 +407,6 @@ export function WhyDrawer({
           <p role="alert">{whyErrorMessage(dossierQuery.error)}</p>
         ) : dossier !== null ? (
           <>
-            {finalLlmStatus !== "ok" && finalLlmStatus !== "pending" ? (
-              <p className={styles.caseMeta}>
-                Phần diễn giải tự động chưa sẵn sàng. Nội dung dưới đây lấy trực tiếp từ hệ thống.
-              </p>
-            ) : null}
             {dossier.escalation_class !== "NONE" ? (
               <WhyCard
                 dossier={dossier}
