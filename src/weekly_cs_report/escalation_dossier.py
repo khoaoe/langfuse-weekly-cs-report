@@ -320,7 +320,11 @@ def _sub_skills_read(turn: TraceTurn) -> tuple[tuple[str, str], ...]:
 
 
 def _tool_evidence(turn: TraceTurn, config: ExplainConfig) -> tuple[ToolEvidence, ...]:
-    items: list[ToolEvidence] = []
+    # Same tool can be called more than once in a turn (e.g. retried with a
+    # corrected argument after a malformed id) -- dict overwrite keeps the
+    # slot's original position but replaces the value, so BẰNG CHỨNG shows
+    # one row per tool, holding its latest (real) result, not every attempt.
+    items: dict[str, ToolEvidence] = {}
     for step in turn.steps:
         if not step.key.startswith(_TOOL_PREFIX):
             continue
@@ -329,8 +333,10 @@ def _tool_evidence(turn: TraceTurn, config: ExplainConfig) -> tuple[ToolEvidence
         output = step.evidence.get("output")
         result = output.get("result") if isinstance(output, Mapping) else output
         nhan, value, failed = explain_context.humanize_tool(config, step.key, result)
-        items.append(ToolEvidence(step_key=step.key, label=nhan, value=value, turn=turn.turn, failed=failed))
-    return tuple(items)
+        items[step.key] = ToolEvidence(
+            step_key=step.key, label=nhan, value=value, turn=turn.turn, failed=failed
+        )
+    return tuple(items.values())
 
 
 def _guardrail_reason_and_rule(turn: TraceTurn) -> tuple[str | None, str | None]:

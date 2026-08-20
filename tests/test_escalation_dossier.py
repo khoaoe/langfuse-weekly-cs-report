@@ -195,6 +195,12 @@ def test_e1_wins_over_a_transient_e7_tool_error():
     assert dossier.blocking_rule == "cs_escalation"
     assert "Chăm sóc Khách hàng" in dossier.guardrail_reason
     assert "Hãy thông báo cho cs" not in dossier.guardrail_reason
+    # Same tool called twice (malformed id, then the real one) -- BẰNG CHỨNG
+    # must show one row holding the latest (real) result, not both attempts.
+    tpe_rows = [ev for ev in dossier.tool_evidence if ev.label == "Trạng thái giao dịch"]
+    assert len(tpe_rows) == 1
+    assert tpe_rows[0].value == "REFUNDING"
+    assert tpe_rows[0].failed is False
     assert dossier.blocked_response_draft is not None
 
 
