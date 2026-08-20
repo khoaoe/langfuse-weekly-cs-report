@@ -359,8 +359,8 @@ export function WhyDrawer({
   const dossier = dossierQuery.data?.dossier ?? null;
   const title =
     dossier !== null
-      ? (DRAWER_TITLE[dossier.escalation_class] ?? DEFAULT_TITLE)
-      : DEFAULT_TITLE;
+      ? `${DRAWER_TITLE[dossier.escalation_class] ?? DEFAULT_TITLE} — ${dossier.ticket_id}`
+      : `${DEFAULT_TITLE} — ${ticketId}`;
 
   // "pending" from /why means /why-narration is worth calling; once it
   // settles (success or error), that becomes the real, final status. Until
