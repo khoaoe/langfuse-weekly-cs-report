@@ -5,7 +5,7 @@ import type {
   WeeklyReportRow,
 } from "./dashboard-schema";
 import type { TicketFilters } from "./dashboard-filters";
-import type { NarrativeInput, NarrativeSignal } from "./narrative";
+import type { NarrativeInput } from "./narrative";
 import { formatCount, formatRate } from "./format";
 
 export const COHORT_LABELS: Readonly<Record<WeekDefinition, string>> = {
@@ -103,35 +103,6 @@ export function selectPreviousWeek(
   return weeks.at(-1) ?? null;
 }
 
-/**
- * Observed transfer signals, most frequent first.
- *
- * TPE codes are operational observations, not proven causes.  Only rows the
- * taxonomy could resolve carry a signal: a raw code means nothing to a CS or
- * exec reader, and this string is copied into their own reports verbatim.
- * Unresolved rows stay in the diagnostics table, where the count is the point.
- */
-export function selectTransferSignals(view: {
-  readonly transfer_reasons: DashboardView["transfer_reasons"];
-}): NarrativeSignal[] {
-  // Payload grain is (transstatus, step_result), so distinct rows can resolve
-  // to the same status (e.g. several pairs all mean PENDING). Group by status
-  // and sum counts first so each status appears once with its true total —
-  // otherwise the same label could occupy two slots in the top-N signal list.
-  const countByStatus = new Map<string, number>();
-  for (const item of view.transfer_reasons.tpe) {
-    if (item.status === null) {
-      continue;
-    }
-    countByStatus.set(
-      item.status,
-      (countByStatus.get(item.status) ?? 0) + item.count,
-    );
-  }
-  const tpe = Array.from(countByStatus, ([label, count]) => ({ label, count }));
-  return tpe.sort((left, right) => right.count - left.count);
-}
-
 export function buildNarrativeInput(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
@@ -140,10 +111,6 @@ export function buildNarrativeInput(
   const view = selectView(snapshot, weekDefinition);
   const current = selectReportWeek(view, activeWeek);
   const previous = selectPreviousWeek(view, current);
-  // Signals for the week being described, falling back to the whole range only
-  // when the payload carries no per-week breakdown.
-  const scopedTransfer =
-    current === null ? view : (view.by_week[current.cohort_week] ?? view);
   const samePeriod =
     current?.cohort_status === "wtd" &&
     view.same_period?.current.cohort_week === current.cohort_week
@@ -177,9 +144,6 @@ export function buildNarrativeInput(
             },
             reopenRate: previous.reopen_lifetime_rate,
           },
-    transferSignals: selectTransferSignals(scopedTransfer),
-    transferDenominator:
-      scopedTransfer.transfer_reasons.observed_transfer_denominator,
     gt4TurnWithoutCs:
       current?.gt4_turn_without_cs ?? view.rule_gt4.gt4_turn_without_cs,
     enrichmentStatus: snapshot.enrichment_status,

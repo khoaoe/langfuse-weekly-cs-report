@@ -626,13 +626,25 @@ def _trace_meta(raw_trace: Mapping[str, object] | None) -> Mapping[str, object]:
     return meta if isinstance(meta, Mapping) else {}
 
 
+# Freshdesk/bot-generated titles append this boilerplate suffix verbatim, e.g.
+# "... ( Mã giao dịch: 260820001203721 ) -  ( Ticket id: 6054071 )" -- it repeats
+# the transaction id (already shown by its own ticket_facts row) and the
+# Freshdesk ticket id (not the dashboard's ticket_id), adding no information.
+_TITLE_BOILERPLATE_SUFFIX_RE = re.compile(
+    r"\s*\(\s*Mã giao dịch\s*:[^)]*\)\s*-\s*\(\s*Ticket id\s*:[^)]*\)\s*$",
+    re.IGNORECASE,
+)
+
+
 def _trace_title(raw_trace: Mapping[str, object] | None) -> str:
     if raw_trace is None:
         return ""
     input_data = raw_trace.get("input")
     other_info = input_data.get("other_info") if isinstance(input_data, Mapping) else None
     title = other_info.get("title") if isinstance(other_info, Mapping) else None
-    return title if isinstance(title, str) else ""
+    if not isinstance(title, str):
+        return ""
+    return _TITLE_BOILERPLATE_SUFFIX_RE.sub("", title).strip()
 
 
 def build_dossier(

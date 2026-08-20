@@ -222,6 +222,31 @@ def test_no_trace_returns_none():
     assert ed.build_dossier(client, "0000000", TAXONOMY, CONFIG, RULES) is None
 
 
+def test_trace_title_strips_the_freshdesk_boilerplate_suffix():
+    # Freshdesk/bot titles append "( Mã giao dịch: ... ) - ( Ticket id: ... )"
+    # verbatim -- the transaction id already has its own ticket_facts row and
+    # the Freshdesk ticket id isn't the dashboard's ticket_id, so this suffix
+    # is pure noise in THÔNG TIN TICKET.
+    raw_trace = {
+        "input": {
+            "other_info": {
+                "title": (
+                    "Nhờ Zalopay hỗ trợ thu hồi giao dịch chuyển khoản nhầm "
+                    "( Mã giao dịch: 260820001203721 ) -  ( Ticket id: 6054071 )"
+                )
+            }
+        }
+    }
+    assert ed._trace_title(raw_trace) == (
+        "Nhờ Zalopay hỗ trợ thu hồi giao dịch chuyển khoản nhầm"
+    )
+
+
+def test_trace_title_without_the_suffix_is_unchanged():
+    raw_trace = {"input": {"other_info": {"title": "Rut tien bi treo"}}}
+    assert ed._trace_title(raw_trace) == "Rut tien bi treo"
+
+
 # --------------------------------------------------------------------------
 # rank_candidates
 # --------------------------------------------------------------------------
