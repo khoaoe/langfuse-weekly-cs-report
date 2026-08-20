@@ -166,6 +166,18 @@ def test_e5_idempotency_blocked_is_not_an_escalation():
     assert dossier.rule_candidates == ()
 
 
+def test_e5_idempotency_points_back_to_turn_zero():
+    # idempotency_guard only ever says "already handled, won't reply again" --
+    # like E4, that reason lives on an earlier turn. Real production ticket
+    # 7019547 kept showing the canned E5 text because classify_branch() only
+    # backward-walked for E4, never for E5, even though turns 1 and 2 here are
+    # trailing idempotency-guard repeats of the real escalation in turn 0.
+    dossier = _dossier("escalation_e5_idempotency_points_back_to_turn_zero")
+    assert dossier.escalation_class == "E1"
+    assert dossier.escalated_turn == 0
+    assert dossier.sub_skills_read == ("sub-skill-C.md",)
+
+
 def test_e6_no_skill_loaded():
     dossier = _dossier("escalation_e6_no_skill_loaded")
     assert dossier.escalation_class == "E6"
@@ -287,9 +299,18 @@ def test_dossier_serialization_carries_no_raw_identifiers(fixture_name):
     # published limits) by design (spec §3: "code so khớp từng ký tự") -- a
     # long digit run there is expected static content, not a customer leak.
     # Only the customer-data-bearing fields are scanned for accidental PII.
+    #
+    # PO decision 2026-08-20: UserID/TransID/TransAppID are no longer masked on
+    # this dashboard's UI, so their ticket_facts entries now legitimately carry
+    # a real (long-digit) value -- exclude just those labels from the scan.
+    # Everything else (Mô tả/title, guardrail_reason, tool_evidence) still must
+    # never carry a raw long-digit run.
+    _NOW_PERMITTED_ID_LABELS = {"UserID", "TransID", "AppTransId"}
     customer_facing = {
         "guardrail_reason": payload["guardrail_reason"],
-        "ticket_facts": payload["ticket_facts"],
+        "ticket_facts": [
+            fact for fact in payload["ticket_facts"] if fact["label"] not in _NOW_PERMITTED_ID_LABELS
+        ],
         "tool_evidence": payload["tool_evidence"],
     }
     customer_serialized = json.dumps(customer_facing, ensure_ascii=False)

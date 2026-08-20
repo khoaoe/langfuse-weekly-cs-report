@@ -115,7 +115,7 @@ Chỗ **duy nhất** cần LLM: `content_labeler.py` (lý do reopen). Thiếu co
   **từ chối khởi động** nếu chọn `spa` mà chưa build.
 - SPA dùng external hashed JS/CSS/font/logo cùng origin; CSP cấm `unsafe-inline`, `unsafe-eval`, CDN và external request.
 - FastAPI tiếp tục sở hữu API/business layer; Node/npm chỉ tồn tại trong build stage, không có trong production runtime.
-- Browser dashboard dùng projection version hiện hành trong `_STORAGE_VERSION` và phải giữ `reopen_reason`; không expose storage payload, raw ticket, trace hoặc internal ID. Freshdesk entry coverage chỉ expose aggregate hoặc Ticket ID/time/status drill-down, không expose conversation text, requester hoặc agent identity.
+- Browser dashboard dùng projection version hiện hành trong `_STORAGE_VERSION` và phải giữ `reopen_reason`; không expose storage payload hoặc raw ticket dump (UserID/TransID/TransAppID/traceId/sessionId riêng lẻ thì được, từ 2026-08-20). Freshdesk entry coverage chỉ expose aggregate hoặc Ticket ID/time/status drill-down, không expose conversation text, requester hoặc agent identity.
 - TanStack Query giữ last-good snapshot; poll 2 giây khi loading/refreshing, 5 phút khi ổn định,
   30 giây backoff khi `stale_error` — đừng "sửa" nhánh thứ ba thành 2 giây.
 - Theme là system-first (`prefers-color-scheme`) **cộng** control `Sáng`/`Tối`; giá trị duy nhất
@@ -168,13 +168,17 @@ metric/pipeline, payload/schema, UI/copy.
 
 ## Ranh giới PII trên browser
 
-Được phép: **Ticket ID**. Không được: UserID, TransID, số điện thoại, tên/email, nội dung hội thoại, prompt/response, raw payload, ID nội bộ Langfuse (`traceId`, `sessionId`).
+Được phép: **Ticket ID**, và từ 2026-08-20 (quyết định rõ ràng của PO) **UserID, TransID,
+TransAppID, ID nội bộ Langfuse (`traceId`, `sessionId`)** — các trường này không còn bị
+mask/ẩn trên UI dashboard nội bộ. Vẫn không được: số điện thoại, tên/email, nội dung hội
+thoại, prompt/response, raw payload — nhóm này KHÔNG đổi, `mask_free_text()` vẫn áp dụng
+cho "Mô tả"/"title"/`blocked_response_draft`/`blocked_input_message` vì các trường tự do
+này có thể chứa số điện thoại hoặc tên, không chỉ transaction/user id.
 
-Kiểm sau mỗi thay đổi payload:
-
-```bash
-curl -s http://127.0.0.1:8765/api/dashboard | grep -cE 'UserID|TransID|traceId|sessionId'   # phải là 0
-```
+`config/explain_context.v1.json`'s `field_policy.presence` chỉ còn giữ 2 trường thật sự
+nhạy cảm (`Số điện thoại Zalopay cũ`, `Email KH cung cấp`); `UserID`/`AppTransId` đã
+chuyển sang `field_policy.value` (hiện giá trị thật), và `TransID` được thêm mới vào
+`default_fields` + field list mỗi skill.
 
 ## Trạng thái hiện tại (2026-07-31)
 
