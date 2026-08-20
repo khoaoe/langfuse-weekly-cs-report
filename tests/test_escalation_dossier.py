@@ -182,6 +182,22 @@ def test_e7_tool_instructs_escalate():
     assert "cs" in tool_message_candidates[0].body.lower()
 
 
+def test_e1_wins_over_a_transient_e7_tool_error():
+    # Regression for ticket 7103046: get_transaction_processing_engine_data
+    # was first called with a malformed id and got "Hãy thông báo cho cs để
+    # xử lý trường hợp này" -- but the agent immediately retried with the
+    # correct id, got real data, drafted a full answer, and THAT got blocked
+    # by skill_guardrail_checked with a real cs_escalation reason. The
+    # earlier tool hiccup must never outrank the real, later guardrail
+    # block just because its message happens to mention "cs".
+    dossier = _dossier("escalation_e1_wins_over_transient_e7_tool_error")
+    assert dossier.escalation_class == "E1"
+    assert dossier.blocking_rule == "cs_escalation"
+    assert "Chăm sóc Khách hàng" in dossier.guardrail_reason
+    assert "Hãy thông báo cho cs" not in dossier.guardrail_reason
+    assert dossier.blocked_response_draft is not None
+
+
 def test_no_trace_returns_none():
     fixture = {"ticket_id": "0000000", "traces": []}
     client = _client_for_fixture(fixture)

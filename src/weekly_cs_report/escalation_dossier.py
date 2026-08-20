@@ -232,10 +232,6 @@ def _decisive_step_and_branch(turn: TraceTurn) -> tuple[str, TraceStep | None]:
     if step is not None:
         return "E3", step
 
-    step = _e7_tool_step(turn)
-    if step is not None:
-        return "E7", step
-
     step = _first_blocked_step_at_stage(turn, _SKILL_GUARDRAIL_KEY, "output")
     if step is not None:
         return _output_stage_branch(step, escalation_branch="E1"), step
@@ -243,6 +239,21 @@ def _decisive_step_and_branch(turn: TraceTurn) -> tuple[str, TraceStep | None]:
     step = _first_blocked_step(turn, _OUTPUT_GUARDRAIL_KEY)
     if step is not None:
         return _output_stage_branch(step, escalation_branch="E2"), step
+
+    # E7 comes AFTER the output-stage guardrail checks, not before. A tool
+    # call can error out mid-conversation (a typo'd transaction_id, a
+    # transient NO_DATA) with a message that happens to mention "cs" without
+    # that being the real reason -- ticket 7103046 called
+    # get_transaction_processing_engine_data twice: the first call had a
+    # malformed id and got "Hãy thông báo cho cs để xử lý trường hợp này",
+    # but the agent immediately retried with the correct id, got real data,
+    # drafted a full answer, and THAT got blocked by skill_guardrail_checked
+    # with a real cs_escalation reason. E7 must only win when there is no
+    # later guardrail block to explain instead -- i.e. the agent actually
+    # gave up right after the tool's own escalate instruction.
+    step = _e7_tool_step(turn)
+    if step is not None:
+        return "E7", step
 
     # No guardrail blocked at all -- but every guardrail-block source that
     # compute_verdict()/chuyen_cs can come from is already exhausted above,
