@@ -39,7 +39,8 @@
   font-size: 13px;
 }
 
-.rangeField input {
+.rangeField input,
+.rangeField select {
   min-height: 44px;
   padding: 0 var(--space-2);
   border: 1px solid var(--rule-strong);
@@ -47,6 +48,10 @@
   background: var(--surface);
   color: var(--ink);
   font: inherit;
+}
+
+.rangeField select {
+  max-width: 320px;
 }
 
 /* Table and chart answer the same question, so they sit on one row and the

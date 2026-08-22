@@ -15,6 +15,7 @@ export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
 export const AB_TEST_ENDPOINT = "/api/ab-test";
 export const AB_TEST_DEFAULT_ENDPOINT = "/api/ab-test/default";
+export const AB_TEST_MODELS_ENDPOINT = "/api/ab-test/models";
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";
@@ -213,10 +214,34 @@ export async function fetchWhyNarration(
 export async function fetchAbTest(
   start: string,
   end: string,
+  arms?: readonly string[],
   signal?: AbortSignal,
 ): Promise<unknown> {
   const params = new URLSearchParams({ start, end });
+  if (arms && arms.length > 0) {
+    params.set("arms", arms.join(","));
+  }
   const response = await fetch(`${AB_TEST_ENDPOINT}?${params.toString()}`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: JSON_HEADERS,
+    ...(signal ? { signal } : {}),
+  });
+  if (response.status !== 200) {
+    throw new DashboardRequestError(response.status);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new DashboardRequestError(response.status);
+  }
+}
+
+/** Which models currently have Langfuse traffic, most active first, each
+ * with its cached (or freshly discovered) first-seen timestamp -- the data
+ * source for the A/B picker and its auto default window. */
+export async function fetchAbTestModels(signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(AB_TEST_MODELS_ENDPOINT, {
     method: "GET",
     credentials: "same-origin",
     headers: JSON_HEADERS,

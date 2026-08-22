@@ -25,6 +25,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
 from .ab_test import AbTestSnapshot, compute_ab_test, default_window
+from .ab_test_cache import (
+    AbTestCacheError,
+    CachedAbTestSnapshot,
+    load_ab_test_cache,
+    write_ab_test_cache,
+)
 from .categories import load_taxonomy
 from .cli import ConfigurationError, PROJECT_ROOT, load_environment
 from .csat_cache import CSATCacheError, load_csat_cache
@@ -48,6 +54,14 @@ from .escalation_narrator import (
 from .explain_context import load_explain_config
 from .narration_validator import validate as validate_narration
 from .langfuse_client import LangfuseAPIError, LangfuseClient
+from .model_discovery import discover_first_seen, list_recent_models
+from .model_seen_cache import (
+    CachedModelSeen,
+    ModelSeenCache,
+    ModelSeenCacheError,
+    load_model_seen_cache,
+    write_model_seen_cache,
+)
 from .reconciliation_cache import (
     ReconciliationCacheError,
     load_reconciliation_cache,
@@ -128,6 +142,10 @@ _TRACE_EXPLAIN_CACHE_MISS = object()
 _AB_TEST_MAX_WINDOW_DAYS = 60
 _AB_TEST_CACHE_TTL_SECONDS = 300.0
 _AB_TEST_DEADLINE_SECONDS = 240.0
+_AB_TEST_MAX_ARMS = 8
+_AB_TEST_ARMS_VALUE_LENGTH = 1024
+_AB_TEST_MODEL_LIST_LIMIT = 8
+_MODEL_LIST_CACHE_TTL_SECONDS = 60.0
 _STATIC_ROOT = Path(__file__).with_name("static")
 _STATIC_INDEX = _STATIC_ROOT / "index.html"
 _SPA_ROOT = _STATIC_ROOT / "spa"
@@ -146,6 +164,8 @@ _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _CSAT_CACHE_FILENAME = "csat_cache.json"
 _RECONCILIATION_CACHE_FILENAME = "outcome_reconciliation_cache.json"
 _ENTRY_COVERAGE_CACHE_FILENAME = "entry_coverage_cache.json"
+_MODEL_SEEN_CACHE_FILENAME = "model_seen_cache.json"
+_AB_TEST_CACHE_FILENAME = "ab_test_snapshot_cache.json"
 _FRESHDESK_COOKIE_FILENAME = "freshdesk_cookie"
 _FRESHDESK_COOKIE_STATE_FILENAME = "freshdesk_cookie_state.json"
 _TEMP_SNAPSHOT_NAME = re.compile(r"\.dashboard_snapshot\..+\.tmp\Z")
@@ -306,9 +326,14 @@ class _AbTestBackgroundCache:
     ``ab_test`` route (its own short-TTL cache); this class exists only so the
     common case -- the default window every reader sees on first load -- is
     already computed and instant, the same trade the main dashboard snapshot
-    makes. Unlike ``SnapshotManager`` this holds no disk state: a cold miss
-    after a restart costs one background cycle, not a 12-week rebuild, so the
-    persistence machinery that protects the main snapshot is not needed here.
+    makes. Unlike ``SnapshotManager`` this does not block on disk state at
+    startup -- it seeds from ``cache_path`` (if given) synchronously in
+    ``__init__`` so a cold start still serves the last-known payload instead
+    of a blank/loading state, then keeps writing after every successful
+    background refresh. This stays a bolt-on store, not a merge into
+    ``SnapshotManager``: ``ab_test.py``'s own module docstring requires this
+    layer to remain independent of the weekly snapshot pipeline's enrichment
+    gate.
     """
 
     def __init__(
@@ -317,16 +342,26 @@ class _AbTestBackgroundCache:
         *,
         interval_seconds: float = 300.0,
         monotonic: Callable[[], float] = time.monotonic,
+        cache_path: Path | None = None,
     ) -> None:
         self._loader = loader
         self._interval_seconds = interval_seconds
         self._monotonic = monotonic
+        self._cache_path = cache_path
         self._lock = threading.Lock()
         self._payload: dict[str, object] | None = None
         self._last_success_at: float | None = None
         self._last_error_code: str | None = None
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
+        if cache_path is not None:
+            try:
+                cached = load_ab_test_cache(cache_path)
+            except AbTestCacheError:
+                emit_event("ab_test_cache_load_ignored", code="invalid_cache")
+                cached = None
+            if cached is not None:
+                self._payload = cached.payload
 
     def start(self) -> None:
         self._thread.start()
@@ -353,6 +388,18 @@ class _AbTestBackgroundCache:
             self._last_success_at = self._monotonic()
             self._last_error_code = None
         emit_event("ab_test_background_refresh_success")
+        if self._cache_path is not None:
+            try:
+                write_ab_test_cache(
+                    self._cache_path,
+                    CachedAbTestSnapshot(
+                        generated_at=_utc_iso(datetime.now(timezone.utc)),
+                        arms_key="default",
+                        payload=payload,
+                    ),
+                )
+            except AbTestCacheError:
+                emit_event("ab_test_cache_write_ignored", code="write_failed")
 
     def get(self) -> tuple[dict[str, object] | None, str | None]:
         with self._lock:
@@ -397,6 +444,9 @@ def create_app(
     app.state.narration_cache = _TraceExplainCache()
     app.state.ab_test_cache = _TraceExplainCache(
         ttl_seconds=_AB_TEST_CACHE_TTL_SECONDS
+    )
+    app.state.model_list_cache = _TraceExplainCache(
+        ttl_seconds=_MODEL_LIST_CACHE_TTL_SECONDS
     )
 
     @app.middleware("http")
@@ -603,10 +653,15 @@ def create_app(
             return JSONResponse(
                 {"detail": {"code": "invalid_query"}}, status_code=400
             )
-        window_start, window_end = parsed
+        window_start, window_end, arms = parsed
         # A wide window costs hundreds of trace pages, and the reader pans
-        # across the same window repeatedly. Cache on the exact bounds.
-        cache_key = f"{_utc_iso(window_start)}|{_utc_iso(window_end)}"
+        # across the same window repeatedly. Cache on the exact bounds and
+        # the selected arms, since the same window can be re-queried with a
+        # different model pair.
+        cache_key = (
+            f"{_utc_iso(window_start)}|{_utc_iso(window_end)}"
+            f"|{','.join(arms) if arms is not None else ''}"
+        )
         cached = app.state.ab_test_cache.get(cache_key)
         if cached is not _TRACE_EXPLAIN_CACHE_MISS:
             return JSONResponse(cached)
@@ -624,6 +679,7 @@ def create_app(
                 _trace_explain_taxonomy(),
                 csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
                 deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+                arms=arms,
             )
         except LangfuseAPIError:
             return JSONResponse(
@@ -632,6 +688,50 @@ def create_app(
         payload = _ab_test_payload(snapshot)
         app.state.ab_test_cache.set(cache_key, payload)
         return JSONResponse(payload)
+
+    @app.get("/api/ab-test/models")
+    def ab_test_models(request: Request):
+        # Deliberately sync, same reasoning as trace-explain: live Langfuse
+        # calls must run in FastAPI's threadpool, not the shared event loop.
+        langfuse_client = getattr(request.app.state, "langfuse_client", None)
+        if langfuse_client is None:
+            return JSONResponse(
+                {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+            )
+        now = datetime.now(timezone.utc)
+        cached = app.state.model_list_cache.get("recent_models")
+        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+            recent_models = cached
+        else:
+            try:
+                recent_models = list_recent_models(
+                    langfuse_client,
+                    now=now,
+                    deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+                )
+            except LangfuseAPIError:
+                return JSONResponse(
+                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                )
+            app.state.model_list_cache.set("recent_models", recent_models)
+
+        results = []
+        for model in recent_models[:_AB_TEST_MODEL_LIST_LIMIT]:
+            entry = _get_or_discover_first_seen(
+                langfuse_client,
+                runtime_directory,
+                model,
+                now=now,
+                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+            )
+            results.append(
+                {
+                    "model": model,
+                    "first_seen": entry.first_seen,
+                    "confirmed": entry.confirmed,
+                }
+            )
+        return JSONResponse({"models": results})
 
     @app.get("/api/ab-test/default")
     async def ab_test_default():
@@ -1073,18 +1173,49 @@ def main(argv: Sequence[str] | None = None) -> int:
         app.state.langfuse_client = client
 
         def load_ab_test_default() -> dict[str, object]:
-            window_start, window_end = default_window(datetime.now(timezone.utc))
+            now = datetime.now(timezone.utc)
+            deadline = time.monotonic() + _AB_TEST_DEADLINE_SECONDS
+            arms: tuple[str, ...] | None = None
+            window_start, window_end = default_window(now)
+            try:
+                recent_models = list_recent_models(client, now=now, deadline=deadline)
+            except LangfuseAPIError:
+                recent_models = []
+            if len(recent_models) >= 2:
+                # Most-active-first: the two arms actually being compared
+                # right now, not an alphabetical or hardcoded pair.
+                arms = tuple(recent_models[:2])
+                first_seen_candidates = []
+                for model in arms:
+                    entry = _get_or_discover_first_seen(
+                        client, runtime_directory, model, now=now, deadline=deadline
+                    )
+                    if entry.first_seen is not None:
+                        first_seen_candidates.append(
+                            datetime.fromisoformat(
+                                entry.first_seen.replace("Z", "+00:00")
+                            )
+                        )
+                if first_seen_candidates:
+                    # The window a true A/B comparison starts once BOTH arms
+                    # have traffic -- the later of the two first-seen times.
+                    window_start = max(first_seen_candidates)
+                    window_end = now
             snapshot = compute_ab_test(
                 client,
                 window_start,
                 window_end,
                 _trace_explain_taxonomy(),
                 csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
-                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+                deadline=deadline,
+                arms=arms,
             )
             return _ab_test_payload(snapshot)
 
-        ab_test_background = _AbTestBackgroundCache(load_ab_test_default)
+        ab_test_background = _AbTestBackgroundCache(
+            load_ab_test_default,
+            cache_path=runtime_directory / _AB_TEST_CACHE_FILENAME,
+        )
         ab_test_background.start()
         app.state.ab_test_background = ab_test_background
         uvicorn.run(
@@ -1186,12 +1317,19 @@ def _utc_iso(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _parse_ab_test_query(request: Request) -> tuple[datetime, datetime] | None:
+def _parse_ab_test_query(
+    request: Request,
+) -> tuple[datetime, datetime, tuple[str, ...] | None] | None:
     items = list(request.query_params.multi_items())
-    if len(items) > 2 or any(name not in {"start", "end"} for name, _value in items):
+    if len(items) > 3 or any(
+        name not in {"start", "end", "arms"} for name, _value in items
+    ):
         return None
-    for _name, value in items:
-        if len(value) > _MAX_QUERY_VALUE_LENGTH:
+    if sum(1 for name, _value in items if name == "arms") > 1:
+        return None
+    for name, value in items:
+        max_length = _AB_TEST_ARMS_VALUE_LENGTH if name == "arms" else _MAX_QUERY_VALUE_LENGTH
+        if len(value) > max_length:
             return None
     values = dict(items)
     if "start" not in values or not values["start"]:
@@ -1226,7 +1364,74 @@ def _parse_ab_test_query(request: Request) -> tuple[datetime, datetime] | None:
         return None
     if window_end - window_start > timedelta(days=_AB_TEST_MAX_WINDOW_DAYS):
         return None
-    return window_start, window_end
+
+    arms: tuple[str, ...] | None = None
+    raw_arms = values.get("arms") or ""
+    if raw_arms:
+        candidates = [item.strip() for item in raw_arms.split(",")]
+        if not candidates or any(not item or len(item) > 200 for item in candidates):
+            return None
+        if len(candidates) > _AB_TEST_MAX_ARMS:
+            return None
+        if len(set(candidates)) != len(candidates):
+            return None
+        arms = tuple(candidates)
+
+    return window_start, window_end, arms
+
+
+def _get_or_discover_first_seen(
+    client: LangfuseClient,
+    runtime_directory: Path | None,
+    model: str,
+    *,
+    now: datetime,
+    deadline: float | None,
+) -> CachedModelSeen:
+    """Cached first-seen lookup for one model, discovering on a cold/failed miss.
+
+    A previously confirmed (or found) entry is trusted forever -- a model's
+    first appearance never changes. Only a total prior failure (no candidate
+    and not confirmed) is retried.
+    """
+
+    cache_path = (
+        runtime_directory / _MODEL_SEEN_CACHE_FILENAME
+        if runtime_directory is not None
+        else None
+    )
+    seen_cache: ModelSeenCache | None = None
+    if cache_path is not None:
+        try:
+            seen_cache = load_model_seen_cache(cache_path)
+        except ModelSeenCacheError:
+            emit_event("model_seen_cache_load_ignored", code="invalid_cache")
+            seen_cache = None
+    if seen_cache is None:
+        seen_cache = ModelSeenCache(entries={})
+
+    entry = seen_cache.get(model)
+    if entry is not None and (entry.first_seen is not None or entry.confirmed):
+        return entry
+
+    try:
+        first_seen, confirmed = discover_first_seen(
+            client, model, now=now, deadline=deadline
+        )
+    except Exception:
+        first_seen, confirmed = None, False
+    entry = CachedModelSeen(
+        model=model,
+        first_seen=_utc_iso(first_seen) if first_seen is not None else None,
+        confirmed=confirmed,
+        checked_at=_utc_iso(now),
+    )
+    if cache_path is not None:
+        try:
+            write_model_seen_cache(cache_path, seen_cache.with_entry(entry))
+        except ModelSeenCacheError:
+            emit_event("model_seen_cache_write_ignored", code="write_failed")
+    return entry
 
 
 def _csat_buckets_by_ticket(
@@ -1516,6 +1721,8 @@ def _validated_runtime_directory(value: Path) -> Path:
             or entry.name == _CSAT_CACHE_FILENAME
             or entry.name == _RECONCILIATION_CACHE_FILENAME
             or entry.name == _ENTRY_COVERAGE_CACHE_FILENAME
+            or entry.name == _MODEL_SEEN_CACHE_FILENAME
+            or entry.name == _AB_TEST_CACHE_FILENAME
             or entry.name == _FRESHDESK_COOKIE_FILENAME
             or entry.name == _FRESHDESK_COOKIE_STATE_FILENAME
             or _TEMP_SNAPSHOT_NAME.fullmatch(entry.name) is not None
