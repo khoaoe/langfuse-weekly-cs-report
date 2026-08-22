@@ -205,7 +205,7 @@ def test_one_ai_turn0_without_transfer_is_ai_end_to_end():
     assert result.reopen_within_7d == 0
 
 
-def test_later_ai_turns_preserve_ai_end_to_end_and_count_reopen_once():
+def test_later_ai_turns_preserve_ai_end_to_end_and_count_each_reopen():
     result = classified(
         trace("t0", "session-1", 0, TURN0, "Giao dịch đang xử lý"),
         trace("t1", "session-1", 1, "2026-07-21T02:00:00Z", "Đã kiểm tra giao dịch"),
@@ -213,7 +213,7 @@ def test_later_ai_turns_preserve_ai_end_to_end_and_count_reopen_once():
     )
     assert result.outcome == "ai_end_to_end"
     assert result.ai_reply_count == 3
-    assert result.reopen_lifetime == 1
+    assert result.reopen_lifetime == 2
 
 
 def test_later_transfer_is_ai_then_cs_and_not_an_ai_reply():
@@ -262,7 +262,7 @@ def test_friday_turn0_counts_weekend_followups_and_later_transfer():
     )
     assert result.cohort_status == "complete"
     assert result.outcome == "ai_then_cs"
-    assert result.reopen_lifetime == 1
+    assert result.reopen_lifetime == 2
     assert result.ai_reply_count == 2
 
 
