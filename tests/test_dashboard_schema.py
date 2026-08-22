@@ -1149,7 +1149,7 @@ def test_storage_rejects_reopen_count_and_displayed_rate_drift():
     value = _snapshot().storage_dict()
     lifetime = value["dashboard"]["views"]["mon_sun"]["reopen"]["lifetime"]
     lifetime["numerator"] = lifetime["denominator"] + 1
-    with pytest.raises(ValueError, match="reopen numerator exceeds denominator"):
+    with pytest.raises(ValueError, match="weekly lifetime does not reconcile"):
         DashboardSnapshot.from_storage_dict(value)
 
     value = _snapshot().storage_dict()
@@ -1674,9 +1674,12 @@ def test_storage_rejects_phone_in_a_new_dimension_field_and_schema_v5():
         DashboardSnapshot.from_storage_dict(value)
 
 
-def test_ticket_row_reopen_is_binary_and_gt4_is_cross_field_checked():
+def test_ticket_row_reopen_is_a_nonnegative_count_and_gt4_is_cross_field_checked():
     fields = asdict(_snapshot().tickets[0])
     fields["reopen_lifetime"] = 2
+    TicketRow(**fields)
+    fields = asdict(_snapshot().tickets[0])
+    fields["reopen_lifetime"] = -1
     with pytest.raises(ValueError, match="reopen_lifetime"):
         TicketRow(**fields)
     fields = asdict(_snapshot().tickets[0])

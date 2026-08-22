@@ -10,7 +10,7 @@ import type {
   WeeklyReportRow,
 } from "../lib/dashboard-schema";
 import type { TicketFilterKey, TicketFilters } from "../lib/dashboard-filters";
-import { niceVolumeTicks } from "../lib/chart-scale";
+import { niceRateTicks, niceVolumeTicks } from "../lib/chart-scale";
 import {
   formatCount,
   formatRate,
@@ -49,7 +49,6 @@ const CHART_HEIGHT = 220;
 const MARGIN = { top: 12, right: 16, bottom: 28, left: 56 } as const;
 const INNER_WIDTH = CHART_WIDTH - MARGIN.left - MARGIN.right;
 const INNER_HEIGHT = CHART_HEIGHT - MARGIN.top - MARGIN.bottom;
-const TICK_COUNT = 4;
 
 const SEGMENT_DIMENSIONS = [
   { key: "issue_category", label: "Category" },
@@ -139,13 +138,6 @@ const DEFAULT_SEGMENT_SORT: TableSort<SegmentSortKey> = {
   key: "total",
   direction: "desc",
 };
-
-function ticks(count: number): number[] {
-  return Array.from(
-    { length: TICK_COUNT + 1 },
-    (_, index) => (index * count) / TICK_COUNT,
-  );
-}
 
 function tooltipAnchor(clientX: number, bounds: DOMRect): number {
   if (bounds.width <= 0) {
@@ -243,8 +235,16 @@ function TrendPanels({
     domain: [0, volumeCeiling],
     range: [INNER_HEIGHT, 0],
   });
+  const maxRate = Math.max(
+    1,
+    ...observed.map((week) =>
+      Math.max(week.ai_first_rate, week.reopen_lifetime_rate ?? 0),
+    ),
+  );
+  const rateTicks = niceRateTicks(maxRate);
+  const rateCeiling = rateTicks.at(-1) ?? 1;
   const rateY = scaleLinear<number>({
-    domain: [0, 1],
+    domain: [0, rateCeiling],
     range: [INNER_HEIGHT, 0],
     clamp: true,
   });
@@ -444,12 +444,14 @@ function TrendPanels({
           >
           <title id="trend-rate-title">Tỷ lệ AI First và reopen theo tuần</title>
           <desc id="trend-rate-desc">
-            Hai đường dùng chung trục phần trăm từ 0 đến 100. Đường liền là AI
-            First, đường nét đứt là reopen sau AI First. Volume nằm ở biểu đồ
-            phía trên để tránh hai trục trong một khung.
+            {[
+              `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${formatRateAxis(rateCeiling)} để vừa cả tuần cao điểm nhất.`,
+              "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
+              "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
+            ].join(" ")}
           </desc>
           <g transform={`translate(${MARGIN.left} ${MARGIN.top})`}>
-            {ticks(1).map((tick) => (
+            {rateTicks.map((tick) => (
               <g key={tick}>
                 <line
                   className={trendStyles.gridLine}

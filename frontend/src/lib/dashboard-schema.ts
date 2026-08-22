@@ -4,6 +4,8 @@ const nonNegativeInteger = z.number().int().nonnegative();
 const positiveInteger = z.number().int().positive();
 const nonNegativeNumber = z.number().finite().nonnegative();
 const rate = z.number().finite().min(0).max(1);
+// reopen_lifetime is a per-ticket count, so its mean across tickets can exceed 1.0.
+const nonNegativeRatio = z.number().finite().min(0);
 const safeLabel = z.string().min(1).max(256);
 const nullableSafeLabel = safeLabel.nullable();
 const TicketIdSchema = z.string().regex(/^[1-9]\d{0,19}$/);
@@ -200,7 +202,7 @@ export const WeeklyReportRowSchema = z
     unclassified_count: nonNegativeInteger,
     reopen_7d_rate: rate.nullable(),
     reopen_7d_denominator: nonNegativeInteger.nullable(),
-    reopen_lifetime_rate: rate.nullable(),
+    reopen_lifetime_rate: nonNegativeRatio.nullable(),
     reopen_lifetime_numerator: nonNegativeInteger,
     reopen_lifetime_denominator: nonNegativeInteger,
     ai_reply_mean_ai_first: nonNegativeNumber.nullable(),
@@ -546,7 +548,7 @@ const SamePeriodWeekSchema = z
     total_tickets: nonNegativeInteger,
     ai_first_count: nonNegativeInteger,
     ai_first_rate: rate,
-    reopen_lifetime_rate: rate.nullable(),
+    reopen_lifetime_rate: nonNegativeRatio.nullable(),
     reopen_lifetime_numerator: nonNegativeInteger,
     reopen_lifetime_denominator: nonNegativeInteger,
   })
@@ -566,13 +568,6 @@ const SamePeriodWeekSchema = z
         code: "custom",
         path: ["ai_first_rate"],
         message: "AI First rate must match count divided by total.",
-      });
-    }
-    if (value.reopen_lifetime_numerator > value.reopen_lifetime_denominator) {
-      context.addIssue({
-        code: "custom",
-        path: ["reopen_lifetime_numerator"],
-        message: "Reopen numerator exceeds denominator.",
       });
     }
     const expectedReopenRate =
@@ -603,7 +598,7 @@ const SamePeriodSchema = z
       .object({
         weeks_used: z.number().int().min(2).max(4),
         ai_first_rate: rate,
-        reopen_lifetime_rate: rate.nullable(),
+        reopen_lifetime_rate: nonNegativeRatio.nullable(),
       })
       .strict(),
     by_week: z.record(WeekStringSchema, SamePeriodWeekSchema),
@@ -1323,7 +1318,7 @@ export const TicketRowSchema = z
     outcome: OutcomeSchema,
     ai_first: z.boolean(),
     transferred: z.boolean(),
-    reopen_lifetime: z.union([z.literal(0), z.literal(1), z.null()]),
+    reopen_lifetime: nonNegativeInteger.nullable(),
     reopen_within_7d: z.union([z.literal(0), z.literal(1), z.null()]),
     ai_reply_count: nonNegativeInteger,
     turn_count: positiveInteger,

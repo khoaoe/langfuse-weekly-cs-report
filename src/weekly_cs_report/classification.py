@@ -202,6 +202,27 @@ def _is_malformed_output(output: object) -> bool:
     return not isinstance(output, Mapping) or not isinstance(output.get("response"), str)
 
 
+def _count_reopens(
+    followups: Sequence[TraceRecord], canonical_text: str | Sequence[str]
+) -> int:
+    """Count distinct times the customer came back after an AI response.
+
+    A burst of consecutive follow-up traces that all land before the next
+    substantive AI response is one reopen, however many messages it took --
+    matching how a human reading the ticket would count "the customer wrote
+    back again", not "we handled N more inbound messages".
+    """
+    count = 0
+    awaiting_new_reopen = True
+    for item in followups:
+        if awaiting_new_reopen:
+            count += 1
+            awaiting_new_reopen = False
+        if is_substantive_ai_response(item.output_data, canonical_text):
+            awaiting_new_reopen = True
+    return count
+
+
 def _first_classifiable_trace(
     traces: Sequence[TraceRecord], canonical_text: str | Sequence[str]
 ) -> tuple[int, TraceRecord, bool] | None:
@@ -295,7 +316,7 @@ def classify_session(
         else ordered[1:]
     )
     if ai_first:
-        reopen_lifetime = int(bool(followups))
+        reopen_lifetime = _count_reopens(followups, canonical_text)
         reopen_within_7d = int(
             any(
                 timedelta() < item.timestamp - first.timestamp <= timedelta(hours=168)

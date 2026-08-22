@@ -1433,7 +1433,7 @@ def _segments(
             bucket["total"] += 1
             bucket["ai_first"] += int(session.ai_first)
             bucket["transferred"] += int(session.transferred)
-            bucket["reopen"] += int(session.reopen_lifetime == 1)
+            bucket["reopen"] += session.reopen_lifetime or 0
         # The missing bucket is always present, making the consumer's closure
         # logic deterministic even when this run happens to have no missing
         # data. `skill` uses its own always-present "chưa ghi nhận" bucket
@@ -1869,8 +1869,6 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
             raise ValueError(f"{name} is invalid")
     _nullable_nonnegative_int(ticket.reopen_lifetime, "reopen_lifetime")
     _nullable_nonnegative_int(ticket.reopen_within_7d, "reopen_within_7d")
-    if ticket.reopen_lifetime not in {None, 0, 1}:
-        raise ValueError("reopen_lifetime is invalid")
     if ticket.reopen_within_7d not in {None, 0, 1}:
         raise ValueError("reopen_within_7d is invalid")
     _nonnegative_int(ticket.ai_reply_count, "ai_reply_count")
@@ -2016,7 +2014,7 @@ def _validate_view(value: object, expected_definition: str) -> None:
             f"view.reopen.{name}",
         )
         counts = _require_mapping(reopen[name], f"view.reopen.{name}")
-        if counts["numerator"] > counts["denominator"]:
+        if name == "within_7d" and counts["numerator"] > counts["denominator"]:
             raise ValueError("reopen numerator exceeds denominator")
     _validate_weekly(view["weekly"], expected_definition)
     lifetime_counts = _require_mapping(
@@ -2537,7 +2535,7 @@ def _validate_same_period(
         baseline["ai_first_rate"],
         "view.same_period.baseline.ai_first_rate",
     )
-    baseline_reopen_rate = _nullable_rate(
+    baseline_reopen_rate = _nullable_nonnegative_ratio(
         baseline["reopen_lifetime_rate"],
         "view.same_period.baseline.reopen_lifetime_rate",
     )
@@ -2635,9 +2633,7 @@ def _validate_same_period_week(
         item["reopen_lifetime_denominator"],
         f"{name}.reopen_lifetime_denominator",
     )
-    if reopen_numerator > reopen_denominator:
-        raise ValueError(f"{name}.reopen numerator exceeds denominator")
-    reopen_rate = _nullable_rate(
+    reopen_rate = _nullable_nonnegative_ratio(
         item["reopen_lifetime_rate"],
         f"{name}.reopen_lifetime_rate",
     )
@@ -3103,7 +3099,7 @@ def _validate_weekly(value: object, expected_definition: str) -> None:
             raise ValueError("weekly ai_first_rate does not match division")
         _nullable_rate(item["reopen_7d_rate"], "weekly reopen_7d_rate")
         _nullable_nonnegative_int(item["reopen_7d_denominator"], "weekly reopen_7d_denominator")
-        _nullable_rate(item["reopen_lifetime_rate"], "weekly reopen_lifetime_rate")
+        _nullable_nonnegative_ratio(item["reopen_lifetime_rate"], "weekly reopen_lifetime_rate")
         reopen_7d_rate = item["reopen_7d_rate"]
         reopen_7d_denominator = item["reopen_7d_denominator"]
         if reopen_7d_denominator in {None, 0}:
@@ -3116,8 +3112,6 @@ def _validate_weekly(value: object, expected_definition: str) -> None:
             raise ValueError("weekly reopen_7d_rate does not match division")
         lifetime_numerator = item["reopen_lifetime_numerator"]
         lifetime_denominator = item["reopen_lifetime_denominator"]
-        if lifetime_numerator > lifetime_denominator:
-            raise ValueError("weekly reopen numerator exceeds denominator")
         expected_lifetime_rate = (
             lifetime_numerator / lifetime_denominator
             if lifetime_denominator
@@ -3383,6 +3377,18 @@ def _rate(value: object, name: str) -> float:
 
 def _nullable_rate(value: object, name: str) -> float | None:
     return None if value is None else _rate(value, name)
+
+
+def _nonnegative_ratio(value: object, name: str) -> float:
+    """A ratio that, unlike ``_rate``, is not capped at 1 -- reopen_lifetime is
+    now a per-ticket count, so its mean across tickets can exceed 1.0."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
+        raise ValueError(f"{name} must be a non-negative ratio")
+    return float(value)
+
+
+def _nullable_nonnegative_ratio(value: object, name: str) -> float | None:
+    return None if value is None else _nonnegative_ratio(value, name)
 
 
 def _nullable_nonnegative_number(value: object, name: str) -> float | None:
