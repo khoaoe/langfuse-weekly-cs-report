@@ -4,8 +4,19 @@
   font-size: 13px;
 }
 
-.rangeDetails {
+.rangeRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
   margin-bottom: var(--space-3);
+}
+
+.rangeRow .rangeDetails {
+  flex: 1 1 280px;
+  margin-bottom: 0;
+}
+
+.rangeDetails {
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface);
@@ -26,17 +37,17 @@
   flex-wrap: wrap;
   align-items: end;
   gap: var(--space-3);
-  width: fit-content;
-  max-width: 100%;
   padding: var(--space-3);
   border-top: 1px solid var(--rule);
 }
 
 .rangeField {
-  display: grid;
-  gap: var(--space-1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   color: var(--muted);
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .rangeField input,

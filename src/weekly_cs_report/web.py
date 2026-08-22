@@ -55,6 +55,12 @@ from .explain_context import load_explain_config
 from .narration_validator import validate as validate_narration
 from .langfuse_client import LangfuseAPIError, LangfuseClient
 from .model_discovery import discover_first_seen, list_recent_models
+from .model_list_cache import (
+    CachedModelList,
+    ModelListCacheError,
+    load_model_list_cache,
+    write_model_list_cache,
+)
 from .model_seen_cache import (
     CachedModelSeen,
     ModelSeenCache,
@@ -166,6 +172,8 @@ _RECONCILIATION_CACHE_FILENAME = "outcome_reconciliation_cache.json"
 _ENTRY_COVERAGE_CACHE_FILENAME = "entry_coverage_cache.json"
 _MODEL_SEEN_CACHE_FILENAME = "model_seen_cache.json"
 _AB_TEST_CACHE_FILENAME = "ab_test_snapshot_cache.json"
+_MODEL_LIST_CACHE_FILENAME = "model_list_cache.json"
+_MODEL_LIST_BACKGROUND_INTERVAL_SECONDS = 300.0
 _FRESHDESK_COOKIE_FILENAME = "freshdesk_cookie"
 _FRESHDESK_COOKIE_STATE_FILENAME = "freshdesk_cookie_state.json"
 _TEMP_SNAPSHOT_NAME = re.compile(r"\.dashboard_snapshot\..+\.tmp\Z")
@@ -406,6 +414,83 @@ class _AbTestBackgroundCache:
             return self._payload, self._last_error_code
 
 
+class _ModelListBackgroundCache:
+    """Refreshes the AB-test model picker's candidate list on its own schedule.
+
+    `list_recent_models` pages every ticket trace in its lookback window (see
+    `model_discovery.py`'s module docstring for why it must read the
+    ticket-scoped `model_core` field rather than a cheap aggregation query) --
+    too expensive to run inline on the request that opens the picker. This
+    mirrors `_AbTestBackgroundCache`: seed from disk at startup so a cold
+    start still serves the last-known list, then keep writing after every
+    successful background refresh.
+    """
+
+    def __init__(
+        self,
+        loader: Callable[[], list[str]],
+        *,
+        interval_seconds: float = _MODEL_LIST_BACKGROUND_INTERVAL_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+        cache_path: Path | None = None,
+    ) -> None:
+        self._loader = loader
+        self._interval_seconds = interval_seconds
+        self._monotonic = monotonic
+        self._cache_path = cache_path
+        self._lock = threading.Lock()
+        self._models: list[str] | None = None
+        self._last_success_at: float | None = None
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        if cache_path is not None:
+            try:
+                cached = load_model_list_cache(cache_path)
+            except ModelListCacheError:
+                emit_event("model_list_cache_load_ignored", code="invalid_cache")
+                cached = None
+            if cached is not None:
+                self._models = list(cached.models)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._refresh_once()
+            self._stop_event.wait(self._interval_seconds)
+
+    def _refresh_once(self) -> None:
+        try:
+            models = self._loader()
+        except Exception:
+            emit_event("model_list_background_refresh_failure")
+            return
+        with self._lock:
+            self._models = models
+            self._last_success_at = self._monotonic()
+        emit_event("model_list_background_refresh_success")
+        if self._cache_path is not None:
+            try:
+                write_model_list_cache(
+                    self._cache_path,
+                    CachedModelList(
+                        generated_at=_utc_iso(datetime.now(timezone.utc)),
+                        models=tuple(models),
+                    ),
+                )
+            except ModelListCacheError:
+                emit_event("model_list_cache_write_ignored", code="write_failed")
+
+    def get(self) -> list[str] | None:
+        with self._lock:
+            return None if self._models is None else list(self._models)
+
+
 def create_app(
     manager: SnapshotManager,
     *,
@@ -423,6 +508,11 @@ def create_app(
                 background = getattr(app.state, "ab_test_background", None)
                 if background is not None:
                     background.close()
+                model_list_background = getattr(
+                    app.state, "model_list_background", None
+                )
+                if model_list_background is not None:
+                    model_list_background.close()
                 client = getattr(app.state, "langfuse_client", None)
                 if client is not None:
                     client.close()
@@ -699,21 +789,33 @@ def create_app(
                 {"detail": {"code": "langfuse_unavailable"}}, status_code=503
             )
         now = datetime.now(timezone.utc)
-        cached = app.state.model_list_cache.get("recent_models")
-        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
-            recent_models = cached
+        model_list_background = getattr(
+            request.app.state, "model_list_background", None
+        )
+        background_models = (
+            None if model_list_background is None else model_list_background.get()
+        )
+        if background_models is not None:
+            # Already computed by the background refresh loop -- instant,
+            # never blocks on the 14-day ticket trace scan `list_recent_models`
+            # needs to stay correctly scoped to `model_core`.
+            recent_models = background_models
         else:
-            try:
-                recent_models = list_recent_models(
-                    langfuse_client,
-                    now=now,
-                    deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
-                )
-            except LangfuseAPIError:
-                return JSONResponse(
-                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
-                )
-            app.state.model_list_cache.set("recent_models", recent_models)
+            cached = app.state.model_list_cache.get("recent_models")
+            if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+                recent_models = cached
+            else:
+                try:
+                    recent_models = list_recent_models(
+                        langfuse_client,
+                        now=now,
+                        deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+                    )
+                except LangfuseAPIError:
+                    return JSONResponse(
+                        {"detail": {"code": "langfuse_unavailable"}}, status_code=503
+                    )
+                app.state.model_list_cache.set("recent_models", recent_models)
 
         results = []
         for model in recent_models[:_AB_TEST_MODEL_LIST_LIMIT]:
@@ -1218,6 +1320,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         ab_test_background.start()
         app.state.ab_test_background = ab_test_background
+
+        def load_recent_models() -> list[str]:
+            return list_recent_models(
+                client,
+                now=datetime.now(timezone.utc),
+                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+            )
+
+        model_list_background = _ModelListBackgroundCache(
+            load_recent_models,
+            cache_path=runtime_directory / _MODEL_LIST_CACHE_FILENAME,
+        )
+        model_list_background.start()
+        app.state.model_list_background = model_list_background
         uvicorn.run(
             app,
             host=host,
@@ -1238,6 +1354,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     background = getattr(app.state, "ab_test_background", None)
                     if background is not None:
                         background.close()
+                    model_list_background = getattr(
+                        app.state, "model_list_background", None
+                    )
+                    if model_list_background is not None:
+                        model_list_background.close()
             finally:
                 client.close()
     return 0
@@ -1723,6 +1844,7 @@ def _validated_runtime_directory(value: Path) -> Path:
             or entry.name == _ENTRY_COVERAGE_CACHE_FILENAME
             or entry.name == _MODEL_SEEN_CACHE_FILENAME
             or entry.name == _AB_TEST_CACHE_FILENAME
+            or entry.name == _MODEL_LIST_CACHE_FILENAME
             or entry.name == _FRESHDESK_COOKIE_FILENAME
             or entry.name == _FRESHDESK_COOKIE_STATE_FILENAME
             or _TEMP_SNAPSHOT_NAME.fullmatch(entry.name) is not None
