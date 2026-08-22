@@ -2,17 +2,30 @@ from __future__ import annotations
 
 """Discover which models are active and when each first appeared.
 
-Both queries reuse the exact `fetch_metrics`/`providedModelName` shape already
-proven in `ab_test.py`'s own LLM enrichment (`_llm_metrics_query_hourly`) --
-this module just asks a different question of the same endpoint: not "how did
-each arm perform this window" but "which arms exist, and since when".
+`discover_first_seen` reuses the exact `fetch_metrics`/`providedModelName`
+shape already proven in `ab_test.py`'s own LLM enrichment
+(`_llm_metrics_query_hourly`) -- cheap, since it only needs one model's
+earliest hour bucket.
+
+`list_recent_models` deliberately does NOT use that same dimension. Langfuse's
+`providedModelName` covers every LLM call logged to the project, including
+calls that never answer a ticket (guardrail checks, routing, other sub-steps
+inside a ticket's trace). A model that only ever appears in those calls would
+still show up as an AB-test candidate and then match zero tickets once
+selected, since `ab_test.py` filters tickets by `input.model_info.model_core`
+-- a different, already-ticket-scoped field. `list_recent_models` reads that
+same field directly off ticket traces, via `_extract_arm`, so every candidate
+it offers is guaranteed to have matching ticket data.
 """
 
+from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from typing import Sequence
 
-from .ab_test import _as_int
+from .ab_test import _as_int, _extract_arm
+from .classification import normalize_trace
 from .langfuse_client import LangfuseClient
+from .models import QualityIssue
 
 # Expanding backward-looking rounds: cheap first, only paying for a wider
 # scan when the model's first occurrence isn't confidently inside a narrower
@@ -101,6 +114,9 @@ def discover_first_seen(
     return candidate, False
 
 
+_RECENT_MODELS_TRACE_FIELDS = "core,io"
+
+
 def list_recent_models(
     client: LangfuseClient,
     *,
@@ -108,26 +124,28 @@ def list_recent_models(
     lookback_days: int = _RECENT_MODELS_LOOKBACK_DAYS,
     deadline: float | None = None,
 ) -> list[str]:
-    """Model names with observation traffic in the recent window, most
-    active first -- the candidate list the AB test picker offers."""
+    """Ticket-attributed arms with traffic in the recent window, most active
+    first -- the candidate list the AB test picker offers.
+
+    Counts distinct tickets per arm (`input.model_info.model_core`), not raw
+    trace rows -- a multi-turn ticket must not outweigh a single-turn one.
+    """
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
     window_start = now - timedelta(days=lookback_days)
-    query = {
-        "view": "observations",
-        "metrics": [{"measure": "count", "aggregation": "count"}],
-        "dimensions": [{"field": "providedModelName"}],
-        "fromTimestamp": _iso(window_start),
-        "toTimestamp": _iso(now),
-    }
-    rows = client.fetch_metrics(query, deadline=deadline)
-    counted: list[tuple[str, int]] = []
-    for row in rows:
-        if not isinstance(row, dict):
+    tickets_by_arm: dict[str, set[str]] = defaultdict(set)
+    for raw in client.iter_traces(
+        window_start, now, deadline=deadline, fields=_RECENT_MODELS_TRACE_FIELDS
+    ):
+        record = normalize_trace(dict(raw))
+        if isinstance(record, QualityIssue):
             continue
-        model = row.get("providedModelName")
-        if not isinstance(model, str) or not model:
+        arm = _extract_arm(raw.get("input"))
+        if arm is None:
             continue
-        counted.append((model, _as_int(row.get("count_count"))))
-    counted.sort(key=lambda item: (-item[1], item[0]))
-    return [model for model, _count in counted]
+        tickets_by_arm[arm].add(record.session_id)
+    ranked = sorted(
+        ((arm, len(tickets)) for arm, tickets in tickets_by_arm.items()),
+        key=lambda item: (-item[1], item[0]),
+    )
+    return [arm for arm, _count in ranked]
