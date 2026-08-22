@@ -88,3 +88,30 @@ export function parseAbTestSnapshot(
   }
   return { ok: true, data: parsed.data };
 }
+
+const ModelSeenEntrySchema = z
+  .object({
+    model: z.string(),
+    first_seen: z.string().nullable(),
+    confirmed: z.boolean(),
+  })
+  .strict();
+
+export const AbTestModelsSchema = z
+  .object({
+    models: z.array(ModelSeenEntrySchema),
+  })
+  .strict();
+
+export type ModelSeenEntry = z.infer<typeof ModelSeenEntrySchema>;
+export type AbTestModels = z.infer<typeof AbTestModelsSchema>;
+
+export function parseAbTestModels(
+  value: unknown,
+): SafeParseResult<AbTestModels> {
+  const parsed = AbTestModelsSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, message: "Không thể đọc danh sách model." };
+  }
+  return { ok: true, data: parsed.data };
+}

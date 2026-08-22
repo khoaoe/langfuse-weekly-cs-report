@@ -7,8 +7,10 @@ import {
   DashboardRequestError,
   fetchAbTest,
   fetchAbTestDefault,
+  fetchAbTestModels,
 } from "../lib/api";
 import {
+  parseAbTestModels,
   parseAbTestSnapshot,
   type AbTestSnapshot,
   type DailyArmPoint,
@@ -450,7 +452,11 @@ function ComparisonTable({
   let lastGroup = "";
   return (
     <div className={abTestStyles.chartCard}>
-      <h3 className={abTestStyles.tableTitle}>So sánh 2 model</h3>
+      <h3 className={abTestStyles.tableTitle}>
+        {arms.length === 2
+          ? `So sánh ${shortArmLabel(arms[0] as string)} với ${shortArmLabel(arms[1] as string)}`
+          : "So sánh model"}
+      </h3>
       <div className={styles.tableScroll}>
       <table className={styles.table}>
         <thead>
@@ -689,19 +695,62 @@ export function AbTestSection({
     () => typeof window !== "undefined" && window.location.hash === "#ab-test",
   );
   const [override, setOverride] = useState<WindowValue | null>(null);
+  // null = defer to the server's own default arm selection (the two models
+  // it found overlapping most recently). Set only once the reader picks a
+  // pair through the model picker below.
+  const [armsOverride, setArmsOverride] = useState<readonly [string, string] | null>(
+    null,
+  );
   const defaultWindow = useMemo(
     () => defaultWindowFromReportScope(selectedReportWeeks, weekDefinition),
     [selectedReportWeeks, weekDefinition],
   );
-  const effectiveWindow = override ?? defaultWindow;
+
+  // Discovers which models have recent traffic and each one's first-seen
+  // timestamp -- feeds both the picker's option list and the auto window
+  // below. Runs every time the panel opens, per product decision (cheap:
+  // served from the server's own cache after the first live discovery).
+  const modelsQuery = useQuery({
+    queryKey: ["ab-test-models"],
+    enabled: open,
+    retry: false,
+    queryFn: async ({ signal }) => {
+      const parsed = parseAbTestModels(await fetchAbTestModels(signal));
+      if (!parsed.ok) {
+        throw new Error(parsed.message);
+      }
+      return parsed.data;
+    },
+  });
+
+  // When the reader picks a pair, the window defaults to when both models
+  // first ran side by side -- the true start of that comparison -- rather
+  // than the report's own date range, which usually predates either model.
+  const armsAutoWindow = useMemo<WindowValue | null>(() => {
+    if (armsOverride === null) {
+      return null;
+    }
+    const models = modelsQuery.data?.models ?? [];
+    const seenTimes = armsOverride
+      .map((model) => models.find((entry) => entry.model === model)?.first_seen)
+      .filter((value): value is string => typeof value === "string")
+      .map((iso) => new Date(iso));
+    if (seenTimes.length === 0) {
+      return null;
+    }
+    const start = new Date(Math.max(...seenTimes.map((date) => date.getTime())));
+    return { start: vietnamDateTimeLocal(start), end: vietnamDateTimeLocal(new Date()) };
+  }, [armsOverride, modelsQuery.data]);
+
+  const effectiveWindow = override ?? armsAutoWindow ?? defaultWindow;
   const startIso = toIsoWithOffset(effectiveWindow.start);
   const endIso = toIsoWithOffset(effectiveWindow.end);
-  const isDefaultView = override === null;
+  const isDefaultView = override === null && armsOverride === null;
 
   // Default view: read the background-refreshed cache (instant, matches the
-  // main dashboard snapshot's trade-off). A custom range still costs a live
-  // Langfuse read, so it keeps the per-request path with its own short-TTL
-  // cache instead.
+  // main dashboard snapshot's trade-off). A custom range or a hand-picked
+  // pair still costs a live Langfuse read, so it keeps the per-request path
+  // with its own short-TTL cache instead.
   const defaultQuery = useQuery({
     queryKey: ["ab-test-default"],
     enabled: open && isDefaultView,
@@ -720,13 +769,20 @@ export function AbTestSection({
     },
   });
 
+  // Falls back to whatever pair the default view last resolved, so a
+  // time-only override (picker untouched) still compares exactly the two
+  // arms the reader was already looking at, not every arm with traffic in
+  // the new window.
+  const liveArms =
+    armsOverride ?? (defaultQuery.data ? defaultQuery.data.arms.map((arm) => arm.arm) : undefined);
+
   const liveQuery = useQuery({
-    queryKey: ["ab-test", startIso, endIso],
+    queryKey: ["ab-test", startIso, endIso, liveArms?.join(",") ?? ""],
     enabled: open && !isDefaultView,
     retry: false,
     queryFn: async ({ signal }) => {
       const parsed = parseAbTestSnapshot(
-        await fetchAbTest(startIso, endIso, signal),
+        await fetchAbTest(startIso, endIso, liveArms, signal),
       );
       if (!parsed.ok) {
         throw new Error(parsed.message);
@@ -789,6 +845,64 @@ export function AbTestSection({
       <div id="ab-test-body">
       <details className={abTestStyles.rangeDetails}>
         <summary className={abTestStyles.rangeSummary}>
+          Chọn model so sánh
+        </summary>
+        <div className={abTestStyles.rangePanel}>
+          {modelsQuery.isLoading ? (
+            <p role="status">Đang dò model…</p>
+          ) : modelsQuery.isError ? (
+            <p role="alert">Không thể tải danh sách model.</p>
+          ) : (
+            <>
+              {([0, 1] as const).map((slot) => {
+                const current = armsOverride?.[slot] ?? liveArms?.[slot] ?? "";
+                const otherSlot = slot === 0 ? 1 : 0;
+                const other = armsOverride?.[otherSlot] ?? liveArms?.[otherSlot];
+                const options = (modelsQuery.data?.models ?? []).filter(
+                  (entry) => entry.model === current || entry.model !== other,
+                );
+                return (
+                  <label className={abTestStyles.rangeField} key={slot}>
+                    {slot === 0 ? "Model A" : "Model B"}
+                    <select
+                      value={current}
+                      onChange={(event) => {
+                        const nextValue = event.target.value;
+                        const nextOther = other ?? "";
+                        const nextPair: [string, string] =
+                          slot === 0 ? [nextValue, nextOther] : [nextOther, nextValue];
+                        setArmsOverride(nextPair);
+                        setOverride(null);
+                      }}
+                    >
+                      {current === "" ? <option value="">— chọn model —</option> : null}
+                      {options.map((entry) => (
+                        <option key={entry.model} value={entry.model}>
+                          {shortArmLabel(entry.model)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
+              {armsOverride !== null ? (
+                <button
+                  type="button"
+                  className={styles.action}
+                  onClick={() => {
+                    setArmsOverride(null);
+                    setOverride(null);
+                  }}
+                >
+                  Dùng lại mặc định
+                </button>
+              ) : null}
+            </>
+          )}
+        </div>
+      </details>
+      <details className={abTestStyles.rangeDetails}>
+        <summary className={abTestStyles.rangeSummary}>
           Điều chỉnh thời gian
         </summary>
         <div className={abTestStyles.rangePanel}>
@@ -800,7 +914,7 @@ export function AbTestSection({
               onChange={(event) =>
                 setOverride({
                   start: event.target.value,
-                  end: override?.end ?? defaultWindow.end,
+                  end: override?.end ?? effectiveWindow.end,
                 })
               }
             />
@@ -812,7 +926,7 @@ export function AbTestSection({
               value={effectiveWindow.end}
               onChange={(event) =>
                 setOverride({
-                  start: override?.start ?? defaultWindow.start,
+                  start: override?.start ?? effectiveWindow.start,
                   end: event.target.value,
                 })
               }
@@ -823,7 +937,7 @@ export function AbTestSection({
             className={styles.action}
             onClick={() =>
               setOverride({
-                start: override?.start ?? defaultWindow.start,
+                start: override?.start ?? effectiveWindow.start,
                 end: vietnamDateTimeLocal(new Date()),
               })
             }
@@ -836,7 +950,7 @@ export function AbTestSection({
               className={styles.action}
               onClick={() => setOverride(null)}
             >
-              Dùng lại Phạm vi báo cáo
+              Dùng lại thời gian mặc định
             </button>
           ) : null}
         </div>
@@ -856,7 +970,11 @@ export function AbTestSection({
           <>
             <p className={abTestStyles.scopeNote}>
               {`${formatCount(data.total_tickets)} ticket · ${windowLabel.start} → ${windowLabel.end}`}
-              {override === null ? " · theo Phạm vi báo cáo" : ""}
+              {isDefaultView
+                ? " · theo Phạm vi báo cáo"
+                : armsOverride !== null
+                  ? " · model tự chọn"
+                  : ""}
             </p>
             {data.unmatched_tickets > 0 ? (
               <p className={abTestStyles.warningNote} role="status">

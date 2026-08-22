@@ -360,7 +360,15 @@ def aggregate_ab_snapshot(
     llm_daily_rows: Sequence[Mapping[str, object]] = (),
     csat_by_ticket: Mapping[str, str] | None = None,
     trace_enrichment: Mapping[str, TraceEnrichment] = MappingProxyType({}),
+    arms: Sequence[str] | None = None,
 ) -> AbTestSnapshot:
+    """`arms`, when given, both filters and orders the comparison.
+
+    Every downstream figure (totals, shares, daily points, dimension
+    breakdowns) is computed only over tickets in these arms, in this exact
+    order -- so a caller-chosen [old, new] pair reads chronologically instead
+    of the alphabetical order an unfiltered multi-arm view would fall back to.
+    """
     if window_start.tzinfo is None or window_end.tzinfo is None:
         raise ValueError("window bounds must be timezone-aware")
     if window_end <= window_start:
@@ -368,6 +376,9 @@ def aggregate_ab_snapshot(
 
     window = _full_window(window_start, window_end)
     facts, unmatched = _ticket_facts(raw_traces, window, taxonomy, trace_enrichment)
+    if arms is not None:
+        allowed_arms = set(arms)
+        facts = [fact for fact in facts if fact.arm in allowed_arms]
     total = len(facts)
 
     by_arm: dict[str, list[_TicketFacts]] = defaultdict(list)
@@ -380,9 +391,10 @@ def aggregate_ab_snapshot(
         if isinstance(row.get("providedModelName"), str)
     }
 
-    arms: list[ArmMetrics] = []
-    for arm in sorted(by_arm):
-        rows = by_arm[arm]
+    arm_order = list(arms) if arms is not None else sorted(by_arm)
+    result_arms: list[ArmMetrics] = []
+    for arm in arm_order:
+        rows = by_arm.get(arm, [])
         latencies = [row.latency for row in rows if row.latency is not None]
         reopen_rows = [row for row in rows if row.reopen_lifetime is not None]
         llm = llm_by_arm.get(arm, {})
@@ -395,7 +407,7 @@ def aggregate_ab_snapshot(
             if csat_by_ticket
             else []
         )
-        arms.append(
+        result_arms.append(
             ArmMetrics(
                 arm=arm,
                 ticket_count=len(rows),
@@ -528,7 +540,7 @@ def aggregate_ab_snapshot(
         window_end=window_end,
         total_tickets=total,
         unmatched_tickets=unmatched,
-        arms=tuple(arms),
+        arms=tuple(result_arms),
         daily=daily,
         dimensions=dimension_breakdown,
         csat_available=bool(csat_by_ticket),
@@ -559,6 +571,7 @@ def compute_ab_test(
     *,
     csat_by_ticket: Mapping[str, str] | None = None,
     deadline: float | None = None,
+    arms: Sequence[str] | None = None,
 ) -> AbTestSnapshot:
     traces = list(
         client.iter_traces(
@@ -607,4 +620,5 @@ def compute_ab_test(
         llm_daily_rows=llm_daily_rows,
         csat_by_ticket=csat_by_ticket,
         trace_enrichment=trace_enrichment,
+        arms=arms,
     )

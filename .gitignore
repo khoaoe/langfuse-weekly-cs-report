@@ -17,6 +17,7 @@ config/freshdesk_reconciliation_agents.v1.json
 .DS_Store
 ZLP_AgentBase_Skills/
 logs/
+graphify-out/
 
 # Frontend build output; produced by `npm run build` and by the Docker build stage.
 src/weekly_cs_report/static/spa/
@@ -27,3 +28,5 @@ playwright-report/
 /coverage.json
 /coverage-*.json
 .worktrees/
+
+
