@@ -843,6 +843,7 @@ export function AbTestSection({
 
       {!open ? null : (
       <div id="ab-test-body">
+      <div className={abTestStyles.rangeRow}>
       <details className={abTestStyles.rangeDetails}>
         <summary className={abTestStyles.rangeSummary}>
           Chọn model so sánh
@@ -885,18 +886,6 @@ export function AbTestSection({
                   </label>
                 );
               })}
-              {armsOverride !== null ? (
-                <button
-                  type="button"
-                  className={styles.action}
-                  onClick={() => {
-                    setArmsOverride(null);
-                    setOverride(null);
-                  }}
-                >
-                  Dùng lại mặc định
-                </button>
-              ) : null}
             </>
           )}
         </div>
@@ -955,6 +944,7 @@ export function AbTestSection({
           ) : null}
         </div>
       </details>
+      </div>
 
       {isLoading ? (
         <p role="status">Đang tải…</p>
