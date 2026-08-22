@@ -6,7 +6,7 @@ import type {
 } from "./dashboard-schema";
 import type { TicketFilters } from "./dashboard-filters";
 import type { NarrativeInput } from "./narrative";
-import { formatCount, formatRate } from "./format";
+import { formatAverage, formatCount, formatRate } from "./format";
 
 export const COHORT_LABELS: Readonly<Record<WeekDefinition, string>> = {
   mon_sun: "T2–CN",
@@ -291,14 +291,15 @@ export function selectLedger(
     {
       id: "ledger-reopen",
       label: "Reopen sau AI First",
-      value: formatCount(scope.reopenNumerator),
+      value: `${formatCount(scope.reopenNumerator)} lần`,
       support:
         scope.reopenDenominator === 0
           ? null
-          : `${share(
-              scope.reopenNumerator,
+          : `Trung bình ${formatAverage(
+              scope.reopenNumerator / scope.reopenDenominator,
+            )} lần mỗi ticket, trong ${formatCount(
               scope.reopenDenominator,
-            )} trong ${formatCount(scope.reopenDenominator)} ticket AI First`,
+            )} ticket AI First`,
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
       filterPatch: null,
     },
