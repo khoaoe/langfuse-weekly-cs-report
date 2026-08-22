@@ -241,7 +241,7 @@ describe("selected-week decision scope", () => {
       {
         id: "ledger-reopen",
         value: "152 lần",
-        support: "Trung bình 0,21 lần mỗi ticket, trong 727 ticket AI First",
+        support: "0,21 lần/ticket · 727 ticket AI First",
       },
       { id: "ledger-gt4", value: "0", support: null },
     ]);

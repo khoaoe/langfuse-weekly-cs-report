@@ -295,9 +295,9 @@ export function selectLedger(
       support:
         scope.reopenDenominator === 0
           ? null
-          : `Trung bình ${formatAverage(
+          : `${formatAverage(
               scope.reopenNumerator / scope.reopenDenominator,
-            )} lần mỗi ticket, trong ${formatCount(
+            )} lần/ticket · ${formatCount(
               scope.reopenDenominator,
             )} ticket AI First`,
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
