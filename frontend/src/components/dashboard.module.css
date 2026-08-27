@@ -341,6 +341,18 @@
   cursor: not-allowed;
 }
 
+.reportScopeError {
+  margin-top: var(--space-2);
+  color: var(--critical-text);
+  font-size: 0.875rem;
+}
+
+.reportScopeSummaryLine {
+  margin-top: var(--space-2);
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
 .reportScopeOption input {
   width: 18px;
   height: 18px;

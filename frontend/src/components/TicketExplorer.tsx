@@ -551,8 +551,8 @@ export function TicketExplorer({
           </select>
         </label>
         <DateRangeField
-          value={{ opened_from: filters.opened_from, opened_to: filters.opened_to }}
-          onChange={(range) => update(range)}
+          value={{ from: filters.opened_from, to: filters.opened_to }}
+          onChange={({ from, to }) => update({ opened_from: from, opened_to: to })}
         />
         <label className={ticketStyles.field} htmlFor="ticketIdInput">
           Mã ticket

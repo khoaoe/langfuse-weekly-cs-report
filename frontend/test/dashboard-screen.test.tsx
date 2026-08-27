@@ -266,8 +266,8 @@ describe("DashboardScreen", () => {
     expect(document.getElementById("ledger-reopen")).toHaveTextContent(
       "Reopen sau AI First4",
     );
-    expect(document.getElementById("ledger-gt4")).toHaveTextContent(
-      ">3 lượt xử lý chưa chuyển CS3",
+    expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
+      "Chuyển CS ngay từ đầu210,0% trong 20 ticket tuần này",
     );
 
     await user.click(screen.getByRole("button", { name: "T2–CN" }));
@@ -284,8 +284,8 @@ describe("DashboardScreen", () => {
     expect(document.getElementById("ledger-reopen")).toHaveTextContent(
       "Reopen sau AI First2",
     );
-    expect(document.getElementById("ledger-gt4")).toHaveTextContent(
-      ">3 lượt xử lý chưa chuyển CS2",
+    expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
+      "Chuyển CS ngay từ đầu110,0% trong 10 ticket tuần này",
     );
     // The title already names the selected week; repeating it above the KPI
     // cells adds no information.
@@ -444,7 +444,7 @@ describe("DashboardScreen", () => {
     expect(screen.queryByText(/T2–CN và T2–T6 bằng nhau/)).toBeNull();
   });
 
-  it("keeps the restored >3-turn diagnostics on the same latest-week scope as the KPI", async () => {
+  it("keeps the restored >3-turn diagnostics on the latest-week scope", async () => {
     server.use(
       http.get("/api/dashboard", () =>
         HttpResponse.json(staleViewLevelRuleGt4Envelope()),
@@ -452,12 +452,9 @@ describe("DashboardScreen", () => {
     );
     render(<DashboardScreen />);
 
-    // The range-wide aggregate is intentionally stale at ten. Both visible
-    // surfaces must still resolve to the latest week's zero.
+    // The range-wide aggregate is intentionally stale at ten. The diagnostics
+    // panel must still resolve to the latest week's zero.
     await screen.findByRole("heading", { level: 1 });
-    expect(document.getElementById("ledger-gt4")).toHaveTextContent(
-      ">3 lượt xử lý chưa chuyển CS0",
-    );
 
     const rulePanel = document.getElementById("ruleGt4Panel");
     expect(rulePanel).not.toBeNull();
@@ -620,13 +617,14 @@ describe("DashboardScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
 
-    const gt4Cell = document.getElementById("ledger-gt4");
-    await user.click(within(gt4Cell as HTMLElement).getByRole("button"));
-    const filtersAfterGt4 = screen.getByRole("region", {
+    const directCsCell = document.getElementById("ledger-direct-cs");
+    await user.click(within(directCsCell as HTMLElement).getByRole("button"));
+    const filtersAfterDirectCs = screen.getByRole("region", {
       name: "Bộ lọc đang áp dụng",
     });
-    expect(filtersAfterGt4).toHaveTextContent(">3 lượt xử lý: Có");
-    expect(filtersAfterGt4).toHaveTextContent("Đã chuyển CS: Không");
+    expect(filtersAfterDirectCs).toHaveTextContent(
+      "Kết quả: Chuyển CS ngay từ đầu",
+    );
 
     // AI First and reopen have no matching Explorer filter today, so they
     // stay plain text rather than opening a filter narrower than the number.

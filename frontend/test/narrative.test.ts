@@ -7,22 +7,29 @@ describe("deterministic narrative", () => {
     const narrative = buildDeterministicNarrative({
       current: { aiFirst: { count: 1_374, rate: 0.798 }, reopenRate: 0.262 },
       previous: { aiFirst: { count: 1_220, rate: 0.766 }, reopenRate: 0.266 },
-      gt4TurnWithoutCs: 11,
       enrichmentStatus: "complete",
     });
 
     expect(narrative).toEqual([
       "AI First tăng 3,2 điểm so với tuần trước.",
       "Reopen sau AI First gần như không đổi so với tuần trước.",
-      "11 ticket có hơn 3 lượt xử lý mà chưa chuyển CS — khách nhiều khả năng đang mắc kẹt.",
     ]);
+  });
+
+  it("never mentions the retired >3-turn warning, even though the action rail still shows it", () => {
+    const narrative = buildDeterministicNarrative({
+      current: { aiFirst: { count: 1_374, rate: 0.798 }, reopenRate: 0.262 },
+      previous: { aiFirst: { count: 1_220, rate: 0.766 }, reopenRate: 0.266 },
+      enrichmentStatus: "complete",
+    });
+
+    expect(narrative.join(" ")).not.toMatch(/lượt xử lý|mắc kẹt/);
   });
 
   it("test_narrative_has_no_methodological_advice_strings", () => {
     const narrative = buildDeterministicNarrative({
       current: { aiFirst: { count: 8, rate: 0.8 }, reopenRate: null },
       previous: null,
-      gt4TurnWithoutCs: 0,
       enrichmentStatus: "partial",
       isWtd: true,
     });
@@ -40,7 +47,6 @@ describe("deterministic narrative", () => {
     const narrative = buildDeterministicNarrative({
       current: { aiFirst: { count: 627, rate: 0.78 }, reopenRate: 0.188 },
       previous: { aiFirst: { count: 900, rate: 0.82 }, reopenRate: 0.19 },
-      gt4TurnWithoutCs: 0,
       enrichmentStatus: "complete",
       isWtd: true,
       samePeriod: {
@@ -59,19 +65,15 @@ describe("deterministic narrative", () => {
     );
   });
 
-  it("caps the first-viewport narrative at four sentences and keeps action warnings", () => {
+  it("caps the first-viewport narrative at four sentences and keeps the enrichment warning", () => {
     const narrative = buildDeterministicNarrative({
       current: { aiFirst: { count: 987, rate: 0.712 }, reopenRate: 0.318 },
       previous: { aiFirst: { count: 1_104, rate: 0.776 }, reopenRate: 0.241 },
-      gt4TurnWithoutCs: 7,
       enrichmentStatus: "partial",
     });
 
-    expect(narrative.length).toBeGreaterThanOrEqual(2);
+    expect(narrative.length).toBeGreaterThanOrEqual(1);
     expect(narrative.length).toBeLessThanOrEqual(4);
-    expect(narrative).toContain(
-      "7 ticket có hơn 3 lượt xử lý mà chưa chuyển CS — khách nhiều khả năng đang mắc kẹt.",
-    );
     expect(narrative).toContain(
       "Lần đọc này chưa lấy đủ dữ liệu phụ từ Langfuse, nên Intent, Skill, Transstatus và Step result còn thiếu.",
     );

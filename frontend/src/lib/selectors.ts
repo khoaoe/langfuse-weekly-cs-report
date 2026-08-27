@@ -144,8 +144,6 @@ export function buildNarrativeInput(
             },
             reopenRate: previous.reopen_lifetime_rate,
           },
-    gt4TurnWithoutCs:
-      current?.gt4_turn_without_cs ?? view.rule_gt4.gt4_turn_without_cs,
     enrichmentStatus: snapshot.enrichment_status,
     ...(current?.cohort_status === "wtd" ? { isWtd: true } : {}),
     ...(samePeriod === null
@@ -192,6 +190,7 @@ export interface LedgerScope {
   readonly reopenNumerator: number;
   readonly reopenDenominator: number;
   readonly gt4WithoutCs: number;
+  readonly directCsCount: number;
   readonly week: WeeklyReportRow | null;
   readonly kind: "week" | "all" | "selection" | "empty";
 }
@@ -221,6 +220,7 @@ export function selectScope(
       reopenNumerator: view.reopen.lifetime.numerator,
       reopenDenominator: view.reopen.lifetime.denominator,
       gt4WithoutCs: view.rule_gt4.gt4_turn_without_cs,
+      directCsCount: view.outcomes.direct_cs,
       week: null,
       kind:
         activeWeek === ALL_WEEKS_SCOPE
@@ -239,6 +239,7 @@ export function selectScope(
     reopenNumerator: week.reopen_lifetime_numerator,
     reopenDenominator: week.reopen_lifetime_denominator,
     gt4WithoutCs: week.gt4_turn_without_cs,
+    directCsCount: week.direct_cs_count,
     week,
     kind: "week",
   };
@@ -304,20 +305,18 @@ export function selectLedger(
       filterPatch: null,
     },
     {
-      id: "ledger-gt4",
-      label: ">3 lượt xử lý chưa chuyển CS",
-      value: formatCount(scope.gt4WithoutCs),
+      id: "ledger-direct-cs",
+      label: "Chuyển CS ngay từ đầu",
+      value: formatCount(scope.directCsCount),
       support:
-        scope.gt4WithoutCs === 0 || scope.eligible === 0
+        scope.eligible === 0
           ? null
-          : `${share(scope.gt4WithoutCs, scope.eligible)} trong ${formatCount(
+          : `${share(scope.directCsCount, scope.eligible)} trong ${formatCount(
               scope.eligible,
             )} ${populationLabel}`,
-      tone: scope.gt4WithoutCs > 0 ? "critical" : "neutral",
+      tone: "neutral",
       filterPatch:
-        scope.gt4WithoutCs === 0
-          ? null
-          : { gt4_turn: "true", transferred: "false" },
+        scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
     },
   ];
 }

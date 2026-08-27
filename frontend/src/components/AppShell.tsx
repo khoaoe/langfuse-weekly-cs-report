@@ -74,6 +74,8 @@ export interface AppShellProps {
   readonly onReportWeeksChange?: (
     value: "all" | readonly string[],
   ) => void;
+  readonly reportRange?: { readonly from: string; readonly to: string } | null;
+  readonly onReportRangeChange?: (from: string, to: string) => void;
   readonly activeFilters: readonly ActiveFilterChip[];
   readonly onRemoveFilter: (key: TicketFilterKey) => void;
   readonly onResetFilters: () => void;
@@ -102,6 +104,8 @@ export function AppShell({
   selectedReportWeeks = [],
   allReportWeeksSelected = true,
   onReportWeeksChange = () => {},
+  reportRange = null,
+  onReportRangeChange = () => {},
   activeFilters,
   onRemoveFilter,
   onResetFilters,
@@ -356,6 +360,8 @@ export function AppShell({
               allWeeksSelected={allReportWeeksSelected}
               weekDefinition={weekDefinition}
               onChange={onReportWeeksChange}
+              activeRange={reportRange}
+              onRangeChange={onReportRangeChange}
             />
           </div>
         )}

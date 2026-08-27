@@ -1,7 +1,9 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import type { WeekDefinition, WeeklyReportRow } from "../lib/dashboard-schema";
-import { formatCount, formatWeekRange } from "../lib/format";
+import { formatCount, formatDateRangeLabel, formatWeekRange } from "../lib/format";
+import { resolveDateRangeToWeeks } from "../lib/report-scope";
+import { DateRangeField } from "./DateRangeField";
 import styles from "./dashboard.module.css";
 
 export interface ReportScopePickerProps {
@@ -10,6 +12,8 @@ export interface ReportScopePickerProps {
   readonly allWeeksSelected: boolean;
   readonly weekDefinition: WeekDefinition;
   readonly onChange: (value: "all" | readonly string[]) => void;
+  readonly activeRange?: { readonly from: string; readonly to: string } | null;
+  readonly onRangeChange?: (from: string, to: string) => void;
 }
 
 export function ReportScopePicker({
@@ -18,8 +22,14 @@ export function ReportScopePicker({
   allWeeksSelected,
   weekDefinition,
   onChange,
+  activeRange = null,
+  onRangeChange = () => {},
 }: ReportScopePickerProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [mode, setMode] = useState<"weeks" | "range">(
+    activeRange != null ? "range" : "weeks",
+  );
+  const [rangeError, setRangeError] = useState<string | null>(null);
   const observed = reportWindow
     .filter((week) => week.has_data)
     .toSorted((left, right) =>
@@ -34,14 +44,17 @@ export function ReportScopePicker({
     currentWeek !== undefined &&
     selected.size === 1 &&
     selected.has(currentWeek.cohort_week);
-  const summary = allWeeksSelected
-    ? `Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`
-    : selectedRows.length === 1 && selectedRows[0] !== undefined
-      ? `${formatWeekRange(
-          selectedRows[0].cohort_week,
-          weekDefinition,
-        )}${selectedRows[0].cohort_status === "wtd" ? " · WTD" : ""}`
-      : `${formatCount(selectedRows.length)} tuần đã chọn`;
+  const summary =
+    activeRange != null
+      ? `${formatDateRangeLabel(activeRange.from, activeRange.to)} · ${formatCount(selectedRows.length)} tuần`
+      : allWeeksSelected
+        ? `Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`
+        : selectedRows.length === 1 && selectedRows[0] !== undefined
+          ? `${formatWeekRange(
+              selectedRows[0].cohort_week,
+              weekDefinition,
+            )}${selectedRows[0].cohort_status === "wtd" ? " · WTD" : ""}`
+          : `${formatCount(selectedRows.length)} tuần đã chọn`;
 
   const toggleWeek = (cohortWeek: string) => {
     const next = observed
@@ -78,50 +91,118 @@ export function ReportScopePicker({
           role="group"
           aria-label="Chọn tuần cho báo cáo"
         >
-          <button
-            type="button"
-            className={styles.reportScopeAll}
-            aria-pressed={allWeeksSelected}
-            onClick={() => onChange("all")}
+          <div
+            id="reportScopeModeToggle"
+            className={styles.segmented}
+            role="group"
+            aria-label="Chọn theo tuần hay theo khoảng ngày"
           >
-            {`Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`}
-          </button>
-          {currentWeek !== undefined && !isOnlyCurrentWeek ? (
             <button
               type="button"
-              className={styles.reportScopeCurrent}
-              onClick={() => onChange([currentWeek.cohort_week])}
+              className={styles.segmentedButton}
+              aria-pressed={mode === "weeks"}
+              onClick={() => setMode("weeks")}
             >
-              {`Về tuần hiện tại · ${formatWeekRange(
-                currentWeek.cohort_week,
-                weekDefinition,
-              )} · WTD`}
+              Theo tuần
             </button>
-          ) : null}
-          <div className={styles.reportScopeOptions}>
-            {observed.map((week) => {
-              const checked = selected.has(week.cohort_week);
-              return (
-                <label
-                  key={week.cohort_week}
-                  className={styles.reportScopeOption}
-                  htmlFor={`reportScope-${week.cohort_week}`}
-                >
-                  <input
-                    id={`reportScope-${week.cohort_week}`}
-                    type="checkbox"
-                    checked={checked}
-                    disabled={checked && selected.size === 1}
-                    onChange={() => toggleWeek(week.cohort_week)}
-                  />
-                  <span>
-                    {formatWeekRange(week.cohort_week, weekDefinition)}
-                    {week.cohort_status === "wtd" ? " · WTD" : ""}
-                  </span>
-                </label>
-              );
-            })}
+            <button
+              type="button"
+              className={styles.segmentedButton}
+              aria-pressed={mode === "range"}
+              onClick={() => setMode("range")}
+            >
+              Theo khoảng ngày
+            </button>
           </div>
+          {mode === "weeks" ? (
+            <>
+              <button
+                type="button"
+                className={styles.reportScopeAll}
+                aria-pressed={allWeeksSelected}
+                onClick={() => onChange("all")}
+              >
+                {`Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`}
+              </button>
+              {currentWeek !== undefined && !isOnlyCurrentWeek ? (
+                <button
+                  type="button"
+                  className={styles.reportScopeCurrent}
+                  onClick={() => onChange([currentWeek.cohort_week])}
+                >
+                  {`Về tuần hiện tại · ${formatWeekRange(
+                    currentWeek.cohort_week,
+                    weekDefinition,
+                  )} · WTD`}
+                </button>
+              ) : null}
+              <div className={styles.reportScopeOptions}>
+                {observed.map((week) => {
+                  const checked = selected.has(week.cohort_week);
+                  return (
+                    <label
+                      key={week.cohort_week}
+                      className={styles.reportScopeOption}
+                      htmlFor={`reportScope-${week.cohort_week}`}
+                    >
+                      <input
+                        id={`reportScope-${week.cohort_week}`}
+                        type="checkbox"
+                        checked={checked}
+                        disabled={checked && selected.size === 1}
+                        onChange={() => toggleWeek(week.cohort_week)}
+                      />
+                      <span>
+                        {formatWeekRange(week.cohort_week, weekDefinition)}
+                        {week.cohort_status === "wtd" ? " · WTD" : ""}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <>
+              <DateRangeField
+                value={activeRange ?? { from: "", to: "" }}
+                onChange={({ from, to }) => {
+                  if (from === "" && to === "") {
+                    setRangeError(null);
+                    onRangeChange("", "");
+                    return;
+                  }
+                  const weeks = resolveDateRangeToWeeks(
+                    reportWindow,
+                    weekDefinition,
+                    from,
+                    to,
+                  );
+                  if (weeks.length === 0) {
+                    setRangeError(
+                      "Không có tuần nào có dữ liệu trong khoảng ngày này. Phạm vi báo cáo giữ nguyên như trước.",
+                    );
+                    return;
+                  }
+                  setRangeError(null);
+                  onRangeChange(from, to);
+                }}
+                label="Khoảng ngày báo cáo"
+                idPrefix="reportRange"
+                clearLabel="Toàn bộ kỳ báo cáo"
+              />
+              {rangeError !== null ? (
+                <p id="reportRangeError" role="status" className={styles.reportScopeError}>
+                  {rangeError}
+                </p>
+              ) : activeRange != null ? (
+                <p id="reportRangeSummary" className={styles.reportScopeSummaryLine}>
+                  {`${formatDateRangeLabel(activeRange.from, activeRange.to)} → ${selectedRows.length} tuần: ${selectedRows
+                    .map((row) => formatWeekRange(row.cohort_week, weekDefinition))
+                    .join(", ")}`}
+                </p>
+              ) : null}
+            </>
+          )}
         </div>
       </details>
     </div>

@@ -406,7 +406,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     ).toBe(false);
 
     const ledgerCells = page.locator(
-      "#ledger-ai-first, #ledger-transfer, #ledger-reopen, #ledger-gt4",
+      "#ledger-ai-first, #ledger-transfer, #ledger-reopen, #ledger-direct-cs",
     );
     await expect(ledgerCells).toHaveCount(4);
   });
@@ -653,7 +653,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     await expect(page.locator("#ledger-ai-first")).toContainText("50,0%");
     await expect(page.locator("#ledger-transfer")).toContainText("7");
     await expect(page.locator("#ledger-reopen")).toContainText("4");
-    await expect(page.locator("#ledger-gt4")).toContainText("3");
+    await expect(page.locator("#ledger-direct-cs")).toContainText("2");
 
     await page.getByRole("button", { name: "T2–CN" }).click();
 
@@ -665,7 +665,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     );
     await expect(page.locator("#ledger-transfer")).toContainText("3");
     await expect(page.locator("#ledger-reopen")).toContainText("2");
-    await expect(page.locator("#ledger-gt4")).toContainText("2");
+    await expect(page.locator("#ledger-direct-cs")).toContainText("1");
     await expect(
       page.getByText(/Hai cohort đang cho cùng số liệu/),
     ).toHaveCount(0);
@@ -698,7 +698,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
 
     await page.goto("/");
     const bottom = await page
-      .locator("#ledger-gt4")
+      .locator("#ledger-direct-cs")
       .evaluate((node) => node.getBoundingClientRect().bottom);
 
     expect(bottom).toBeLessThanOrEqual(900);

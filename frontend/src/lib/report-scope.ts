@@ -5,7 +5,9 @@ import type {
   Segments,
   TransferReasons,
   WeekDefinition,
+  WeeklyReportRow,
 } from "./dashboard-schema";
+import { parseIsoDate, weekSpanDays } from "./format";
 
 const SEGMENT_DIMENSIONS = [
   "issue_category",
@@ -129,6 +131,52 @@ function filterByWeek<T>(
   return Object.fromEntries(
     Object.entries(byWeek).filter(([cohortWeek]) => selected.has(cohortWeek)),
   );
+}
+
+/**
+ * Resolves an inclusive date range to the observed weeks it touches, snapping
+ * to full weeks: a week is included when it overlaps `[from, to]` by at least
+ * one day.
+ *
+ * Returns `[]` on malformed input or when no week is touched — it does not
+ * decide what to do about an empty result. That policy (keep the previous
+ * selection, show an inline error) lives in the caller.
+ */
+export function resolveDateRangeToWeeks(
+  weekly: readonly WeeklyReportRow[],
+  weekDefinition: WeekDefinition,
+  from: string,
+  to: string,
+): readonly string[] {
+  const fromDate = parseIsoDate(from);
+  const toDate = parseIsoDate(to);
+  if (fromDate === null || toDate === null) {
+    return [];
+  }
+
+  const spanDays = weekSpanDays(weekDefinition);
+  const touched: { cohortWeek: string; weekStart: Date }[] = [];
+  for (const row of weekly) {
+    if (!row.has_data) {
+      continue;
+    }
+    const weekStart = parseIsoDate(row.cohort_week);
+    if (weekStart === null) {
+      continue;
+    }
+    const weekEnd = new Date(weekStart);
+    weekEnd.setUTCDate(weekStart.getUTCDate() + spanDays);
+    if (
+      weekStart.getTime() <= toDate.getTime() &&
+      weekEnd.getTime() >= fromDate.getTime()
+    ) {
+      touched.push({ cohortWeek: row.cohort_week, weekStart });
+    }
+  }
+
+  return touched
+    .sort((left, right) => left.weekStart.getTime() - right.weekStart.getTime())
+    .map((entry) => entry.cohortWeek);
 }
 
 /** Build a read-only client projection for an arbitrary set of observed weeks. */

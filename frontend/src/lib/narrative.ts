@@ -18,7 +18,6 @@ export interface NarrativeSamePeriod {
 export interface NarrativeInput {
   readonly current: NarrativePeriod;
   readonly previous: NarrativePeriod | null;
-  readonly gt4TurnWithoutCs: number;
   readonly enrichmentStatus: "complete" | "partial";
   readonly isWtd?: boolean;
   readonly samePeriod?: NarrativeSamePeriod;
@@ -104,14 +103,6 @@ export function buildDeterministicNarrative(input: NarrativeInput): string[] {
   }
 
   const warnings: string[] = [];
-  if (input.gt4TurnWithoutCs > 0) {
-    warnings.push(
-      `${formatCount(
-        input.gt4TurnWithoutCs,
-      )} ticket có hơn 3 lượt xử lý mà chưa chuyển CS — khách nhiều khả năng đang mắc kẹt.`,
-    );
-  }
-
   if (input.enrichmentStatus === "partial") {
     warnings.push(
       "Lần đọc này chưa lấy đủ dữ liệu phụ từ Langfuse, nên Intent, Skill, Transstatus và Step result còn thiếu.",

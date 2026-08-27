@@ -4,13 +4,17 @@ import { formatDateRangeLabel } from "../lib/format";
 import styles from "./ticket-explorer.module.css";
 
 export interface DateRangeValue {
-  readonly opened_from: string;
-  readonly opened_to: string;
+  readonly from: string;
+  readonly to: string;
 }
 
 export interface DateRangeFieldProps {
   readonly value: DateRangeValue;
   readonly onChange: (value: DateRangeValue) => void;
+  readonly label?: string;
+  readonly idPrefix?: string;
+  readonly clearLabel?: string;
+  readonly className?: string;
 }
 
 const WEEKDAY_LABELS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
@@ -83,19 +87,26 @@ function calendarWeeks(month: Date): readonly (readonly Date[])[] {
  * dependency: the calendar grid and quick presets are plain date arithmetic,
  * matching the repo's zero-added-dependency budget.
  */
-export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
+export function DateRangeField({
+  value,
+  onChange,
+  label = "Khoảng ngày mở",
+  idPrefix = "openedDateRange",
+  clearLabel = "Tất cả ngày",
+  className = styles.field,
+}: DateRangeFieldProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const labelId = `${idPrefix}Label`;
+  const buttonId = `${idPrefix}Button`;
   const initialMonth = startOfMonth(
-    parseIsoDateLocal(value.opened_to) ??
-      parseIsoDateLocal(value.opened_from) ??
-      new Date(),
+    parseIsoDateLocal(value.to) ?? parseIsoDateLocal(value.from) ?? new Date(),
   );
   const [visibleMonth, setVisibleMonth] = useState(initialMonth);
   const [pendingStart, setPendingStart] = useState<Date | null>(
-    parseIsoDateLocal(value.opened_from),
+    parseIsoDateLocal(value.from),
   );
   const [pendingEnd, setPendingEnd] = useState<Date | null>(
-    parseIsoDateLocal(value.opened_to),
+    parseIsoDateLocal(value.to),
   );
 
   const close = () => {
@@ -104,7 +115,7 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
 
   const applyRange = (from: Date, to: Date) => {
     const [start, end] = from.getTime() <= to.getTime() ? [from, to] : [to, from];
-    onChange({ opened_from: toIsoDate(start), opened_to: toIsoDate(end) });
+    onChange({ from: toIsoDate(start), to: toIsoDate(end) });
     close();
   };
 
@@ -116,7 +127,7 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
   const clearRange = () => {
     setPendingStart(null);
     setPendingEnd(null);
-    onChange({ opened_from: "", opened_to: "" });
+    onChange({ from: "", to: "" });
     close();
   };
 
@@ -134,9 +145,9 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
   };
 
   const summary =
-    value.opened_from === "" && value.opened_to === ""
-      ? "Tất cả ngày"
-      : formatDateRangeLabel(value.opened_from, value.opened_to);
+    value.from === "" && value.to === ""
+      ? clearLabel
+      : formatDateRangeLabel(value.from, value.to);
 
   const rangeStart = pendingStart;
   const rangeEnd = pendingEnd;
@@ -147,8 +158,8 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
     day.getTime() <= rangeEnd.getTime();
 
   return (
-    <div className={styles.field}>
-      <span id="openedDateRangeLabel">Khoảng ngày mở</span>
+    <div className={className}>
+      <span id={labelId}>{label}</span>
       <details
         ref={detailsRef}
         className={styles.dateRangeDetails}
@@ -160,16 +171,16 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
         }}
       >
         <summary
-          id="openedDateRangeButton"
+          id={buttonId}
           className={styles.dateRangeSummary}
-          aria-label={`Khoảng ngày mở: ${summary}`}
+          aria-label={`${label}: ${summary}`}
         >
           {summary}
         </summary>
         <div
           className={styles.dateRangePanel}
           role="group"
-          aria-labelledby="openedDateRangeLabel"
+          aria-labelledby={labelId}
         >
           <div className={styles.dateRangeQuick}>
             {QUICK_RANGES.map((range) => (
@@ -187,7 +198,7 @@ export function DateRangeField({ value, onChange }: DateRangeFieldProps) {
               className={styles.dateRangeQuickButton}
               onClick={clearRange}
             >
-              Tất cả ngày
+              {clearLabel}
             </button>
           </div>
           <div className={styles.dateRangeCalendar}>

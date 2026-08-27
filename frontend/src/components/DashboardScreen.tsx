@@ -17,8 +17,9 @@ import {
   isObservedWeek,
   selectLatestWeek,
   selectView,
+  selectWeekly,
 } from "../lib/selectors";
-import { scopeSnapshotToWeeks } from "../lib/report-scope";
+import { resolveDateRangeToWeeks, scopeSnapshotToWeeks } from "../lib/report-scope";
 import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
@@ -43,7 +44,8 @@ function scrollToSection(id: string, focusId?: string) {
 type ReportScopeState =
   | { readonly mode: "latest" }
   | { readonly mode: "all" }
-  | { readonly mode: "weeks"; readonly weeks: readonly string[] };
+  | { readonly mode: "weeks"; readonly weeks: readonly string[] }
+  | { readonly mode: "range"; readonly from: string; readonly to: string };
 
 function explorerWeekPatch(value: "all" | readonly string[]) {
   if (value === "all") {
@@ -86,6 +88,22 @@ function DashboardBody() {
     if (reportScope.mode === "latest") {
       return latestReportWeek === null ? [] : [latestReportWeek.cohort_week];
     }
+    if (reportScope.mode === "range") {
+      const resolved =
+        reportView === null
+          ? []
+          : resolveDateRangeToWeeks(
+              selectWeekly(reportView),
+              weekDefinition,
+              reportScope.from,
+              reportScope.to,
+            );
+      return resolved.length > 0
+        ? resolved
+        : latestReportWeek === null
+          ? []
+          : [latestReportWeek.cohort_week];
+    }
     const observed = new Set(observedReportWeeks);
     const selected = reportScope.weeks.filter((week) => observed.has(week));
     return selected.length > 0
@@ -93,8 +111,12 @@ function DashboardBody() {
       : latestReportWeek === null
         ? []
         : [latestReportWeek.cohort_week];
-  }, [latestReportWeek, observedReportWeeks, reportScope]);
-  const allReportWeeksSelected = reportScope.mode === "all";
+  }, [latestReportWeek, observedReportWeeks, reportScope, reportView, weekDefinition]);
+  const allReportWeeksSelected =
+    reportScope.mode === "all" ||
+    (reportScope.mode === "range" &&
+      observedReportWeeks.length > 0 &&
+      selectedReportWeeks.length === observedReportWeeks.length);
   const multiWeekSelection =
     !allReportWeeksSelected && selectedReportWeeks.length > 1;
   const reportWeek =
@@ -188,6 +210,32 @@ function DashboardBody() {
     );
   }, []);
 
+  const changeReportRange = useCallback(
+    (from: string, to: string) => {
+      if (from === "" && to === "") {
+        changeReportWeeks("all");
+        return;
+      }
+      setReportScope({ mode: "range", from, to });
+      const resolved =
+        reportView === null
+          ? []
+          : resolveDateRangeToWeeks(
+              selectWeekly(reportView),
+              weekDefinition,
+              from,
+              to,
+            );
+      setFilters((current) =>
+        updateTicketFilters(
+          current,
+          explorerWeekPatch(resolved.length > 0 ? resolved : "all"),
+        ),
+      );
+    },
+    [changeReportWeeks, reportView, weekDefinition],
+  );
+
   const applyExplorerFilter = useCallback((patch: Partial<TicketFilters>) => {
     setFilters((current) =>
       updateTicketFilters(current, { ...currentExplorerWeekPatch, ...patch }),
@@ -230,6 +278,8 @@ function DashboardBody() {
       selectedReportWeeks={selectedReportWeeks}
       allReportWeeksSelected={allReportWeeksSelected}
       onReportWeeksChange={changeReportWeeks}
+      reportRange={reportScope.mode === "range" ? reportScope : null}
+      onReportRangeChange={changeReportRange}
       activeFilters={shellFilters}
       onRemoveFilter={removeFilter}
       onResetFilters={resetFilters}

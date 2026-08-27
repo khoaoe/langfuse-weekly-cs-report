@@ -102,7 +102,7 @@ export function formatWeekdayCode(value: number): string {
   return WEEKDAY_CODES[value] ?? "cùng kỳ";
 }
 
-function parseIsoDate(value: string | null | undefined): Date | null {
+export function parseIsoDate(value: string | null | undefined): Date | null {
   if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return null;
   }
@@ -131,6 +131,11 @@ export function formatWeekStart(value: string | null | undefined): string {
   return parsed === null ? "—" : compactDate(parsed);
 }
 
+/** Days from a week's Monday start to its last day, inclusive. */
+export function weekSpanDays(weekDefinition: WeekDefinition): number {
+  return weekDefinition === "mon_fri" ? 4 : 6;
+}
+
 export function formatWeekRange(
   cohortWeek: string | null | undefined,
   weekDefinition: WeekDefinition,
@@ -141,7 +146,7 @@ export function formatWeekRange(
   }
 
   const end = new Date(start);
-  end.setUTCDate(start.getUTCDate() + (weekDefinition === "mon_fri" ? 4 : 6));
+  end.setUTCDate(start.getUTCDate() + weekSpanDays(weekDefinition));
 
   return `${compactDate(start)}–${compactDate(end)}`;
 }

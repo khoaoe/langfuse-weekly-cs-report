@@ -29,4 +29,6 @@ playwright-report/
 /coverage-*.json
 .worktrees/
 
+explore/
+
 

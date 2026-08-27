@@ -180,7 +180,7 @@ describe("selected-week decision scope", () => {
     expect(screen.queryByText(/Cần lưu ý/i)).toBeNull();
   });
 
-  it("drops the share line on a count cell that measured nothing", () => {
+  it("keeps the share line on a neutral count cell that measured nothing", () => {
     const zeroed: DashboardSnapshot = {
       ...baseSnapshot,
       views: {
@@ -188,7 +188,7 @@ describe("selected-week decision scope", () => {
         mon_sun: {
           ...baseSnapshot.views.mon_sun,
           weekly: [
-            { ...latest, gt4_turn_without_cs: 0, gt4_turn_with_cs: 0 },
+            { ...latest, direct_cs_count: 0 },
             ...baseSnapshot.views.mon_sun.weekly.slice(1),
           ],
         },
@@ -196,11 +196,12 @@ describe("selected-week decision scope", () => {
     };
 
     const cells = selectLedger(zeroed, "mon_sun");
-    const gt4 = cells.find((cell) => cell.id === "ledger-gt4");
+    const directCs = cells.find((cell) => cell.id === "ledger-direct-cs");
 
-    // "0 · 0% ticket trong tuần" spends a line restating the zero above it.
-    expect(gt4?.value).toBe("0");
-    expect(gt4?.support).toBeNull();
+    // Unlike the old warning cell, "0 ticket" is still an informative share
+    // for a neutral cell — only an empty population (eligible === 0) hides it.
+    expect(directCs?.value).toBe("0");
+    expect(directCs?.support).not.toBeNull();
   });
 
   it("uses a count as the primary value in every KPI cell", () => {
@@ -243,7 +244,11 @@ describe("selected-week decision scope", () => {
         value: "152 lần",
         support: "0,21 lần/ticket · 727 ticket AI First",
       },
-      { id: "ledger-gt4", value: "0", support: null },
+      {
+        id: "ledger-direct-cs",
+        value: "28",
+        support: "3,0% trong 935 ticket tuần này",
+      },
     ]);
   });
 
