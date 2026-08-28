@@ -419,6 +419,50 @@ def test_weekly_summaries_reconcile_use_nearest_rank_and_include_empty_weeks(
     assert wtd.reopen_lifetime_rate is None
 
 
+def test_resolved_first_reply_counts_only_ai_end_to_end_with_exactly_one_reply(
+    window, taxonomy
+):
+    records = [
+        # ai_end_to_end, ai_reply_count == 1 -> counted
+        record("one-reply-0", "one-reply", 0, "2026-07-21T02:00:00Z"),
+        # ai_end_to_end, ai_reply_count == 2 -> NOT counted
+        record("two-reply-0", "two-reply", 0, "2026-07-21T02:00:00Z"),
+        record("two-reply-1", "two-reply", 1, "2026-07-21T03:00:00Z"),
+        # ai_then_cs with exactly one AI reply before transfer -> NOT counted
+        # (wrong outcome, even though ai_reply_count == 1)
+        record(
+            "then-cs-0", "then-cs", 0, "2026-07-21T02:00:00Z"
+        ),
+        record(
+            "then-cs-1", "then-cs", 1, "2026-07-21T03:00:00Z", TRANSFER_TEXT
+        ),
+    ]
+
+    result = analyze(records, [], window, taxonomy)
+    summaries = summarize_weeks(result, window)
+    mature = next(
+        summary
+        for summary in summaries
+        if summary.cohort_week == date(2026, 7, 20)
+    )
+
+    one_reply = next(s for s in result.sessions if s.session_id == "one-reply")
+    two_reply = next(s for s in result.sessions if s.session_id == "two-reply")
+    then_cs = next(s for s in result.sessions if s.session_id == "then-cs")
+    assert one_reply.outcome == "ai_end_to_end" and one_reply.ai_reply_count == 1
+    assert two_reply.outcome == "ai_end_to_end" and two_reply.ai_reply_count == 2
+    assert then_cs.outcome == "ai_then_cs" and then_cs.ai_reply_count == 1
+
+    assert mature.resolved_first_reply == 1
+
+
+def test_resolved_first_reply_is_zero_not_none_for_empty_week(window, taxonomy):
+    result = analyze([], [], window, taxonomy)
+    summaries = summarize_weeks(result, window)
+
+    assert all(summary.resolved_first_reply == 0 for summary in summaries)
+
+
 def test_summarize_rejects_a_window_that_differs_from_the_analysis_window(
     window, taxonomy
 ):

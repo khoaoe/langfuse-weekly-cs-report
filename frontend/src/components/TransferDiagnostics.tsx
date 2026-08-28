@@ -586,6 +586,7 @@ export function TransferDiagnostics({
   rule,
   selectedWeek,
   weekDefinition,
+  dayModeNote = null,
   onShowStuckTickets,
   onTicketFilterSelect,
 }: {
@@ -593,6 +594,9 @@ export function TransferDiagnostics({
   readonly rule: RuleGt4;
   readonly selectedWeek: WeeklyReportRow | undefined;
   readonly weekDefinition: WeekDefinition;
+  /** §6: set only when the dashboard is scoped to a day range — this whole
+   * panel still reads by full week, so the user must be told explicitly. */
+  readonly dayModeNote?: string | null;
   readonly onShowStuckTickets: () => void;
   readonly onTicketFilterSelect: (patch: Partial<TicketFilters>) => void;
 }) {
@@ -624,6 +628,11 @@ export function TransferDiagnostics({
               )}`
         }.`}
       </p>
+      {dayModeNote === null ? null : (
+        <p id="diagnosticsDayModeNote" className={styles.sectionNote}>
+          {dayModeNote}
+        </p>
+      )}
       {hasNoTransferSignals ? (
         <p className={belowFoldStyles.diagnosticEmpty}>
           Không có tín hiệu nào trong phạm vi đang chọn.

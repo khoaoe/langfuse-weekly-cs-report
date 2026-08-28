@@ -191,8 +191,30 @@ export interface LedgerScope {
   readonly reopenDenominator: number;
   readonly gt4WithoutCs: number;
   readonly directCsCount: number;
+  readonly resolvedFirstReply: number;
+  readonly aiEndToEndCount: number;
+  readonly aiReplyMeanAiFirst: number | null;
   readonly week: WeeklyReportRow | null;
   readonly kind: "week" | "all" | "selection" | "empty";
+}
+
+/**
+ * Weighted mean of a per-week average across weeks with different ai_first
+ * populations. Averaging the per-week means directly would be the same
+ * averaging-of-rates mistake as the rolling-rate trap: a week with 5
+ * ai_first tickets and a week with 500 must not count equally.
+ */
+function weightedReplyMean(weeks: readonly WeeklyReportRow[]): number | null {
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const week of weeks) {
+    if (week.ai_reply_mean_ai_first === null || week.ai_first_count === 0) {
+      continue;
+    }
+    weightedSum += week.ai_reply_mean_ai_first * week.ai_first_count;
+    totalWeight += week.ai_first_count;
+  }
+  return totalWeight === 0 ? null : weightedSum / totalWeight;
 }
 
 /**
@@ -212,6 +234,7 @@ export function selectScope(
   const view = selectView(snapshot, weekDefinition);
   const week = selectReportWeek(view, activeWeek);
   if (week === null) {
+    const observedWeeks = view.weekly.filter((row) => row.has_data);
     return {
       eligible: view.totals.eligible_ticket_count,
       aiFirstCount: view.ai_first.count,
@@ -221,6 +244,12 @@ export function selectScope(
       reopenDenominator: view.reopen.lifetime.denominator,
       gt4WithoutCs: view.rule_gt4.gt4_turn_without_cs,
       directCsCount: view.outcomes.direct_cs,
+      resolvedFirstReply: observedWeeks.reduce(
+        (total, row) => total + row.resolved_first_reply,
+        0,
+      ),
+      aiEndToEndCount: view.outcomes.ai_end_to_end,
+      aiReplyMeanAiFirst: weightedReplyMean(observedWeeks),
       week: null,
       kind:
         activeWeek === ALL_WEEKS_SCOPE
@@ -240,20 +269,32 @@ export function selectScope(
     reopenDenominator: week.reopen_lifetime_denominator,
     gt4WithoutCs: week.gt4_turn_without_cs,
     directCsCount: week.direct_cs_count,
+    resolvedFirstReply: week.resolved_first_reply,
+    aiEndToEndCount: week.ai_end_to_end_count,
+    aiReplyMeanAiFirst: week.ai_reply_mean_ai_first,
     week,
     kind: "week",
   };
 }
 
+export interface LedgerGroup {
+  readonly id: "ledger-group-ticket" | "ledger-group-response";
+  readonly label: string;
+  readonly denominator: string;
+  readonly cells: readonly LedgerCell[];
+}
+
 /**
- * The four cells of the decision ledger, in decision order: how much the agent
- * handled, how much left it, how much came back, and where users may be stuck.
+ * Two ledger groups with two different denominators, kept apart on purpose:
+ * "Theo ticket" (mẫu số là ticket) and "Theo lượt CS-agent trả lời" (mẫu số
+ * là lượt AI trả lời). Mixing the two under one flat list lets a reader add a
+ * ticket-count cell to a per-response-count cell, which is not a real number.
  */
 export function selectLedger(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
   activeWeek?: string,
-): LedgerCell[] {
+): LedgerGroup[] {
   const scope = selectScope(snapshot, weekDefinition, activeWeek);
   const populationLabel =
     scope.kind === "all"
@@ -262,7 +303,7 @@ export function selectLedger(
         ? "ticket trong các tuần đã chọn"
         : "ticket tuần này";
 
-  return [
+  const ticketCells: LedgerCell[] = [
     {
       id: "ledger-ai-first",
       label: "AI First",
@@ -290,6 +331,50 @@ export function selectLedger(
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
     },
     {
+      id: "ledger-direct-cs",
+      label: "Chuyển CS ngay từ đầu",
+      value: formatCount(scope.directCsCount),
+      support:
+        scope.eligible === 0
+          ? null
+          : `${share(scope.directCsCount, scope.eligible)} trong ${formatCount(
+              scope.eligible,
+            )} ${populationLabel}`,
+      tone: "neutral",
+      filterPatch:
+        scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
+    },
+  ];
+
+  const responseCells: LedgerCell[] = [
+    {
+      id: "ledger-first-reply-resolved",
+      label: "Xong hẳn trong 1 lượt",
+      value: share(scope.resolvedFirstReply, scope.aiEndToEndCount),
+      support:
+        scope.aiEndToEndCount === 0
+          ? null
+          : `${formatCount(scope.resolvedFirstReply)} trong ${formatCount(
+              scope.aiEndToEndCount,
+            )} ticket AI xử lý trọn`,
+      tone: "brand",
+      filterPatch: null,
+    },
+    {
+      id: "ledger-replies-per-ticket",
+      label: "TB lượt/ticket AI First",
+      value:
+        scope.aiReplyMeanAiFirst === null
+          ? "—"
+          : `${formatAverage(scope.aiReplyMeanAiFirst)} lượt`,
+      support:
+        scope.aiFirstCount === 0
+          ? null
+          : `trên ${formatCount(scope.aiFirstCount)} ticket AI First`,
+      tone: "neutral",
+      filterPatch: null,
+    },
+    {
       id: "ledger-reopen",
       label: "Reopen sau AI First",
       value: `${formatCount(scope.reopenNumerator)} lần`,
@@ -304,19 +389,20 @@ export function selectLedger(
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
       filterPatch: null,
     },
+  ];
+
+  return [
     {
-      id: "ledger-direct-cs",
-      label: "Chuyển CS ngay từ đầu",
-      value: formatCount(scope.directCsCount),
-      support:
-        scope.eligible === 0
-          ? null
-          : `${share(scope.directCsCount, scope.eligible)} trong ${formatCount(
-              scope.eligible,
-            )} ${populationLabel}`,
-      tone: "neutral",
-      filterPatch:
-        scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
+      id: "ledger-group-ticket",
+      label: "Theo ticket",
+      denominator: `${formatCount(scope.eligible)} ticket`,
+      cells: ticketCells,
+    },
+    {
+      id: "ledger-group-response",
+      label: "Theo lượt CS-agent trả lời",
+      denominator: `${formatCount(scope.aiEndToEndCount)} ticket AI xử lý trọn`,
+      cells: responseCells,
     },
   ];
 }

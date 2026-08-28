@@ -38,6 +38,7 @@ from .dashboard_cache import CacheView, ProtectedSnapshotStore, SnapshotManager
 from .dashboard_schema import (
     entry_coverage_ticket_page,
     project_dashboard,
+    ticket_day_aggregate,
     ticket_page,
 )
 from .entry_coverage_cache import (
@@ -93,6 +94,7 @@ _QUERY_NAMES = (
     "cohort_weeks",
     "opened_from",
     "opened_to",
+    "aggregate",
     "outcome",
     "ticket_id",
     "issue_category",
@@ -604,6 +606,23 @@ def create_app(
                 {"detail": {"code": "dashboard_not_ready"}},
                 status_code=503,
             )
+        if parsed.pop("aggregate", False):
+            opened_from = parsed.get("opened_from")
+            opened_to = parsed.get("opened_to")
+            if opened_from is None:
+                return _invalid_query("opened_from")
+            if opened_to is None:
+                return _invalid_query("opened_to")
+            try:
+                days = ticket_day_aggregate(
+                    view.snapshot,
+                    opened_from=opened_from,
+                    opened_to=opened_to,
+                    week_definition=parsed.get("week_definition"),
+                )
+            except ValueError as error:
+                return _invalid_query(_parameter_for_validation_error(error))
+            return JSONResponse({"days": days})
         try:
             payload = ticket_page(view.snapshot, **parsed)
         except ValueError as error:
@@ -1692,6 +1711,10 @@ def _parse_ticket_query(
             if value not in {"true", "false"}:
                 return {}, name
             parsed[name] = value == "true"
+        elif name == "aggregate":
+            if value != "1":
+                return {}, name
+            parsed[name] = True
         elif name == "sort_direction":
             if value not in {"asc", "desc"}:
                 return {}, name

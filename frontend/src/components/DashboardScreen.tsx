@@ -10,6 +10,7 @@ import {
   updateTicketFilters,
 } from "../lib/dashboard-filters";
 import { useDashboardRuntime } from "../hooks/useDashboardRuntime";
+import { useDayRangeAggregates } from "../hooks/useDayRangeAggregates";
 import { useFreshdeskCookieStatus } from "../hooks/useFreshdeskCookieStatus";
 import {
   ALL_WEEKS_SCOPE,
@@ -17,9 +18,8 @@ import {
   isObservedWeek,
   selectLatestWeek,
   selectView,
-  selectWeekly,
 } from "../lib/selectors";
-import { resolveDateRangeToWeeks, scopeSnapshotToWeeks } from "../lib/report-scope";
+import { scopeSnapshotToDayRangeSnapshot, scopeSnapshotToWeeks } from "../lib/report-scope";
 import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
@@ -57,16 +57,24 @@ function explorerWeekPatch(value: "all" | readonly string[]) {
   return { cohort_week: "", cohort_weeks: value.join(",") } as const;
 }
 
+/** True day-grain range: Explorer syncs by the exact opened-date range, never
+ * a week snap — unlike explorerWeekPatch(), which is week-shaped scope only. */
+function explorerDayRangePatch(from: string, to: string) {
+  return { opened_from: from, opened_to: to } as const;
+}
+
 function DashboardBody() {
   const [weekDefinition, setWeekDefinition] = useState<WeekDefinition>("mon_fri");
   const [reportScope, setReportScope] = useState<ReportScopeState>({
     mode: "latest",
   });
   const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
+  const [activeDay, setActiveDay] = useState("");
   const { state, refresh, refreshDisabled, refreshHint } = useDashboardRuntime();
   const { state: freshdeskCookie, submitCookie } = useFreshdeskCookieStatus();
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
   const snapshot = state.snapshot;
+  const isDayRangeMode = reportScope.mode === "range";
   const reportView =
     snapshot === null ? null : selectView(snapshot, weekDefinition);
   const latestReportWeek =
@@ -81,28 +89,18 @@ function DashboardBody() {
             .sort((left, right) => right.localeCompare(left)),
     [reportView],
   );
+  const dayRangeQuery = useDayRangeAggregates({
+    from: reportScope.mode === "range" ? reportScope.from : "",
+    to: reportScope.mode === "range" ? reportScope.to : "",
+    weekDefinition,
+    enabled: isDayRangeMode,
+  });
   const selectedReportWeeks = useMemo(() => {
     if (reportScope.mode === "all") {
       return observedReportWeeks;
     }
-    if (reportScope.mode === "latest") {
+    if (reportScope.mode === "latest" || reportScope.mode === "range") {
       return latestReportWeek === null ? [] : [latestReportWeek.cohort_week];
-    }
-    if (reportScope.mode === "range") {
-      const resolved =
-        reportView === null
-          ? []
-          : resolveDateRangeToWeeks(
-              selectWeekly(reportView),
-              weekDefinition,
-              reportScope.from,
-              reportScope.to,
-            );
-      return resolved.length > 0
-        ? resolved
-        : latestReportWeek === null
-          ? []
-          : [latestReportWeek.cohort_week];
     }
     const observed = new Set(observedReportWeeks);
     const selected = reportScope.weeks.filter((week) => observed.has(week));
@@ -111,16 +109,12 @@ function DashboardBody() {
       : latestReportWeek === null
         ? []
         : [latestReportWeek.cohort_week];
-  }, [latestReportWeek, observedReportWeeks, reportScope, reportView, weekDefinition]);
-  const allReportWeeksSelected =
-    reportScope.mode === "all" ||
-    (reportScope.mode === "range" &&
-      observedReportWeeks.length > 0 &&
-      selectedReportWeeks.length === observedReportWeeks.length);
+  }, [latestReportWeek, observedReportWeeks, reportScope]);
+  const allReportWeeksSelected = reportScope.mode === "all";
   const multiWeekSelection =
-    !allReportWeeksSelected && selectedReportWeeks.length > 1;
+    !isDayRangeMode && !allReportWeeksSelected && selectedReportWeeks.length > 1;
   const reportWeek =
-    !allReportWeeksSelected && selectedReportWeeks.length === 1
+    !isDayRangeMode && !allReportWeeksSelected && selectedReportWeeks.length === 1
       ? (selectedReportWeeks[0] ?? "")
       : "";
   const ledgerScope = allReportWeeksSelected
@@ -128,19 +122,60 @@ function DashboardBody() {
     : multiWeekSelection
       ? SELECTED_WEEKS_SCOPE
       : reportWeek;
-  const reportSnapshot = useMemo(
-    () =>
-      snapshot === null || !multiWeekSelection
-        ? snapshot
-        : scopeSnapshotToWeeks(snapshot, weekDefinition, selectedReportWeeks),
-    [multiWeekSelection, selectedReportWeeks, snapshot, weekDefinition],
-  );
+  const dayRangeData = isDayRangeMode ? dayRangeQuery.data : undefined;
+  const reportSnapshot = useMemo(() => {
+    if (snapshot === null) {
+      return snapshot;
+    }
+    if (isDayRangeMode) {
+      return dayRangeData === undefined
+        ? null
+        : scopeSnapshotToDayRangeSnapshot(
+            snapshot,
+            weekDefinition,
+            dayRangeData.plottedDays,
+            reportScope.mode === "range" ? reportScope.from : "",
+          );
+    }
+    return multiWeekSelection
+      ? scopeSnapshotToWeeks(snapshot, weekDefinition, selectedReportWeeks)
+      : snapshot;
+  }, [
+    dayRangeData,
+    isDayRangeMode,
+    multiWeekSelection,
+    reportScope,
+    selectedReportWeeks,
+    snapshot,
+    weekDefinition,
+  ]);
+  const dayRangeProps = useMemo(() => {
+    if (
+      !isDayRangeMode ||
+      reportScope.mode !== "range" ||
+      dayRangeData === undefined ||
+      snapshot === null
+    ) {
+      return {};
+    }
+    return {
+      dayRange: {
+        from: reportScope.from,
+        to: reportScope.to,
+        allDays: dayRangeData.allDays,
+        plottedDays: dayRangeData.plottedDays,
+        activeDay,
+        onDaySelect: setActiveDay,
+      },
+      weeklySnapshot: snapshot,
+    };
+  }, [activeDay, dayRangeData, isDayRangeMode, reportScope, snapshot]);
   const currentExplorerWeekPatch = useMemo(
     () =>
-      explorerWeekPatch(
-        allReportWeeksSelected ? "all" : selectedReportWeeks,
-      ),
-    [allReportWeeksSelected, selectedReportWeeks],
+      isDayRangeMode && reportScope.mode === "range"
+        ? explorerDayRangePatch(reportScope.from, reportScope.to)
+        : explorerWeekPatch(allReportWeeksSelected ? "all" : selectedReportWeeks),
+    [allReportWeeksSelected, isDayRangeMode, reportScope, selectedReportWeeks],
   );
   const hasSnapshot = snapshot !== null;
   const activeFilters = useMemo(
@@ -171,7 +206,17 @@ function DashboardBody() {
     if (!hasSnapshot) {
       return;
     }
-    const patchKey = `${currentExplorerWeekPatch.cohort_week}|${currentExplorerWeekPatch.cohort_weeks}`;
+    // The "opened_from" branch below is defensive: today, changeReportRange
+    // is the only setter of scope "range" and it always applies its own
+    // opened_from/opened_to patch synchronously in the same action, so this
+    // effect never actually observes a day-range patchKey change in practice
+    // (verified: no test can force it RED). Keep the branch correct anyway
+    // in case a future caller sets "range" scope without also patching
+    // filters itself.
+    const patchKey =
+      "opened_from" in currentExplorerWeekPatch
+        ? `range|${currentExplorerWeekPatch.opened_from}|${currentExplorerWeekPatch.opened_to}`
+        : `weeks|${currentExplorerWeekPatch.cohort_week}|${currentExplorerWeekPatch.cohort_weeks}`;
     if (syncedWeekPatchKeyRef.current === patchKey) {
       return;
     }
@@ -180,7 +225,7 @@ function DashboardBody() {
   }, [currentExplorerWeekPatch, hasSnapshot]);
 
   useEffect(() => {
-    if (reportView === null) {
+    if (reportView === null || isDayRangeMode) {
       return;
     }
     setFilters((current) =>
@@ -189,7 +234,7 @@ function DashboardBody() {
         ? current
         : updateTicketFilters(current, currentExplorerWeekPatch),
     );
-  }, [currentExplorerWeekPatch, reportView]);
+  }, [currentExplorerWeekPatch, isDayRangeMode, reportView]);
 
   const removeFilter = useCallback((key: TicketFilterKey) => {
     setFilters((current) => updateTicketFilters(current, { [key]: "" }));
@@ -217,23 +262,12 @@ function DashboardBody() {
         return;
       }
       setReportScope({ mode: "range", from, to });
-      const resolved =
-        reportView === null
-          ? []
-          : resolveDateRangeToWeeks(
-              selectWeekly(reportView),
-              weekDefinition,
-              from,
-              to,
-            );
+      setActiveDay("");
       setFilters((current) =>
-        updateTicketFilters(
-          current,
-          explorerWeekPatch(resolved.length > 0 ? resolved : "all"),
-        ),
+        updateTicketFilters(current, explorerDayRangePatch(from, to)),
       );
     },
-    [changeReportWeeks, reportView, weekDefinition],
+    [changeReportWeeks],
   );
 
   const applyExplorerFilter = useCallback((patch: Partial<TicketFilters>) => {
@@ -301,20 +335,36 @@ function DashboardBody() {
             ))}
           </div>
         </div>
+      ) : reportSnapshot === null ? (
+        <div
+          className={styles.skeleton}
+          data-testid="day-range-skeleton"
+          aria-hidden="true"
+        >
+          <span className={styles.skeletonTitle} />
+          <span className={styles.skeletonLine} />
+          <span className={styles.skeletonLineShort} />
+          <div className={styles.skeletonLedger}>
+            {Array.from({ length: 4 }, (_, index) => (
+              <span key={index} />
+            ))}
+          </div>
+        </div>
       ) : (
         <>
           <DecisionLedger
-            snapshot={reportSnapshot ?? snapshot}
+            snapshot={reportSnapshot}
             weekDefinition={weekDefinition}
             activeWeek={ledgerScope}
             onCellSelect={applyLedgerFilter}
           />
           <WeeklyReport
-            snapshot={reportSnapshot ?? snapshot}
+            snapshot={reportSnapshot}
             weekDefinition={weekDefinition}
           />
           <BelowFold
-            snapshot={reportSnapshot ?? snapshot}
+            snapshot={reportSnapshot}
+            {...dayRangeProps}
             weekDefinition={weekDefinition}
             activeWeek={reportWeek}
             allWeeks={allReportWeeksSelected || multiWeekSelection}

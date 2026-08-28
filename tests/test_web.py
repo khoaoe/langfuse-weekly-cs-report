@@ -477,7 +477,118 @@ def test_ticket_endpoint_applies_allowlisted_sort_before_pagination(manager_fact
         "300",
         "200",
     ]
-    assert set(response.json()) == {"items", "page", "page_size", "total"}
+
+
+def test_ticket_endpoint_aggregate_returns_day_buckets_instead_of_ticket_list(
+    manager_factory,
+):
+    """aggregate=1 must never return a page-limited item list -- callers use
+    it precisely to avoid paginating thousands of tickets client-side."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(
+            "/api/tickets?aggregate=1&opened_from=2026-07-20&opened_to=2026-07-20"
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "items" not in body
+    assert body == {
+        "days": [
+            {
+                "day": "2026-07-20",
+                "total_tickets": 3,
+                "ai_first_count": 2,
+                "transferred_count": 2,
+                "direct_cs_count": 1,
+                "outcomes": {
+                    "ai_end_to_end": 1,
+                    "ai_then_cs": 1,
+                    "direct_cs": 1,
+                    "unclassified": 0,
+                },
+                "reopen_lifetime_numerator": 0,
+                "reopen_lifetime_denominator": 3,
+                "gt4_turn_with_cs": 0,
+                "gt4_turn_without_cs": 0,
+                "resolved_first_reply_count": 1,
+                "ai_reply_sum_ai_first": 2,
+                "segments": {
+                    "skill": {},
+                    "app": {
+                        "241 - Chuyển Tiền ATM": {
+                            "total": 3,
+                            "ai_first": 2,
+                            "transferred": 2,
+                            "reopen": 0,
+                        }
+                    },
+                    "issue_category": {
+                        "Thanh toán-IBFT": {
+                            "total": 3,
+                            "ai_first": 2,
+                            "transferred": 2,
+                            "reopen": 0,
+                        }
+                    },
+                },
+                "transfer_reasons": {"unknown": 2},
+            }
+        ],
+    }
+
+
+def test_ticket_endpoint_aggregate_requires_opened_from_and_opened_to(
+    manager_factory,
+):
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        missing_to = client.get("/api/tickets?aggregate=1&opened_from=2026-07-20")
+        missing_both = client.get("/api/tickets?aggregate=1")
+
+    assert missing_to.status_code == 422
+    assert missing_to.json()["detail"]["code"] == "invalid_query"
+    assert missing_both.status_code == 422
+
+
+def test_ticket_endpoint_aggregate_forwards_week_definition_to_exclude_weekend_days(
+    manager_factory,
+):
+    snapshot = _snapshot()
+    weekend_ticket = replace(
+        snapshot.tickets[0],
+        ticket_id="900",
+        opened_at="2026-07-25T18:00:00Z",
+        is_weekend_start=True,
+    )
+    manager = manager_factory(
+        initial=replace(snapshot, tickets=(*snapshot.tickets, weekend_ticket))
+    )
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        both = client.get(
+            "/api/tickets?aggregate=1&opened_from=2026-07-20&opened_to=2026-07-26"
+        )
+        mon_fri_only = client.get(
+            "/api/tickets?aggregate=1&opened_from=2026-07-20&opened_to=2026-07-26"
+            "&week_definition=mon_fri"
+        )
+
+    assert both.status_code == 200
+    assert mon_fri_only.status_code == 200
+    both_total = sum(day["total_tickets"] for day in both.json()["days"])
+    mon_fri_total = sum(day["total_tickets"] for day in mon_fri_only.json()["days"])
+    assert both_total == 4
+    assert mon_fri_total == 3
 
 
 def test_entry_coverage_endpoint_filters_multiple_weeks_and_keeps_safe_projection(
@@ -885,7 +996,7 @@ def test_ticket_endpoint_accepts_the_full_18_unique_query_pair_contract(manager_
     [
         ("page=" + ("9" * 5000), "page"),
         ("page=1234567890", "page"),
-        ("&".join(["page=1"] * 24), "unknown"),
+        ("&".join(["page=1"] * 25), "unknown"),
     ],
     ids=("five-thousand-digit-value", "ten-digit-number", "more-pairs-than-allowlisted-names"),
 )

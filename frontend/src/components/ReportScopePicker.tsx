@@ -1,8 +1,12 @@
 import { useRef, useState } from "react";
 
 import type { WeekDefinition, WeeklyReportRow } from "../lib/dashboard-schema";
-import { formatCount, formatDateRangeLabel, formatWeekRange } from "../lib/format";
-import { resolveDateRangeToWeeks } from "../lib/report-scope";
+import {
+  dateRangeSpanDays,
+  formatCount,
+  formatDateRangeLabel,
+  formatWeekRange,
+} from "../lib/format";
 import { DateRangeField } from "./DateRangeField";
 import styles from "./dashboard.module.css";
 
@@ -29,7 +33,6 @@ export function ReportScopePicker({
   const [mode, setMode] = useState<"weeks" | "range">(
     activeRange != null ? "range" : "weeks",
   );
-  const [rangeError, setRangeError] = useState<string | null>(null);
   const observed = reportWindow
     .filter((week) => week.has_data)
     .toSorted((left, right) =>
@@ -44,9 +47,13 @@ export function ReportScopePicker({
     currentWeek !== undefined &&
     selected.size === 1 &&
     selected.has(currentWeek.cohort_week);
+  const activeRangeSpanDays =
+    activeRange == null ? null : dateRangeSpanDays(activeRange.from, activeRange.to);
   const summary =
     activeRange != null
-      ? `${formatDateRangeLabel(activeRange.from, activeRange.to)} · ${formatCount(selectedRows.length)} tuần`
+      ? `${formatDateRangeLabel(activeRange.from, activeRange.to)}${
+          activeRangeSpanDays === null ? "" : ` · ${formatCount(activeRangeSpanDays)} ngày`
+        }`
       : allWeeksSelected
         ? `Toàn bộ kỳ báo cáo (${formatCount(reportWindow.length)} tuần)`
         : selectedRows.length === 1 && selectedRows[0] !== undefined
@@ -165,40 +172,18 @@ export function ReportScopePicker({
             <>
               <DateRangeField
                 value={activeRange ?? { from: "", to: "" }}
-                onChange={({ from, to }) => {
-                  if (from === "" && to === "") {
-                    setRangeError(null);
-                    onRangeChange("", "");
-                    return;
-                  }
-                  const weeks = resolveDateRangeToWeeks(
-                    reportWindow,
-                    weekDefinition,
-                    from,
-                    to,
-                  );
-                  if (weeks.length === 0) {
-                    setRangeError(
-                      "Không có tuần nào có dữ liệu trong khoảng ngày này. Phạm vi báo cáo giữ nguyên như trước.",
-                    );
-                    return;
-                  }
-                  setRangeError(null);
-                  onRangeChange(from, to);
-                }}
+                onChange={({ from, to }) => onRangeChange(from, to)}
                 label="Khoảng ngày báo cáo"
                 idPrefix="reportRange"
                 clearLabel="Toàn bộ kỳ báo cáo"
               />
-              {rangeError !== null ? (
-                <p id="reportRangeError" role="status" className={styles.reportScopeError}>
-                  {rangeError}
-                </p>
-              ) : activeRange != null ? (
+              {activeRange != null ? (
                 <p id="reportRangeSummary" className={styles.reportScopeSummaryLine}>
-                  {`${formatDateRangeLabel(activeRange.from, activeRange.to)} → ${selectedRows.length} tuần: ${selectedRows
-                    .map((row) => formatWeekRange(row.cohort_week, weekDefinition))
-                    .join(", ")}`}
+                  {`${formatDateRangeLabel(activeRange.from, activeRange.to)}${
+                    activeRangeSpanDays === null
+                      ? ""
+                      : ` → ${formatCount(activeRangeSpanDays)} ngày`
+                  }`}
                 </p>
               ) : null}
             </>

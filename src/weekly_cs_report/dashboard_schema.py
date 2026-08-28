@@ -31,7 +31,7 @@ from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 22
+_STORAGE_VERSION = 23
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -165,7 +165,7 @@ _WEEKLY_KEYS = frozenset(
         "reopen_7d_denominator", "reopen_lifetime_rate", "reopen_lifetime_numerator",
         "reopen_lifetime_denominator", "ai_reply_mean_ai_first", "ai_reply_p50",
         "ai_reply_p90", "ai_reply_max", "gt4_turn_with_cs", "gt4_turn_without_cs",
-        "max_replies_rule_fired", "as_of", "reopen_reason",
+        "max_replies_rule_fired", "resolved_first_reply", "as_of", "reopen_reason",
     }
 )
 
@@ -446,6 +446,127 @@ def ticket_page(
     rows = _sort_ticket_rows(rows, sort_by, effective_sort_direction)
     start = (page - 1) * page_size
     return {"items": [asdict(row) for row in rows[start:start + page_size]], "page": page, "page_size": page_size, "total": len(rows)}
+
+
+_DAY_AGGREGATE_SEGMENT_DIMENSIONS = ("skill", "app", "issue_category")
+
+
+def ticket_day_aggregate(
+    snapshot: DashboardSnapshot,
+    *,
+    opened_from: str,
+    opened_to: str,
+    week_definition: str | None = None,
+) -> list[dict[str, object]]:
+    """Sum ticket-level rows into one entry per Vietnam-local calendar day.
+
+    Grain is a day, not a week, so the result composes upward (callers add
+    days into weeks) but never needs to be decomposed. `opened_at` is UTC;
+    bucketing must happen here, in Vietnam local time, matching cohort_week
+    elsewhere in this module -- cutting the opened_at string in the frontend
+    would silently misclassify every ticket opened at or after 17:00 UTC.
+
+    `week_definition="mon_fri"` excludes weekend-start tickets the same way
+    `ticket_page()` does, so a caller rolling the result into mon_fri weeks
+    never needs its own copy of the weekend rule.
+    """
+    if week_definition is not None and week_definition not in _VIEWS:
+        raise ValueError("week_definition is invalid")
+    parsed_from = _parsed_ticket_date(opened_from, "opened_from")
+    parsed_to = _parsed_ticket_date(opened_to, "opened_to")
+    if parsed_from is None or parsed_to is None:
+        raise ValueError("opened_from is invalid")
+    if parsed_from > parsed_to:
+        raise ValueError("opened_from must not be after opened_to")
+    opened_from_bound = datetime.combine(parsed_from, time.min, tzinfo=_VIETNAM_TIMEZONE)
+    opened_to_bound = datetime.combine(parsed_to, time.max, tzinfo=_VIETNAM_TIMEZONE)
+
+    buckets: dict[str, list[TicketRow]] = {}
+    for row in snapshot.tickets:
+        opened_at = _parse_utc_iso(row.opened_at, "opened_at")
+        if opened_at < opened_from_bound or opened_at > opened_to_bound:
+            continue
+        if week_definition == "mon_fri" and row.is_weekend_start:
+            continue
+        day = opened_at.astimezone(_VIETNAM_TIMEZONE).date().isoformat()
+        buckets.setdefault(day, []).append(row)
+
+    return [
+        _day_aggregate_for(day, rows)
+        for day, rows in sorted(buckets.items())
+    ]
+
+
+def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
+    outcomes = {"ai_end_to_end": 0, "ai_then_cs": 0, "direct_cs": 0, "unclassified": 0}
+    segments: dict[str, dict[str, dict[str, int]]] = {
+        dimension: {} for dimension in _DAY_AGGREGATE_SEGMENT_DIMENSIONS
+    }
+    transfer_reasons: dict[str, int] = {}
+    ai_first_count = 0
+    transferred_count = 0
+    direct_cs_count = 0
+    reopen_lifetime_numerator = 0
+    reopen_lifetime_denominator = 0
+    gt4_turn_with_cs = 0
+    gt4_turn_without_cs = 0
+    resolved_first_reply_count = 0
+    ai_reply_sum_ai_first = 0
+
+    for row in rows:
+        outcomes[row.outcome] = outcomes.get(row.outcome, 0) + 1
+        if row.ai_first:
+            ai_first_count += 1
+            ai_reply_sum_ai_first += row.ai_reply_count
+        if row.outcome == "ai_end_to_end" and row.ai_reply_count == 1:
+            resolved_first_reply_count += 1
+        if row.transferred:
+            transferred_count += 1
+        if row.outcome == "direct_cs":
+            direct_cs_count += 1
+        if row.reopen_lifetime is not None:
+            reopen_lifetime_numerator += row.reopen_lifetime
+            reopen_lifetime_denominator += 1
+        if row.gt4_turn:
+            if row.transferred:
+                gt4_turn_with_cs += 1
+            else:
+                gt4_turn_without_cs += 1
+        if row.transfer_reason is not None:
+            transfer_reasons[row.transfer_reason] = (
+                transfer_reasons.get(row.transfer_reason, 0) + 1
+            )
+        for dimension in _DAY_AGGREGATE_SEGMENT_DIMENSIONS:
+            label = getattr(row, dimension)
+            if label is None:
+                continue
+            bucket = segments[dimension].setdefault(
+                label, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}
+            )
+            bucket["total"] += 1
+            if row.ai_first:
+                bucket["ai_first"] += 1
+            if row.transferred:
+                bucket["transferred"] += 1
+            if row.reopen_lifetime:
+                bucket["reopen"] += row.reopen_lifetime
+
+    return {
+        "day": day,
+        "total_tickets": len(rows),
+        "ai_first_count": ai_first_count,
+        "transferred_count": transferred_count,
+        "direct_cs_count": direct_cs_count,
+        "outcomes": outcomes,
+        "reopen_lifetime_numerator": reopen_lifetime_numerator,
+        "reopen_lifetime_denominator": reopen_lifetime_denominator,
+        "gt4_turn_with_cs": gt4_turn_with_cs,
+        "gt4_turn_without_cs": gt4_turn_without_cs,
+        "resolved_first_reply_count": resolved_first_reply_count,
+        "ai_reply_sum_ai_first": ai_reply_sum_ai_first,
+        "segments": segments,
+        "transfer_reasons": transfer_reasons,
+    }
 
 
 def entry_coverage_ticket_page(
@@ -1598,6 +1719,7 @@ def _weekly_payload(
         "ai_reply_max": summary.ai_reply_max, "gt4_turn_with_cs": summary.gt4_turn_with_cs,
         "gt4_turn_without_cs": summary.gt4_turn_without_cs,
         "max_replies_rule_fired": summary.max_replies_rule_fired, "as_of": _utc_iso(summary.as_of),
+        "resolved_first_reply": summary.resolved_first_reply,
         "reopen_reason": dict(reopen_reason),
     }
 
@@ -3084,11 +3206,12 @@ def _validate_weekly(value: object, expected_definition: str) -> None:
         if item["cohort_status"] not in {"complete", "wtd"}: raise ValueError("weekly cohort_status is invalid")
         if item["week_definition"] != expected_definition: raise ValueError("weekly week_definition is invalid")
         if not isinstance(item["has_data"], bool): raise ValueError("weekly has_data is invalid")
-        for field in ("total_tickets", "ai_first_count", "ai_end_to_end_count", "ai_then_cs_count", "direct_cs_count", "unclassified_count", "reopen_lifetime_numerator", "reopen_lifetime_denominator", "gt4_turn_with_cs", "gt4_turn_without_cs", "max_replies_rule_fired"):
+        for field in ("total_tickets", "ai_first_count", "ai_end_to_end_count", "ai_then_cs_count", "direct_cs_count", "unclassified_count", "reopen_lifetime_numerator", "reopen_lifetime_denominator", "gt4_turn_with_cs", "gt4_turn_without_cs", "max_replies_rule_fired", "resolved_first_reply"):
             _nonnegative_int(item[field], f"weekly {field}")
         if item["has_data"] != bool(item["total_tickets"]): raise ValueError("weekly has_data does not match total")
         if item["ai_first_count"] != item["ai_end_to_end_count"] + item["ai_then_cs_count"]: raise ValueError("weekly ai_first does not reconcile")
         if item["total_tickets"] != item["ai_end_to_end_count"] + item["ai_then_cs_count"] + item["direct_cs_count"] + item["unclassified_count"]: raise ValueError("weekly outcomes do not reconcile")
+        if item["resolved_first_reply"] > item["ai_end_to_end_count"]: raise ValueError("weekly resolved_first_reply exceeds ai_end_to_end_count")
         _rate(item["ai_first_rate"], "weekly ai_first_rate")
         expected_ai_rate = (
             item["ai_first_count"] / item["total_tickets"]

@@ -490,6 +490,7 @@ _WEEKLY_COLUMNS = (
     "gt4_turn_with_cs",
     "gt4_turn_without_cs",
     "max_replies_rule_fired",
+    "resolved_first_reply",
 )
 
 

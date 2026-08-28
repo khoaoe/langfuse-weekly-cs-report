@@ -39,7 +39,7 @@ export function DecisionLedger({
   const view = selectView(snapshot, weekDefinition);
   const scope = selectScope(snapshot, weekDefinition, activeWeek);
   const latest = scope.week;
-  const cells = selectLedger(snapshot, weekDefinition, activeWeek);
+  const groups = selectLedger(snapshot, weekDefinition, activeWeek);
   const attention = selectAttentionItems(snapshot, weekDefinition, activeWeek);
   const narrative = buildDeterministicNarrative(
     buildNarrativeInput(snapshot, weekDefinition, activeWeek),
@@ -99,45 +99,56 @@ export function DecisionLedger({
             </p>
           ) : null}
 
-          <div
-            id="kpiGrid"
-            className={styles.ledger}
-            aria-labelledby={scope.kind === "empty" ? "ledger-scope" : "dynamicTitle"}
-          >
-            {cells.map((cell) =>
-              cell.filterPatch === null || onCellSelect === undefined ? (
-                <div
-                  key={cell.id}
-                  id={cell.id}
-                  className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
-                >
-                  <span className={styles.ledgerLabel}>{cell.label}</span>
-                  <span className={styles.ledgerValue}>{cell.value}</span>
-                  {cell.support === null ? null : (
-                    <span className={styles.ledgerSupport}>{cell.support}</span>
-                  )}
-                </div>
-              ) : (
-                <div
-                  key={cell.id}
-                  id={cell.id}
-                  className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
-                >
-                  <button
-                    type="button"
-                    className={styles.ledgerCellButton}
-                    onClick={() => onCellSelect(cell.filterPatch as Partial<TicketFilters>)}
-                  >
-                    <span className={styles.ledgerLabel}>{cell.label}</span>
-                    <span className={styles.ledgerValue}>{cell.value}</span>
-                    {cell.support === null ? null : (
-                      <span className={styles.ledgerSupport}>{cell.support}</span>
-                    )}
-                  </button>
-                </div>
-              ),
-            )}
-          </div>
+          {groups.map((group) => (
+            <div key={group.id} className={styles.ledgerGroupBlock}>
+              <h3 id={group.id} className={styles.ledgerGroupHeading}>
+                {group.label}
+                <span className={styles.ledgerGroupDenominator}>
+                  {group.denominator}
+                </span>
+              </h3>
+              <div
+                id={group.id === "ledger-group-ticket" ? "kpiGrid" : undefined}
+                className={styles.ledger}
+                role="group"
+                aria-labelledby={group.id}
+              >
+                {group.cells.map((cell) =>
+                  cell.filterPatch === null || onCellSelect === undefined ? (
+                    <div
+                      key={cell.id}
+                      id={cell.id}
+                      className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
+                    >
+                      <span className={styles.ledgerLabel}>{cell.label}</span>
+                      <span className={styles.ledgerValue}>{cell.value}</span>
+                      {cell.support === null ? null : (
+                        <span className={styles.ledgerSupport}>{cell.support}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <div
+                      key={cell.id}
+                      id={cell.id}
+                      className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
+                    >
+                      <button
+                        type="button"
+                        className={styles.ledgerCellButton}
+                        onClick={() => onCellSelect(cell.filterPatch as Partial<TicketFilters>)}
+                      >
+                        <span className={styles.ledgerLabel}>{cell.label}</span>
+                        <span className={styles.ledgerValue}>{cell.value}</span>
+                        {cell.support === null ? null : (
+                          <span className={styles.ledgerSupport}>{cell.support}</span>
+                        )}
+                      </button>
+                    </div>
+                  ),
+                )}
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

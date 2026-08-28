@@ -6,9 +6,29 @@ import { dashboardEnvelopeFixture } from "./fixtures/dashboard";
 import {
   DashboardEnvelopeSchema,
   type DashboardSnapshot,
+  type DayAggregate,
   type WeeklyReportRow,
 } from "../src/lib/dashboard-schema";
 import { BelowFold } from "../src/components/BelowFold";
+
+function dayAgg(overrides: Partial<DayAggregate> & { day: string }): DayAggregate {
+  return {
+    total_tickets: 0,
+    ai_first_count: 0,
+    transferred_count: 0,
+    direct_cs_count: 0,
+    outcomes: { ai_end_to_end: 0, ai_then_cs: 0, direct_cs: 0, unclassified: 0 },
+    reopen_lifetime_numerator: 0,
+    reopen_lifetime_denominator: 0,
+    gt4_turn_with_cs: 0,
+    gt4_turn_without_cs: 0,
+    resolved_first_reply_count: 0,
+    ai_reply_sum_ai_first: 0,
+    segments: { skill: {}, app: {}, issue_category: {} },
+    transfer_reasons: {},
+    ...overrides,
+  };
+}
 
 const baseSnapshot = DashboardEnvelopeSchema.parse(dashboardEnvelopeFixture)
   .snapshot as DashboardSnapshot;
@@ -423,5 +443,143 @@ describe("trend chart data gaps", () => {
     expect(
       screen.queryByText("Mọi tuần đều cắt tới thứ Năm để so cùng kỳ."),
     ).toBeNull();
+  });
+});
+
+describe("trend chart day mode", () => {
+  // 6 lookback days (04-09) feeding the rolling window, then the plotted
+  // range 08-10..08-11 -- mirrors useDayRangeAggregates()'s allDays/plottedDays split.
+  const allDays: DayAggregate[] = [
+    "2026-08-04",
+    "2026-08-05",
+    "2026-08-06",
+    "2026-08-07",
+    "2026-08-08",
+    "2026-08-09",
+    "2026-08-10",
+    "2026-08-11",
+  ].map((day) =>
+    dayAgg({
+      day,
+      total_tickets: 10,
+      ai_first_count: 7,
+      reopen_lifetime_numerator: 2,
+      reopen_lifetime_denominator: 10,
+    }),
+  );
+  const plottedDays = allDays.slice(6);
+
+  function renderDayMode(onDaySelect = vi.fn()) {
+    const snapshot = snapshotWithWeeks([week("2026-07-06"), week("2026-07-13")]);
+    return render(
+      <BelowFold
+        snapshot={snapshot}
+        weekDefinition="mon_sun"
+        activeWeek=""
+        onWeekSelect={() => {}}
+        onSegmentSelect={() => {}}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        onCsatBreakdownSelect={() => {}}
+        onCsatBreakdownGroupingChange={() => {}}
+        dayRange={{
+          from: "2026-08-10",
+          to: "2026-08-11",
+          allDays,
+          plottedDays,
+          activeDay: "",
+          onDaySelect,
+        }}
+      />,
+    );
+  }
+
+  it("shows the mandatory two-line axis label with the exact required text", () => {
+    renderDayMode();
+    expect(
+      screen.getByText("Xu hướng theo ngày · 10/08–11/08"),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Tỷ lệ là trung bình động 7 ngày"),
+    ).toBeVisible();
+  });
+
+  it("plots only the selected range, not the lookback days", () => {
+    renderDayMode();
+    expect(
+      document.querySelectorAll('[data-week-target="2026-08-10"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelectorAll('[data-week-target="2026-08-11"]'),
+    ).toHaveLength(2);
+    expect(
+      document.querySelectorAll('[data-week-target="2026-08-04"]'),
+    ).toHaveLength(0);
+  });
+
+  it("uses DD/MM axis labels with no year", () => {
+    renderDayMode();
+    const labels = screen.getAllByText("10/08");
+    expect(labels.length).toBeGreaterThan(0);
+    for (const label of labels) {
+      expect(label).toBeVisible();
+    }
+  });
+
+  it("clicking a day bar selects that day, not a week", () => {
+    const onDaySelect = vi.fn();
+    renderDayMode(onDaySelect);
+    const target = document.querySelector('[data-week-target="2026-08-10"]');
+    fireEvent.click(target as Element);
+    expect(onDaySelect).toHaveBeenCalledWith("2026-08-10");
+  });
+
+  it("preserves id=\"trendChart\" on the volume chart svg", () => {
+    renderDayMode();
+    expect(document.getElementById("trendChart")).not.toBeNull();
+  });
+});
+
+describe("transfer diagnostics day mode note", () => {
+  const allDays: DayAggregate[] = ["2026-08-10", "2026-08-11"].map((day) =>
+    dayAgg({ day, total_tickets: 5, ai_first_count: 3 }),
+  );
+
+  function renderWithWeeklySnapshot() {
+    const latestComplete = week("2026-08-03", {
+      cohort_status: "complete",
+      has_data: true,
+    });
+    const weeklySnapshot = snapshotWithWeeks([latestComplete]);
+    const daySnapshot = snapshotWithWeeks([latestComplete]);
+    return render(
+      <BelowFold
+        snapshot={daySnapshot}
+        weeklySnapshot={weeklySnapshot}
+        weekDefinition="mon_sun"
+        activeWeek=""
+        onWeekSelect={() => {}}
+        onSegmentSelect={() => {}}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        onCsatBreakdownSelect={() => {}}
+        onCsatBreakdownGroupingChange={() => {}}
+        dayRange={{
+          from: "2026-08-10",
+          to: "2026-08-11",
+          allDays,
+          plottedDays: allDays,
+          activeDay: "",
+          onDaySelect: () => {},
+        }}
+      />,
+    );
+  }
+
+  it("shows a note that transfer diagnostics read by full week, not the selected day range", () => {
+    renderWithWeeklySnapshot();
+    expect(
+      screen.getByText(
+        "Chẩn đoán chuyển CS và TPE tính theo tuần trọn vẹn (03/08–09/08), không theo khoảng ngày đã chọn.",
+      ),
+    ).toBeVisible();
   });
 });

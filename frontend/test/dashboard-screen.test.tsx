@@ -889,6 +889,81 @@ describe("DashboardScreen", () => {
     });
   });
 
+  describe("day range mode", () => {
+    function dayAggregateFixture(day: string, totalTickets: number) {
+      return {
+        day,
+        total_tickets: totalTickets,
+        ai_first_count: totalTickets,
+        transferred_count: 0,
+        direct_cs_count: 0,
+        outcomes: {
+          ai_end_to_end: totalTickets,
+          ai_then_cs: 0,
+          direct_cs: 0,
+          unclassified: 0,
+        },
+        reopen_lifetime_numerator: 0,
+        reopen_lifetime_denominator: totalTickets,
+        gt4_turn_with_cs: 0,
+        gt4_turn_without_cs: 0,
+        resolved_first_reply_count: totalTickets,
+        ai_reply_sum_ai_first: totalTickets,
+        segments: { skill: {}, app: {}, issue_category: {} },
+        transfer_reasons: {},
+      };
+    }
+
+    async function pickJulyRange(user: ReturnType<typeof userEvent.setup>) {
+      const banner = await screen.findByRole("banner");
+      await user.click(
+        within(banner).getByRole("button", { name: "Theo khoảng ngày" }),
+      );
+      await user.click(
+        within(banner).getByRole("button", { name: "Tháng trước" }),
+      );
+      await user.click(within(banner).getByRole("button", { name: "20" }));
+      await user.click(within(banner).getByRole("button", { name: "21" }));
+    }
+
+    it("scopes the ledger and report to day-grain data fetched for the picked range", async () => {
+      const user = userEvent.setup();
+      server.use(
+        http.get("/api/tickets", ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get("aggregate") !== "1") {
+            return HttpResponse.json({ items: [], page: 1, page_size: 50, total: 0 });
+          }
+          return HttpResponse.json({
+            days: [
+              dayAggregateFixture("2026-07-20", 3),
+              dayAggregateFixture("2026-07-21", 5),
+            ],
+          });
+        }),
+      );
+      render(<DashboardScreen />);
+      await screen.findByRole("heading", { name: /T2–T6.*7 ticket/i });
+
+      const banner = await screen.findByRole("banner");
+      await user.click(
+        within(banner).getByLabelText(/Phạm vi báo cáo:/),
+      );
+      await pickJulyRange(user);
+
+      await waitFor(() =>
+        expect(
+          within(banner).getByLabelText(/Phạm vi báo cáo:/),
+        ).toHaveAccessibleName("Phạm vi báo cáo: 20/07–21/07 · 2 ngày"),
+      );
+      await waitFor(() =>
+        expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
+          "8",
+        ),
+      );
+    });
+  });
+
   it("o dan ticket trong Vi sao agent lam vay co id on dinh", async () => {
     const originalHash = window.location.hash;
     window.location.hash = "#trace";

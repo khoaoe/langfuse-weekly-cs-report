@@ -504,6 +504,28 @@
 
 .ledgerGroup {
   display: grid;
+  gap: var(--space-4);
+}
+
+.ledgerGroupBlock {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.ledgerGroupHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.ledgerGroupDenominator {
+  color: var(--muted);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
 }
 
 .ledgerScope {
@@ -535,7 +557,7 @@
 
 .ledger {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface);
@@ -889,14 +911,14 @@
   }
 
   .ledger {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
   }
 
-  .ledgerCell:nth-child(odd) {
+  .ledgerCell {
     border-left: 0;
   }
 
-  .ledgerCell:nth-child(n + 3) {
+  .ledgerCell:not(:first-child) {
     border-top: 1px solid var(--rule);
   }
 }

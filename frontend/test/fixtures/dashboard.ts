@@ -32,6 +32,7 @@ const weekly = [
     gt4_turn_with_cs: 1,
     gt4_turn_without_cs: 2,
     max_replies_rule_fired: 0,
+    resolved_first_reply: 4,
     as_of: "2026-07-29T11:27:00Z",
     reopen_reason: {
       labels_version: null,

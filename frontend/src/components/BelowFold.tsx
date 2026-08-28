@@ -4,6 +4,7 @@ import { Bar, LinePath } from "@visx/shape";
 
 import type {
   DashboardSnapshot,
+  DayAggregate,
   Segments,
   SamePeriod,
   WeekDefinition,
@@ -11,6 +12,7 @@ import type {
 } from "../lib/dashboard-schema";
 import type { TicketFilterKey, TicketFilters } from "../lib/dashboard-filters";
 import { niceRateTicks, niceVolumeTicks } from "../lib/chart-scale";
+import { rollingRate } from "../lib/report-scope";
 import {
   formatCount,
   formatRate,
@@ -43,6 +45,9 @@ import { TransferDiagnostics } from "./TransferDiagnostics";
 import belowFoldStyles from "./below-fold.module.css";
 import styles from "./dashboard.module.css";
 import trendStyles from "./trend.module.css";
+
+/** §B1: rolling window width for day-mode rate lines. */
+const ROLLING_WINDOW_DAYS = 7;
 
 const CHART_WIDTH = 720;
 const CHART_HEIGHT = 220;
@@ -86,10 +91,156 @@ type TrendWeek = Pick<
   | "reopen_lifetime_rate"
 >;
 
+/**
+ * Chart-internal shape shared by week mode and day mode. `key` is the
+ * click/identity value (a cohort_week or a calendar day, both ISO dates);
+ * `axisLabel`/`rangeLabel` are pre-formatted by the caller so this component
+ * never needs to know whether it is looking at a week or a day.
+ */
+interface TrendPoint {
+  readonly key: string;
+  readonly wtd: boolean;
+  readonly has_data: boolean;
+  readonly total_tickets: number;
+  readonly ai_first_count: number;
+  readonly ai_first_rate: number;
+  readonly reopen_lifetime_rate: number | null;
+  readonly axisLabel: string;
+  readonly rangeLabel: string;
+}
+
+function trendWeekToPoint(week: TrendWeek, weekDefinition: WeekDefinition): TrendPoint {
+  return {
+    key: week.cohort_week,
+    wtd: week.cohort_status === "wtd",
+    has_data: week.has_data,
+    total_tickets: week.total_tickets,
+    ai_first_count: week.ai_first_count,
+    ai_first_rate: week.ai_first_rate,
+    reopen_lifetime_rate: week.reopen_lifetime_rate,
+    axisLabel: formatWeekStart(week.cohort_week),
+    rangeLabel: formatWeekRange(week.cohort_week, weekDefinition),
+  };
+}
+
+/**
+ * §B1: rate lines use a 7-day rolling average, computed over `allDays`
+ * (plotted range plus 6 lookback days so the window is full from the first
+ * plotted point), then trimmed to `plottedDays` for rendering. The lookback
+ * days themselves are never plotted.
+ */
+function dayRangeToTrendPoints(
+  allDays: readonly DayAggregate[],
+  plottedDays: readonly DayAggregate[],
+): TrendPoint[] {
+  const aiFirstRates = rollingRate(
+    allDays,
+    ROLLING_WINDOW_DAYS,
+    (day) => day.ai_first_count,
+    (day) => day.total_tickets,
+  );
+  const reopenRates = rollingRate(
+    allDays,
+    ROLLING_WINDOW_DAYS,
+    (day) => day.reopen_lifetime_numerator,
+    (day) => day.reopen_lifetime_denominator,
+  );
+  const plottedKeys = new Set(plottedDays.map((day) => day.day));
+  return allDays.flatMap((current, index) => {
+    if (!plottedKeys.has(current.day)) {
+      return [];
+    }
+    return [
+      {
+        key: current.day,
+        wtd: false,
+        has_data: current.total_tickets > 0,
+        total_tickets: current.total_tickets,
+        ai_first_count: current.ai_first_count,
+        ai_first_rate: aiFirstRates[index] ?? 0,
+        reopen_lifetime_rate: reopenRates[index] ?? null,
+        axisLabel: formatWeekStart(current.day),
+        rangeLabel: formatWeekStart(current.day),
+      },
+    ];
+  });
+}
+
+interface TrendCopy {
+  readonly volumeChartTitle: string;
+  readonly rateChartTitle: string;
+  readonly volumeAriaLabel: string;
+  readonly rateAriaLabel: string;
+  readonly rateAriaTitle: string;
+  readonly rateAriaDesc: (rateCeiling: string) => string;
+  readonly tooltipRangePrefix: string;
+  readonly volumeCaption: (rangeLabel: string, total: string, aiFirst: string) => string;
+  readonly rateCaption: (aiFirstRate: string, reopenRate: string) => string;
+  readonly emptyMessage: (minPoints: number, observedCount: string) => string;
+  readonly wtdSuffix: string;
+  /**
+   * §B2: a mandatory two-line label above the charts, not decorative — without
+   * the second line a reader mistakes a single day's plotted rate for that
+   * day's own rate rather than a 7-day rolling average. `null` in week mode,
+   * which has no such ambiguity (a week's rate is already a whole-week rate).
+   */
+  readonly subtitle: ((rangeLabel: string) => readonly [string, string]) | null;
+}
+
+const WEEK_TREND_COPY: TrendCopy = {
+  volumeChartTitle: "Volume ticket theo tuần",
+  rateChartTitle: "Tỷ lệ theo tuần",
+  volumeAriaLabel: "Biểu đồ volume, cuộn ngang khi cần",
+  rateAriaLabel: "Biểu đồ tỷ lệ, cuộn ngang khi cần",
+  rateAriaTitle: "Tỷ lệ AI First và reopen theo tuần",
+  rateAriaDesc: (rateCeiling) =>
+    [
+      `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${rateCeiling} để vừa cả tuần cao điểm nhất.`,
+      "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
+      "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
+    ].join(" "),
+  tooltipRangePrefix: "Tuần",
+  volumeCaption: (rangeLabel, total, aiFirst) =>
+    `Tuần gần nhất có dữ liệu ${rangeLabel}: ${total} ticket, trong đó ${aiFirst} ticket AI First.`,
+  rateCaption: (aiFirstRate, reopenRate) =>
+    `Tuần gần nhất có dữ liệu: AI First ${aiFirstRate}, reopen ${reopenRate}.`,
+  emptyMessage: (minPoints, observedCount) =>
+    `Cần ít nhất ${minPoints} tuần có dữ liệu mới vẽ được xu hướng. Hiện có ${observedCount} tuần.`,
+  wtdSuffix: " · WTD",
+  subtitle: null,
+};
+
+const DAY_TREND_COPY: TrendCopy = {
+  volumeChartTitle: "Volume ticket theo ngày",
+  rateChartTitle: "Tỷ lệ theo ngày (trung bình động 7 ngày)",
+  volumeAriaLabel: "Biểu đồ volume theo ngày, cuộn ngang khi cần",
+  rateAriaLabel: "Biểu đồ tỷ lệ theo ngày, cuộn ngang khi cần",
+  rateAriaTitle: "Tỷ lệ AI First và reopen theo ngày, trung bình động 7 ngày",
+  rateAriaDesc: (rateCeiling) =>
+    [
+      `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${rateCeiling} để vừa cả ngày cao điểm nhất.`,
+      "Mỗi điểm là trung bình động 7 ngày kết thúc ở ngày đó, không phải tỷ lệ riêng của ngày đó.",
+      "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
+      "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
+    ].join(" "),
+  tooltipRangePrefix: "Ngày",
+  volumeCaption: (rangeLabel, total, aiFirst) =>
+    `Ngày gần nhất có dữ liệu ${rangeLabel}: ${total} ticket, trong đó ${aiFirst} ticket AI First.`,
+  rateCaption: (aiFirstRate, reopenRate) =>
+    `Ngày gần nhất có dữ liệu: AI First ${aiFirstRate} (TB động 7 ngày), reopen ${reopenRate} (TB động 7 ngày).`,
+  emptyMessage: (minPoints, observedCount) =>
+    `Cần ít nhất ${minPoints} ngày có dữ liệu mới vẽ được xu hướng. Hiện có ${observedCount} ngày.`,
+  wtdSuffix: "",
+  subtitle: (rangeLabel) => [
+    `Xu hướng theo ngày · ${rangeLabel}`,
+    "Tỷ lệ là trung bình động 7 ngày",
+  ],
+};
+
 type TrendTooltipKind = "volume" | "rate";
 
 interface TrendTooltipState {
-  readonly week: TrendWeek;
+  readonly point: TrendPoint;
   readonly chart: TrendTooltipKind;
   readonly anchorX: number;
 }
@@ -151,10 +302,10 @@ function tooltipAnchor(clientX: number, bounds: DOMRect): number {
 
 function TrendTooltip({
   state,
-  weekDefinition,
+  copy,
 }: {
   readonly state: TrendTooltipState;
-  readonly weekDefinition: WeekDefinition;
+  readonly copy: TrendCopy;
 }) {
   const showVolume = state.chart !== "rate";
   const showRate = state.chart !== "volume";
@@ -171,21 +322,18 @@ function TrendTooltip({
       className={trendStyles.chartTooltip}
       style={{ left: `${state.anchorX}%`, transform: horizontalTransform }}
     >
-      <strong>{`Tuần ${formatWeekRange(
-        state.week.cohort_week,
-        weekDefinition,
-      )}`}</strong>
+      <strong>{`${copy.tooltipRangePrefix} ${state.point.rangeLabel}`}</strong>
       {showVolume ? (
         <>
-          <span>{`Tổng ${formatCount(state.week.total_tickets)} ticket`}</span>
-          <span>{`AI First ${formatCount(state.week.ai_first_count)} ticket`}</span>
+          <span>{`Tổng ${formatCount(state.point.total_tickets)} ticket`}</span>
+          <span>{`AI First ${formatCount(state.point.ai_first_count)} ticket`}</span>
         </>
       ) : null}
       {showRate ? (
         <>
-          <span>{`AI First ${formatRate(state.week.ai_first_rate)}`}</span>
+          <span>{`AI First ${formatRate(state.point.ai_first_rate)}`}</span>
           <span>{`Reopen sau AI First ${formatRate(
-            state.week.reopen_lifetime_rate,
+            state.point.reopen_lifetime_rate,
           )}`}</span>
         </>
       ) : null}
@@ -199,36 +347,36 @@ function TrendTooltip({
  * relationship the data does not contain.
  */
 function TrendPanels({
-  weeks,
-  weekDefinition,
-  activeWeek,
-  onWeekSelect,
+  points,
+  copy,
+  subtitle,
+  activeKey,
+  onPointSelect,
 }: {
-  readonly weeks: readonly TrendWeek[];
-  readonly weekDefinition: WeekDefinition;
-  readonly activeWeek: string;
-  readonly onWeekSelect: (cohortWeek: string) => void;
+  readonly points: readonly TrendPoint[];
+  readonly copy: TrendCopy;
+  readonly subtitle: readonly [string, string] | null;
+  readonly activeKey: string;
+  readonly onPointSelect: (key: string) => void;
 }) {
   const [tooltip, setTooltip] = useState<TrendTooltipState | null>(null);
-  const observed = weeks.filter((week) => week.has_data);
+  const observed = points.filter((point) => point.has_data);
   if (observed.length < MIN_TREND_WEEKS) {
     return (
       <p id="trendEmpty" className={belowFoldStyles.empty}>
-        {`Cần ít nhất ${MIN_TREND_WEEKS} tuần có dữ liệu mới vẽ được xu hướng. Hiện có ${formatCount(
-          observed.length,
-        )} tuần.`}
+        {copy.emptyMessage(MIN_TREND_WEEKS, formatCount(observed.length))}
       </p>
     );
   }
 
-  const chartWeeks = [...weeks];
-  const weekScale = scaleBand<string>({
-    domain: chartWeeks.map((week) => week.cohort_week),
+  const chartPoints = [...points];
+  const pointScale = scaleBand<string>({
+    domain: chartPoints.map((point) => point.key),
     range: [0, INNER_WIDTH],
   });
-  const step = weekScale.bandwidth();
+  const step = pointScale.bandwidth();
   const barWidth = Math.max(2, step * 0.34);
-  const maxVolume = Math.max(0, ...observed.map((week) => week.total_tickets));
+  const maxVolume = Math.max(0, ...observed.map((point) => point.total_tickets));
   const volumeTicks = niceVolumeTicks(maxVolume);
   const volumeCeiling = volumeTicks.at(-1) ?? 1;
   const volumeY = scaleLinear<number>({
@@ -237,8 +385,8 @@ function TrendPanels({
   });
   const maxRate = Math.max(
     1,
-    ...observed.map((week) =>
-      Math.max(week.ai_first_rate, week.reopen_lifetime_rate ?? 0),
+    ...observed.map((point) =>
+      Math.max(point.ai_first_rate, point.reopen_lifetime_rate ?? 0),
     ),
   );
   const rateTicks = niceRateTicks(maxRate);
@@ -248,57 +396,55 @@ function TrendPanels({
     range: [INNER_HEIGHT, 0],
     clamp: true,
   });
-  const x = (week: TrendWeek) => weekScale(week.cohort_week) ?? 0;
-  const centre = (week: TrendWeek) => x(week) + step / 2;
+  const x = (point: TrendPoint) => pointScale(point.key) ?? 0;
+  const centre = (point: TrendPoint) => x(point) + step / 2;
   const labelledIndexes = new Set([
     0,
-    weeks.length - 1,
-    ...weeks.flatMap((week, index) =>
-      index % 3 === 0 || week.cohort_status === "wtd" ? [index] : [],
+    points.length - 1,
+    ...points.flatMap((point, index) =>
+      index % 3 === 0 || point.wtd ? [index] : [],
     ),
   ]);
   const renderXAxis = () =>
-    weeks.map((week, index) =>
+    points.map((point, index) =>
       labelledIndexes.has(index) ? (
-        <g key={`axis-${week.cohort_week}`}>
-          {week.cohort_status === "wtd" ? (
+        <g key={`axis-${point.key}`}>
+          {point.wtd ? (
             <line
               className={trendStyles.wtdMarker}
-              x1={centre(week)}
-              x2={centre(week)}
+              x1={centre(point)}
+              x2={centre(point)}
               y1={0}
               y2={INNER_HEIGHT}
             />
           ) : null}
           <text
             className={`${trendStyles.axisLabel} ${
-              week.cohort_status === "wtd" ? trendStyles.wtdAxisLabel : ""
+              point.wtd ? trendStyles.wtdAxisLabel : ""
             }`}
-            x={centre(week)}
+            x={centre(point)}
             y={INNER_HEIGHT + 18}
             textAnchor="middle"
           >
-            {`${formatWeekStart(week.cohort_week)}${
-              week.cohort_status === "wtd" ? " · WTD" : ""
-            }`}
+            {`${point.axisLabel}${point.wtd ? copy.wtdSuffix : ""}`}
           </text>
         </g>
       ) : null,
     );
 
-  const renderWeekTargets = (chart: "volume" | "rate") =>
-    weeks.map((week) =>
-      week.has_data ? (
+  const renderPointTargets = (chart: "volume" | "rate") =>
+    points.map((point) =>
+      point.has_data ? (
         <g
-          key={`target-${week.cohort_week}`}
+          key={`target-${point.key}`}
           className={trendStyles.weekTarget}
-          data-week-target={week.cohort_week}
+          data-week-target={point.key}
           aria-hidden="true"
           onPointerEnter={(event) => {
             const bounds =
               event.currentTarget.ownerSVGElement?.getBoundingClientRect();
             setTooltip({
-              week,
+              point,
               chart,
               anchorX:
                 bounds === undefined
@@ -311,20 +457,20 @@ function TrendPanels({
               event.currentTarget.ownerSVGElement?.getBoundingClientRect();
             if (bounds !== undefined) {
               setTooltip({
-                week,
+                point,
                 chart,
                 anchorX: tooltipAnchor(event.clientX, bounds),
               });
             }
           }}
           onPointerLeave={() => setTooltip(null)}
-          onClick={() => onWeekSelect(week.cohort_week)}
+          onClick={() => onPointSelect(point.key)}
         >
           <rect
             className={`${trendStyles.weekHit} ${
-              activeWeek === week.cohort_week ? trendStyles.weekHitActive : ""
+              activeKey === point.key ? trendStyles.weekHitActive : ""
             }`}
-            x={x(week)}
+            x={x(point)}
             y={0}
             width={step}
             height={INNER_HEIGHT + MARGIN.bottom}
@@ -337,13 +483,20 @@ function TrendPanels({
 
   return (
     <div className={trendStyles.trendPanels}>
+      {subtitle === null ? null : (
+        <p className={styles.sectionNote}>
+          <span>{subtitle[0]}</span>
+          <br />
+          <span>{subtitle[1]}</span>
+        </p>
+      )}
       <div className={trendStyles.charts}>
         <figure className={trendStyles.chart}>
-        <figcaption className={trendStyles.chartTitle}>Volume ticket theo tuần</figcaption>
+        <figcaption className={trendStyles.chartTitle}>{copy.volumeChartTitle}</figcaption>
         <div
           className={trendStyles.chartViewport}
           role="region"
-          aria-label="Biểu đồ volume, cuộn ngang khi cần"
+          aria-label={copy.volumeAriaLabel}
           tabIndex={0}
         >
           <svg
@@ -354,7 +507,7 @@ function TrendPanels({
             aria-labelledby="trend-volume-title"
             aria-describedby="trend-volume-desc"
           >
-          <title id="trend-volume-title">Volume ticket theo tuần</title>
+          <title id="trend-volume-title">{copy.volumeChartTitle}</title>
           <desc id="trend-volume-desc">
             Cột thứ nhất là tổng ticket, cột thứ hai là ticket AI First. Cả hai
             dùng chung một trục số lượng. Tuần không có dữ liệu để trống.
@@ -380,32 +533,32 @@ function TrendPanels({
               </g>
             ))}
             {renderXAxis()}
-            {weeks.map((week) =>
-              week.has_data ? (
-                <g key={week.cohort_week}>
+            {points.map((point) =>
+              point.has_data ? (
+                <g key={point.key}>
                   <Bar
                     className={trendStyles.seriesPrimaryFill ?? ""}
-                    x={centre(week) - barWidth}
-                    y={volumeY(week.total_tickets)}
+                    x={centre(point) - barWidth}
+                    y={volumeY(point.total_tickets)}
                     width={barWidth}
-                    height={INNER_HEIGHT - volumeY(week.total_tickets)}
+                    height={INNER_HEIGHT - volumeY(point.total_tickets)}
                   />
                   <Bar
                     className={trendStyles.seriesSecondaryFill ?? ""}
-                    x={centre(week)}
-                    y={volumeY(week.ai_first_count)}
+                    x={centre(point)}
+                    y={volumeY(point.ai_first_count)}
                     width={barWidth}
-                    height={INNER_HEIGHT - volumeY(week.ai_first_count)}
+                    height={INNER_HEIGHT - volumeY(point.ai_first_count)}
                   />
                 </g>
               ) : null,
             )}
-            {renderWeekTargets("volume")}
+            {renderPointTargets("volume")}
           </g>
           </svg>
         </div>
         {tooltip?.chart === "volume" ? (
-          <TrendTooltip state={tooltip} weekDefinition={weekDefinition} />
+          <TrendTooltip state={tooltip} copy={copy} />
         ) : null}
         <div className={trendStyles.legend}>
           <span className={trendStyles.legendItem}>
@@ -418,21 +571,20 @@ function TrendPanels({
         <p id="trendCaption" className={styles.caption}>
           {latest === undefined
             ? "—"
-            : `Tuần gần nhất có dữ liệu ${formatWeekRange(
-                latest.cohort_week,
-                weekDefinition,
-              )}: ${formatCount(latest.total_tickets)} ticket, trong đó ${formatCount(
-                latest.ai_first_count,
-              )} ticket AI First.`}
+            : copy.volumeCaption(
+                latest.rangeLabel,
+                formatCount(latest.total_tickets),
+                formatCount(latest.ai_first_count),
+              )}
         </p>
         </figure>
 
         <figure className={trendStyles.chart}>
-        <figcaption className={trendStyles.chartTitle}>Tỷ lệ theo tuần</figcaption>
+        <figcaption className={trendStyles.chartTitle}>{copy.rateChartTitle}</figcaption>
         <div
           className={trendStyles.chartViewport}
           role="region"
-          aria-label="Biểu đồ tỷ lệ, cuộn ngang khi cần"
+          aria-label={copy.rateAriaLabel}
           tabIndex={0}
         >
           <svg
@@ -442,13 +594,9 @@ function TrendPanels({
             aria-labelledby="trend-rate-title"
             aria-describedby="trend-rate-desc"
           >
-          <title id="trend-rate-title">Tỷ lệ AI First và reopen theo tuần</title>
+          <title id="trend-rate-title">{copy.rateAriaTitle}</title>
           <desc id="trend-rate-desc">
-            {[
-              `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${formatRateAxis(rateCeiling)} để vừa cả tuần cao điểm nhất.`,
-              "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
-              "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
-            ].join(" ")}
+            {copy.rateAriaDesc(formatRateAxis(rateCeiling))}
           </desc>
           <g transform={`translate(${MARGIN.left} ${MARGIN.top})`}>
             {rateTicks.map((tick) => (
@@ -471,28 +619,28 @@ function TrendPanels({
               </g>
             ))}
             {renderXAxis()}
-            <LinePath<TrendWeek>
+            <LinePath<TrendPoint>
               className={trendStyles.seriesPrimaryStroke ?? ""}
-              data={chartWeeks}
-              defined={(week) => week.has_data}
+              data={chartPoints}
+              defined={(point) => point.has_data}
               x={centre}
-              y={(week) => rateY(week.ai_first_rate)}
+              y={(point) => rateY(point.ai_first_rate)}
             />
-            <LinePath<TrendWeek>
+            <LinePath<TrendPoint>
               className={trendStyles.seriesSecondaryStroke ?? ""}
-              data={chartWeeks}
-              defined={(week) =>
-                week.has_data && week.reopen_lifetime_rate !== null
+              data={chartPoints}
+              defined={(point) =>
+                point.has_data && point.reopen_lifetime_rate !== null
               }
               x={centre}
-              y={(week) => rateY(week.reopen_lifetime_rate ?? 0)}
+              y={(point) => rateY(point.reopen_lifetime_rate ?? 0)}
             />
-            {renderWeekTargets("rate")}
+            {renderPointTargets("rate")}
           </g>
           </svg>
         </div>
         {tooltip?.chart === "rate" ? (
-          <TrendTooltip state={tooltip} weekDefinition={weekDefinition} />
+          <TrendTooltip state={tooltip} copy={copy} />
         ) : null}
         <div className={trendStyles.legend}>
           <span className={trendStyles.legendItem}>
@@ -505,9 +653,10 @@ function TrendPanels({
         <p className={styles.caption}>
           {latest === undefined
             ? "—"
-            : `Tuần gần nhất có dữ liệu: AI First ${formatRate(
-                latest.ai_first_rate,
-              )}, reopen ${formatRate(latest.reopen_lifetime_rate)}.`}
+            : copy.rateCaption(
+                formatRate(latest.ai_first_rate),
+                formatRate(latest.reopen_lifetime_rate),
+              )}
         </p>
         </figure>
       </div>
@@ -741,6 +890,22 @@ export interface BelowFoldProps {
   readonly onCsatBreakdownGroupingChange: () => void;
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
+  /**
+   * When present, the trend chart plots a true day-grain range instead of
+   * weeks — §5 Phần B of the day-grain spec. Segments/ledger read `snapshot`
+   * (the day-range synthetic view in this mode); transfer diagnostics reads
+   * `weeklySnapshot` instead (§6 — TPE/transfer-reason grain doesn't exist
+   * per day, so that whole panel stays week-based with a note).
+   */
+  readonly dayRange?: {
+    readonly from: string;
+    readonly to: string;
+    readonly allDays: readonly DayAggregate[];
+    readonly plottedDays: readonly DayAggregate[];
+    readonly activeDay: string;
+    readonly onDaySelect: (day: string) => void;
+  };
+  readonly weeklySnapshot?: DashboardSnapshot;
 }
 
 /**
@@ -761,6 +926,8 @@ export function BelowFold({
   onCsatBreakdownGroupingChange,
   freshdeskCookieState = null,
   onOpenFreshdeskCookieDialog = () => {},
+  dayRange,
+  weeklySnapshot,
 }: BelowFoldProps) {
   const view = selectView(snapshot, weekDefinition);
   const weeks = selectWeekly(view);
@@ -778,6 +945,26 @@ export function BelowFold({
         : weeks,
     [effectiveTrendMode, view.same_period, weeks],
   );
+  const weekTrendPoints = useMemo(
+    () => trendWeeks.map((week) => trendWeekToPoint(week, weekDefinition)),
+    [trendWeeks, weekDefinition],
+  );
+  const dayTrendPoints = useMemo(
+    () =>
+      dayRange === undefined
+        ? []
+        : dayRangeToTrendPoints(dayRange.allDays, dayRange.plottedDays),
+    [dayRange],
+  );
+  const trendPoints = dayRange === undefined ? weekTrendPoints : dayTrendPoints;
+  const trendCopy = dayRange === undefined ? WEEK_TREND_COPY : DAY_TREND_COPY;
+  const trendOnPointSelect = dayRange === undefined ? onWeekSelect : dayRange.onDaySelect;
+  const trendSubtitle =
+    dayRange === undefined || trendCopy.subtitle === null
+      ? null
+      : trendCopy.subtitle(
+          `${formatWeekStart(dayRange.from)}–${formatWeekStart(dayRange.to)}`,
+        );
   // Empty means "latest" for direct component consumers; explicit all-period
   // scope is carried separately so it can never be confused with first load.
   const latestWeek = selectLatestWeek(view);
@@ -787,22 +974,44 @@ export function BelowFold({
       : activeWeek !== ""
       ? activeWeek
       : (latestWeek?.cohort_week ?? "");
+  const trendActiveKey = dayRange === undefined ? effectiveWeek : dayRange.activeDay;
 
   const selectedWeek = weeks.find((week) => week.cohort_week === effectiveWeek);
   const weeklyDetail =
     effectiveWeek === "" ? undefined : view.by_week[effectiveWeek];
   const segments = weeklyDetail?.segments ?? view.segments;
-  const transfer = weeklyDetail?.transfer_reasons ?? view.transfer_reasons;
+
+  // §6: TPE/transfer-reason grain doesn't exist per day, so in day mode the
+  // whole diagnostics panel reads the latest complete week from
+  // `weeklySnapshot` instead of the day-range-scoped `view` — never a blend.
+  const weeklyView =
+    dayRange === undefined
+      ? view
+      : weeklySnapshot === undefined
+        ? view
+        : selectView(weeklySnapshot, weekDefinition);
+  const diagnosticsWeek =
+    dayRange === undefined ? selectedWeek : (selectLatestWeek(weeklyView) ?? undefined);
+  const diagnosticsWeeklyDetail =
+    diagnosticsWeek === undefined ? undefined : weeklyView.by_week[diagnosticsWeek.cohort_week];
+  const transfer = diagnosticsWeeklyDetail?.transfer_reasons ?? weeklyView.transfer_reasons;
   const rule =
-    selectedWeek === undefined
-      ? view.rule_gt4
+    diagnosticsWeek === undefined
+      ? weeklyView.rule_gt4
       : {
           gt4_turn_total:
-            selectedWeek.gt4_turn_with_cs + selectedWeek.gt4_turn_without_cs,
-          gt4_turn_with_cs: selectedWeek.gt4_turn_with_cs,
-          gt4_turn_without_cs: selectedWeek.gt4_turn_without_cs,
-          max_replies_rule_fired: selectedWeek.max_replies_rule_fired,
+            diagnosticsWeek.gt4_turn_with_cs + diagnosticsWeek.gt4_turn_without_cs,
+          gt4_turn_with_cs: diagnosticsWeek.gt4_turn_with_cs,
+          gt4_turn_without_cs: diagnosticsWeek.gt4_turn_without_cs,
+          max_replies_rule_fired: diagnosticsWeek.max_replies_rule_fired,
         };
+  const dayModeDiagnosticsNote =
+    dayRange === undefined || diagnosticsWeek === undefined
+      ? null
+      : `Chẩn đoán chuyển CS và TPE tính theo tuần trọn vẹn (${formatWeekRange(
+          diagnosticsWeek.cohort_week,
+          weekDefinition,
+        )}), không theo khoảng ngày đã chọn.`;
   return (
     <>
       <EntryCoverageSection
@@ -852,10 +1061,11 @@ export function BelowFold({
           </p>
         ) : null}
         <TrendPanels
-          weeks={trendWeeks}
-          weekDefinition={weekDefinition}
-          activeWeek={effectiveWeek}
-          onWeekSelect={onWeekSelect}
+          points={trendPoints}
+          copy={trendCopy}
+          subtitle={trendSubtitle}
+          activeKey={trendActiveKey}
+          onPointSelect={trendOnPointSelect}
         />
       </section>
 
@@ -887,8 +1097,9 @@ export function BelowFold({
       <TransferDiagnostics
         transfer={transfer}
         rule={rule}
-        selectedWeek={selectedWeek}
+        selectedWeek={diagnosticsWeek}
         weekDefinition={weekDefinition}
+        dayModeNote={dayModeDiagnosticsNote}
         onShowStuckTickets={() => onShowStuckTickets(effectiveWeek)}
         onTicketFilterSelect={onTicketFilterSelect}
       />

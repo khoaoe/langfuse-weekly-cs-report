@@ -131,6 +131,20 @@ export function formatWeekStart(value: string | null | undefined): string {
   return parsed === null ? "—" : compactDate(parsed);
 }
 
+/** Inclusive day count of an opened-date range; `null` if either bound is missing/invalid. */
+export function dateRangeSpanDays(
+  from: string | null | undefined,
+  to: string | null | undefined,
+): number | null {
+  const start = parseIsoDate(from);
+  const end = parseIsoDate(to);
+  if (start === null || end === null) {
+    return null;
+  }
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.round((end.getTime() - start.getTime()) / msPerDay) + 1;
+}
+
 /** Days from a week's Monday start to its last day, inclusive. */
 export function weekSpanDays(weekDefinition: WeekDefinition): number {
   return weekDefinition === "mon_fri" ? 4 : 6;

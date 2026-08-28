@@ -212,6 +212,7 @@ export const WeeklyReportRowSchema = z
     gt4_turn_with_cs: nonNegativeInteger,
     gt4_turn_without_cs: nonNegativeInteger,
     max_replies_rule_fired: nonNegativeInteger,
+    resolved_first_reply: nonNegativeInteger,
     as_of: UtcDateTimeSchema,
     reopen_reason: ReopenReasonSchema,
   })
@@ -1367,6 +1368,65 @@ export const TicketPageSchema = z
   })
   .strict();
 export type TicketPage = z.infer<typeof TicketPageSchema>;
+
+/** Ticket/App/Category only -- the three dimensions ticket-level day
+ * aggregation actually has (see docs/superpowers/specs/2026-08-27-daterange-true-day-grain-design.md
+ * F2/F3). Not the full nine-dimension Segments -- Skill/App/Category is all
+ * TicketRow carries flat, and TPE is out of scope for day mode entirely. */
+export const DayAggregateSegmentsSchema = z
+  .object({
+    skill: SegmentBucketsSchema,
+    app: SegmentBucketsSchema,
+    issue_category: SegmentBucketsSchema,
+  })
+  .strict();
+export type DayAggregateSegments = z.infer<typeof DayAggregateSegmentsSchema>;
+
+export const DayAggregateSchema = z
+  .object({
+    day: IsoDateSchema,
+    total_tickets: nonNegativeInteger,
+    ai_first_count: nonNegativeInteger,
+    transferred_count: nonNegativeInteger,
+    direct_cs_count: nonNegativeInteger,
+    outcomes: z
+      .object({
+        ai_end_to_end: nonNegativeInteger,
+        ai_then_cs: nonNegativeInteger,
+        direct_cs: nonNegativeInteger,
+        unclassified: nonNegativeInteger,
+      })
+      .strict(),
+    reopen_lifetime_numerator: nonNegativeInteger,
+    reopen_lifetime_denominator: nonNegativeInteger,
+    gt4_turn_with_cs: nonNegativeInteger,
+    gt4_turn_without_cs: nonNegativeInteger,
+    resolved_first_reply_count: nonNegativeInteger,
+    ai_reply_sum_ai_first: nonNegativeInteger,
+    segments: DayAggregateSegmentsSchema,
+    // Flat { reason: count }, not the full weekly TransferReasons shape --
+    // TicketRow.transfer_reason has no rule/source/stage/skill/tpe breakdown.
+    transfer_reasons: z.record(z.string(), nonNegativeInteger),
+  })
+  .strict();
+export type DayAggregate = z.infer<typeof DayAggregateSchema>;
+
+export const DayAggregatesResponseSchema = z
+  .object({
+    days: z.array(DayAggregateSchema),
+  })
+  .strict();
+export type DayAggregatesResponse = z.infer<typeof DayAggregatesResponseSchema>;
+
+export function parseDayAggregatesResponse(
+  value: unknown,
+): SafeParseResult<DayAggregatesResponse> {
+  const parsed = DayAggregatesResponseSchema.safeParse(value);
+  if (!parsed.success) {
+    return { ok: false, message: "Không thể đọc dữ liệu theo ngày." };
+  }
+  return { ok: true, data: parsed.data };
+}
 
 export const EntryCoverageTicketSchema = z
   .object({

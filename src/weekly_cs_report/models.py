@@ -272,6 +272,7 @@ class WeeklySummary:
     gt4_turn_with_cs: int = 0
     gt4_turn_without_cs: int = 0
     max_replies_rule_fired: int = 0
+    resolved_first_reply: int = 0
 
     def __post_init__(self) -> None:
         if self.as_of is not None:

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  dateRangeSpanDays,
   formatCount,
   formatDateRangeLabel,
   formatRate,
@@ -30,6 +31,14 @@ describe("dashboard formatting", () => {
     expect(formatDateRangeLabel("2026-07-06", "")).toBe("Từ 06/07");
     expect(formatDateRangeLabel("", "2026-07-30")).toBe("Đến 30/07");
     expect(formatDateRangeLabel("", "")).toBe("—");
+  });
+
+  it("counts an inclusive day-range span, or null when either bound is missing/invalid", () => {
+    expect(dateRangeSpanDays("2026-08-10", "2026-08-11")).toBe(2);
+    expect(dateRangeSpanDays("2026-08-10", "2026-08-10")).toBe(1);
+    expect(dateRangeSpanDays("2026-08-10", "")).toBeNull();
+    expect(dateRangeSpanDays("", "2026-08-10")).toBeNull();
+    expect(dateRangeSpanDays("not-a-date", "2026-08-10")).toBeNull();
   });
 
   it("drops the decimal when a rate carries no fractional information", () => {

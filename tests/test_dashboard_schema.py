@@ -16,6 +16,7 @@ from weekly_cs_report.dashboard_schema import (
     _ticket_sort_value,
     _tpe_rows_from_signals,
     project_dashboard,
+    ticket_day_aggregate,
     ticket_page,
 )
 from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
@@ -127,7 +128,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 22
+    assert snapshot.storage_dict()["schema_version"] == 23
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -172,7 +173,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 22
+    value["schema_version"] = 23
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -1404,6 +1405,167 @@ def test_ticket_page_rejects_invalid_or_conflicting_opened_date_range():
 
     with pytest.raises(ValueError, match="cannot be combined"):
         ticket_page(snapshot, opened_to="2026-07-20", cohort_weeks="2026-07-13,2026-07-20")
+
+
+def test_ticket_day_aggregate_returns_empty_list_for_a_range_touching_no_ticket():
+    snapshot = _snapshot()
+
+    days = ticket_day_aggregate(snapshot, opened_from="2020-01-01", opened_to="2020-01-02")
+
+    assert days == []
+
+
+def test_ticket_day_aggregate_buckets_by_vietnam_local_day_not_utc():
+    """opened_at is UTC; day-bucketing must use Asia/Ho_Chi_Minh, matching
+    cohort_week/is_weekend_start elsewhere in this module. A ticket opened at
+    17:00 UTC or later has already rolled into the next Vietnam-local day."""
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            # 2026-07-19 23:59:59 ICT -- last instant still inside 19/07 ICT.
+            replace(base, ticket_id="10", opened_at="2026-07-19T16:59:59Z"),
+            # 2026-07-20 00:00:00 ICT -- first instant of 20/07 ICT.
+            replace(base, ticket_id="20", opened_at="2026-07-19T17:00:00Z"),
+        ),
+    )
+
+    days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-19", opened_to="2026-07-20"
+    )
+
+    by_day = {day["day"]: day["total_tickets"] for day in days}
+    assert by_day == {"2026-07-19": 1, "2026-07-20": 1}
+
+
+def test_ticket_day_aggregate_sums_multiple_days_and_reports_a_single_day():
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(base, ticket_id="1", opened_at="2026-07-20T02:00:00Z", outcome="ai_end_to_end", ai_first=True, transferred=False),
+            replace(base, ticket_id="2", opened_at="2026-07-20T03:00:00Z", outcome="ai_end_to_end", ai_first=True, transferred=False),
+            replace(base, ticket_id="3", opened_at="2026-07-21T02:00:00Z", outcome="direct_cs", ai_first=False, transferred=False),
+        ),
+    )
+
+    days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-21"
+    )
+
+    assert [day["day"] for day in days] == ["2026-07-20", "2026-07-21"]
+    first, second = days
+    assert first["total_tickets"] == 2
+    assert first["ai_first_count"] == 2
+    assert second["total_tickets"] == 1
+    assert second["ai_first_count"] == 0
+
+    single = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-20"
+    )
+    assert len(single) == 1
+    assert single[0]["day"] == "2026-07-20"
+    assert single[0]["total_tickets"] == 2
+
+
+def test_ticket_day_aggregate_reopen_lifetime_denominator_does_not_divide_by_zero():
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(base, ticket_id="1", opened_at="2026-07-20T02:00:00Z", reopen_lifetime=None),
+        ),
+    )
+
+    days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-20"
+    )
+
+    assert days[0]["reopen_lifetime_denominator"] == 0
+    assert days[0]["reopen_lifetime_numerator"] == 0
+
+
+def test_ticket_day_aggregate_includes_segments_and_flat_transfer_reason_counts():
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(base, ticket_id="1", opened_at="2026-07-20T02:00:00Z", skill="interbank-fund-transfer", app="241 - Chuyển Tiền ATM", issue_category="Thanh toán-IBFT", transferred=True, transfer_reason="unknown"),
+            replace(base, ticket_id="2", opened_at="2026-07-20T03:00:00Z", skill="interbank-fund-transfer", app="241 - Chuyển Tiền ATM", issue_category="Thanh toán-IBFT", transfer_reason=None),
+        ),
+    )
+
+    days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-20"
+    )
+
+    day = days[0]
+    assert day["segments"]["skill"]["interbank-fund-transfer"]["total"] == 2
+    assert day["segments"]["app"]["241 - Chuyển Tiền ATM"]["total"] == 2
+    assert day["segments"]["issue_category"]["Thanh toán-IBFT"]["total"] == 2
+    assert day["transfer_reasons"] == {"unknown": 1}
+
+
+def test_ticket_day_aggregate_sums_resolved_first_reply_and_ai_reply_counts():
+    """These two feed selectScope()'s no-week branch (aggregateDays()) the
+    same way `resolved_first_reply`/`ai_reply_mean_ai_first` feed it at week
+    grain in pipeline.py -- summed here, divided once by the caller, never
+    averaged per ticket."""
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            # ai_end_to_end + exactly 1 reply -> counts toward resolved_first_reply.
+            replace(base, ticket_id="1", opened_at="2026-07-20T02:00:00Z", outcome="ai_end_to_end", ai_first=True, ai_reply_count=1),
+            # ai_end_to_end but 2 replies -> does not count toward resolved_first_reply.
+            replace(base, ticket_id="2", opened_at="2026-07-20T03:00:00Z", outcome="ai_end_to_end", ai_first=True, ai_reply_count=2),
+            # ai_then_cs, not ai_first -> ai_reply_count excluded from the ai_first sum.
+            replace(base, ticket_id="3", opened_at="2026-07-20T04:00:00Z", outcome="ai_then_cs", ai_first=False, transferred=True, transfer_reason="unknown", ai_reply_count=5),
+        ),
+    )
+
+    days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-20"
+    )
+
+    day = days[0]
+    assert day["resolved_first_reply_count"] == 1
+    assert day["ai_reply_sum_ai_first"] == 3
+
+
+def test_ticket_day_aggregate_week_definition_mon_fri_excludes_weekend_start_tickets():
+    """Same exclusion rule ticket_page already applies for mon_fri, so
+    rolling day-aggregates into mon_fri weeks doesn't need its own copy of
+    the weekend rule -- the days handed to it are already narrowed."""
+    snapshot = _snapshot()
+    base = snapshot.tickets[0]
+    ranged_snapshot = replace(
+        snapshot,
+        tickets=(
+            replace(base, ticket_id="1", opened_at="2026-07-20T02:00:00Z", is_weekend_start=False),
+            # Saturday Vietnam-local -- excluded from mon_fri.
+            replace(base, ticket_id="2", opened_at="2026-07-24T18:00:00Z", is_weekend_start=True),
+        ),
+    )
+
+    all_days = ticket_day_aggregate(
+        ranged_snapshot, opened_from="2026-07-20", opened_to="2026-07-25"
+    )
+    mon_fri_days = ticket_day_aggregate(
+        ranged_snapshot,
+        opened_from="2026-07-20",
+        opened_to="2026-07-25",
+        week_definition="mon_fri",
+    )
+
+    assert sum(day["total_tickets"] for day in all_days) == 2
+    assert sum(day["total_tickets"] for day in mon_fri_days) == 1
+    assert [day["day"] for day in mon_fri_days] == ["2026-07-20"]
 
 
 def test_ticket_page_filters_by_strict_transfer_reason_enum():

@@ -9,6 +9,7 @@ import {
 } from "../src/lib/dashboard-schema";
 import { DecisionLedger } from "../src/components/DecisionLedger";
 import {
+  ALL_WEEKS_SCOPE,
   buildNarrativeInput,
   isObservedWeek,
   selectAttentionItems,
@@ -195,7 +196,7 @@ describe("selected-week decision scope", () => {
       },
     };
 
-    const cells = selectLedger(zeroed, "mon_sun");
+    const cells = selectLedger(zeroed, "mon_sun").flatMap((group) => group.cells);
     const directCs = cells.find((cell) => cell.id === "ledger-direct-cs");
 
     // Unlike the old warning cell, "0 ticket" is still an informative share
@@ -204,18 +205,21 @@ describe("selected-week decision scope", () => {
     expect(directCs?.support).not.toBeNull();
   });
 
-  it("uses a count as the primary value in every KPI cell", () => {
+  it("uses a count as the primary value in every KPI cell, grouped by denominator tier", () => {
     const reportingWeek: WeeklyReportRow = {
       ...latest,
       total_tickets: 935,
       ai_first_count: 727,
       ai_first_rate: 727 / 935,
+      ai_end_to_end_count: 406,
       ai_then_cs_count: 180,
       direct_cs_count: 28,
       reopen_lifetime_numerator: 152,
       reopen_lifetime_denominator: 727,
       reopen_lifetime_rate: 152 / 727,
       gt4_turn_without_cs: 0,
+      resolved_first_reply: 322,
+      ai_reply_mean_ai_first: 1.27,
     };
     const reportingSnapshot: DashboardSnapshot = {
       ...baseSnapshot,
@@ -228,7 +232,16 @@ describe("selected-week decision scope", () => {
       },
     };
 
-    expect(selectLedger(reportingSnapshot, "mon_sun")).toMatchObject([
+    const groups = selectLedger(reportingSnapshot, "mon_sun");
+    expect(groups.map((group) => group.id)).toEqual([
+      "ledger-group-ticket",
+      "ledger-group-response",
+    ]);
+
+    const ticketGroup = groups.find(
+      (group) => group.id === "ledger-group-ticket",
+    );
+    expect(ticketGroup?.cells).toMatchObject([
       {
         id: "ledger-ai-first",
         value: "727",
@@ -240,16 +253,84 @@ describe("selected-week decision scope", () => {
         support: "22,2% trong 935 ticket tuần này",
       },
       {
-        id: "ledger-reopen",
-        value: "152 lần",
-        support: "0,21 lần/ticket · 727 ticket AI First",
-      },
-      {
         id: "ledger-direct-cs",
         value: "28",
         support: "3,0% trong 935 ticket tuần này",
       },
     ]);
+
+    const responseGroup = groups.find(
+      (group) => group.id === "ledger-group-response",
+    );
+    expect(responseGroup?.cells).toMatchObject([
+      {
+        id: "ledger-first-reply-resolved",
+        value: "79,3%",
+        support: "322 trong 406 ticket AI xử lý trọn",
+      },
+      {
+        id: "ledger-replies-per-ticket",
+        value: "1,27 lượt",
+        support: "trên 727 ticket AI First",
+      },
+      {
+        id: "ledger-reopen",
+        value: "152 lần",
+        support: "0,21 lần/ticket · 727 ticket AI First",
+      },
+    ]);
+  });
+
+  it("fills resolvedFirstReply/aiEndToEndCount/aiReplyMeanAiFirst on the week branch of selectScope()", () => {
+    expect(
+      selectScope(snapshot, "mon_sun", "2026-07-13"),
+    ).toMatchObject({
+      resolvedFirstReply: selected.resolved_first_reply,
+      aiEndToEndCount: selected.ai_end_to_end_count,
+      aiReplyMeanAiFirst: selected.ai_reply_mean_ai_first,
+    });
+  });
+
+  it("fills resolvedFirstReply/aiEndToEndCount/aiReplyMeanAiFirst on the no-week branch of selectScope(), summed/weighted across observed weeks", () => {
+    const scope = selectScope(snapshot, "mon_sun", ALL_WEEKS_SCOPE);
+
+    const observedWeeks = snapshot.views.mon_sun.weekly.filter(
+      (week) => week.has_data,
+    );
+    const expectedResolved = observedWeeks.reduce(
+      (total, week) => total + week.resolved_first_reply,
+      0,
+    );
+    expect(scope.resolvedFirstReply).toBe(expectedResolved);
+    expect(scope.aiEndToEndCount).toBe(
+      snapshot.views.mon_sun.outcomes.ai_end_to_end,
+    );
+  });
+
+  it("shows — instead of NaN when ai_reply_mean_ai_first is null for the scoped week", () => {
+    const noAiFirst: WeeklyReportRow = {
+      ...latest,
+      ai_first_count: 0,
+      ai_reply_mean_ai_first: null,
+    };
+    const noAiFirstSnapshot: DashboardSnapshot = {
+      ...baseSnapshot,
+      views: {
+        ...baseSnapshot.views,
+        mon_sun: {
+          ...baseSnapshot.views.mon_sun,
+          weekly: [noAiFirst],
+        },
+      },
+    };
+
+    const groups = selectLedger(noAiFirstSnapshot, "mon_sun");
+    const repliesPerTicket = groups
+      .flatMap((group) => group.cells)
+      .find((cell) => cell.id === "ledger-replies-per-ticket");
+
+    expect(repliesPerTicket?.value).toBe("—");
+    expect(repliesPerTicket?.support).toBeNull();
   });
 
   it("renders critical rail items with a direct ticket filter", () => {

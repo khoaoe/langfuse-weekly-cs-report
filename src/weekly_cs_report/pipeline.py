@@ -250,6 +250,10 @@ def _summarize_sessions(
         )
         reply_counts = [session.ai_reply_count for session in weekly_sessions]
         ai_reply_counts = [session.ai_reply_count for session in ai_first]
+        resolved_first_reply = sum(
+            session.outcome == "ai_end_to_end" and session.ai_reply_count == 1
+            for session in weekly_sessions
+        )
         gt4_turn_with_cs = sum(
             session.turn_count > 3 and session.transferred for session in weekly_sessions
         )
@@ -290,6 +294,7 @@ def _summarize_sessions(
                 gt4_turn_with_cs=gt4_turn_with_cs,
                 gt4_turn_without_cs=gt4_turn_without_cs,
                 max_replies_rule_fired=max_replies_rule_fired,
+                resolved_first_reply=resolved_first_reply,
             )
         )
     return tuple(summaries)
