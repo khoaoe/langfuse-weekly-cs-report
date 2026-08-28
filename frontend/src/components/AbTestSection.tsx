@@ -103,6 +103,23 @@ function defaultWindowFromReportScope(
   };
 }
 
+/**
+ * Day-range report scope must feed the same window into the A/B panel, or the
+ * panel silently reads a different (usually far narrower) slice of Langfuse
+ * than the rest of the day-range-scoped dashboard.
+ */
+function defaultWindowFromReportRange(range: {
+  readonly from: string;
+  readonly to: string;
+}): WindowValue {
+  const now = new Date();
+  const today = vietnamParts(now).date;
+  return {
+    start: `${range.from}T00:00`,
+    end: range.to > today ? vietnamDateTimeLocal(now) : `${range.to}T23:59`,
+  };
+}
+
 function toIsoWithOffset(dateTimeLocalValue: string): string {
   return `${dateTimeLocalValue}:00+07:00`;
 }
@@ -684,9 +701,11 @@ function DimensionTable({
 export function AbTestSection({
   selectedReportWeeks,
   weekDefinition,
+  reportRange = null,
 }: {
   readonly selectedReportWeeks: readonly string[];
   readonly weekDefinition: WeekDefinition;
+  readonly reportRange?: { readonly from: string; readonly to: string } | null;
 }) {
   // Collapsed by default to keep the dashboard short. The Langfuse read is
   // expensive, so it is gated on the panel actually being open rather than
@@ -702,8 +721,11 @@ export function AbTestSection({
     null,
   );
   const defaultWindow = useMemo(
-    () => defaultWindowFromReportScope(selectedReportWeeks, weekDefinition),
-    [selectedReportWeeks, weekDefinition],
+    () =>
+      reportRange !== null
+        ? defaultWindowFromReportRange(reportRange)
+        : defaultWindowFromReportScope(selectedReportWeeks, weekDefinition),
+    [reportRange, selectedReportWeeks, weekDefinition],
   );
 
   // Discovers which models have recent traffic and each one's first-seen

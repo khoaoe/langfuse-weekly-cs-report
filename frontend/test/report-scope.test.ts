@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   aggregateDays,
+  aggregateTransferReasonsFromDays,
+  buildDayRangeWeekLabels,
   resolveDateRangeToWeeks,
   rollDaysIntoWeeks,
   rollingRate,
@@ -21,6 +23,15 @@ function week(cohortWeek: string, hasData = true): WeeklyReportRow {
   return { cohort_week: cohortWeek, has_data: hasData } as WeeklyReportRow;
 }
 
+const EMPTY_DAY_TRANSFER_REASONS: DayAggregate["transfer_reasons"] = {
+  observed_transfer_denominator: 0,
+  triggers: [],
+  step_result_missing: { count: 0, denominator: 0 },
+  tpe: [],
+  guardrail: [],
+  escalation_guard_blocked: { count: 0, denominator: 0 },
+};
+
 function day(overrides: Partial<DayAggregate> & { day: string }): DayAggregate {
   return {
     total_tickets: 0,
@@ -35,7 +46,7 @@ function day(overrides: Partial<DayAggregate> & { day: string }): DayAggregate {
     resolved_first_reply_count: 0,
     ai_reply_sum_ai_first: 0,
     segments: { skill: {}, app: {}, issue_category: {} },
-    transfer_reasons: {},
+    transfer_reasons: EMPTY_DAY_TRANSFER_REASONS,
     ...overrides,
   };
 }
@@ -305,6 +316,67 @@ describe("rollDaysIntoWeeks", () => {
   });
 });
 
+describe("buildDayRangeWeekLabels", () => {
+  it("labels a partially-touched week by its touched days only, not the full week span", () => {
+    const days = [
+      day({ day: "2026-08-06" }), // Thu
+      day({ day: "2026-08-07" }), // Fri, week of 2026-08-03
+    ];
+    const labels = buildDayRangeWeekLabels(days);
+    expect(labels["2026-08-03"]).toBe("06/08–07/08");
+  });
+
+  it("labels a fully-touched week by its first and last touched day", () => {
+    const days = [
+      day({ day: "2026-08-03" }),
+      day({ day: "2026-08-04" }),
+      day({ day: "2026-08-09" }),
+    ];
+    const labels = buildDayRangeWeekLabels(days);
+    expect(labels["2026-08-03"]).toBe("03/08–09/08");
+  });
+});
+
+describe("aggregateTransferReasonsFromDays", () => {
+  it("returns null when any day in the range lacks the full transfer_reasons block", () => {
+    const days = [
+      day({ day: "2026-08-03" }),
+      day({ day: "2026-08-04", transfer_reasons: null }),
+    ];
+    expect(aggregateTransferReasonsFromDays(days)).toBeNull();
+  });
+
+  it("sums observed_transfer_denominator across days when every day has the block", () => {
+    const days = [
+      day({
+        day: "2026-08-03",
+        transfer_reasons: {
+          observed_transfer_denominator: 2,
+          triggers: [],
+          step_result_missing: { count: 0, denominator: 2 },
+          tpe: [],
+          guardrail: [],
+          escalation_guard_blocked: { count: 0, denominator: 2 },
+        },
+      }),
+      day({
+        day: "2026-08-04",
+        transfer_reasons: {
+          observed_transfer_denominator: 3,
+          triggers: [],
+          step_result_missing: { count: 1, denominator: 3 },
+          tpe: [],
+          guardrail: [],
+          escalation_guard_blocked: { count: 0, denominator: 3 },
+        },
+      }),
+    ];
+    const result = aggregateTransferReasonsFromDays(days);
+    expect(result?.observed_transfer_denominator).toBe(5);
+    expect(result?.step_result_missing).toEqual({ count: 1, denominator: 5 });
+  });
+});
+
 describe("scopeSnapshotToDayRange", () => {
   it("builds a view whose totals match aggregateDays() for the same days", () => {
     const days = [
@@ -334,7 +406,7 @@ describe("scopeSnapshotToDayRange", () => {
       }),
     ];
 
-    const view = scopeSnapshotToDayRange("mon_sun", days, "2026-08-03");
+    const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(view.totals.eligible_ticket_count).toBe(15);
     expect(view.ai_first.count).toBe(10);
@@ -346,9 +418,9 @@ describe("scopeSnapshotToDayRange", () => {
     expect(view.rule_gt4.gt4_turn_without_cs).toBe(1);
   });
 
-  it("produces exactly one synthetic weekly row covering the whole range, never wtd", () => {
+  it("produces exactly one real weekly row when the range sits inside one week, never wtd", () => {
     const days = [day({ day: "2026-08-03", total_tickets: 4, ai_first_count: 2 })];
-    const view = scopeSnapshotToDayRange("mon_sun", days, "2026-08-03");
+    const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(view.weekly).toHaveLength(1);
     const row = view.weekly[0] as WeeklyReportRow;
@@ -358,9 +430,33 @@ describe("scopeSnapshotToDayRange", () => {
     expect(Object.keys(view.by_week)).toEqual([row.cohort_week]);
   });
 
+  it("splits a range spanning two weeks into two real Monday-keyed rows that reconcile with aggregateDays()", () => {
+    const days = [
+      day({ day: "2026-08-06", total_tickets: 4, ai_first_count: 2 }), // Thu, week of 2026-08-03
+      day({ day: "2026-08-07", total_tickets: 1, ai_first_count: 1 }), // Fri, same week
+      day({ day: "2026-08-10", total_tickets: 6, ai_first_count: 3 }), // Mon, next week
+    ];
+    const view = scopeSnapshotToDayRange("mon_sun", days);
+    const totals = aggregateDays(days);
+
+    expect(view.weekly.map((row) => row.cohort_week)).toEqual([
+      "2026-08-03",
+      "2026-08-10",
+    ]);
+    const firstWeek = view.weekly[0] as WeeklyReportRow;
+    const secondWeek = view.weekly[1] as WeeklyReportRow;
+    expect(firstWeek.total_tickets).toBe(5);
+    expect(secondWeek.total_tickets).toBe(6);
+    expect(firstWeek.total_tickets + secondWeek.total_tickets).toBe(totals.eligible);
+    expect(firstWeek.ai_first_count + secondWeek.ai_first_count).toBe(
+      totals.aiFirstCount,
+    );
+    expect(Object.keys(view.by_week)).toEqual(["2026-08-03", "2026-08-10"]);
+  });
+
   it("carries no same-period, csat, or outcome-reconciliation comparison data", () => {
     const days = [day({ day: "2026-08-03", total_tickets: 1 })];
-    const view = scopeSnapshotToDayRange("mon_sun", days, "2026-08-03");
+    const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(view.same_period).toBeNull();
     expect(view.csat).toBeNull();
@@ -372,7 +468,7 @@ describe("scopeSnapshotToDayRange", () => {
       day({ day: "2026-08-03", total_tickets: 4, ai_first_count: 2, transferred_count: 1, direct_cs_count: 1 }),
       day({ day: "2026-08-04", total_tickets: 2, ai_first_count: 1 }),
     ];
-    const view = scopeSnapshotToDayRange("mon_sun", days, "2026-08-03");
+    const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(() => DashboardViewSchema.parse(view)).not.toThrow();
   });
@@ -388,7 +484,7 @@ describe("scopeSnapshotToDayRange", () => {
         },
       }),
     ];
-    const view = scopeSnapshotToDayRange("mon_sun", days, "2026-08-03");
+    const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(view.segments.skill.billing?.total).toBe(2);
     expect(view.segments.product_code).toEqual({});
@@ -410,7 +506,6 @@ describe("scopeSnapshotToDayRangeSnapshot", () => {
       baseSnapshot,
       "mon_sun",
       days,
-      "2026-08-03",
     );
     expect(snapshot.views.mon_sun.totals.eligible_ticket_count).toBe(4);
     expect(snapshot.views.mon_fri).toBe(baseSnapshot.views.mon_fri);
@@ -422,7 +517,6 @@ describe("scopeSnapshotToDayRangeSnapshot", () => {
       baseSnapshot,
       "mon_sun",
       days,
-      "2026-08-03",
     );
     expect(snapshot.generated_at).toBe(baseSnapshot.generated_at);
     expect(snapshot.source).toBe(baseSnapshot.source);

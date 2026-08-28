@@ -10,6 +10,7 @@ import { server } from "./msw/server";
 import {
   DashboardEnvelopeSchema,
   type DashboardSnapshot,
+  type DayAggregate,
   type Segments,
   type WeeklyReportRow,
 } from "../src/lib/dashboard-schema";
@@ -174,6 +175,34 @@ function snapshotWithCsat(
         },
       },
     },
+  };
+}
+
+const EMPTY_DAY_TRANSFER_REASONS: DayAggregate["transfer_reasons"] = {
+  observed_transfer_denominator: 0,
+  triggers: [],
+  step_result_missing: { count: 0, denominator: 0 },
+  tpe: [],
+  guardrail: [],
+  escalation_guard_blocked: { count: 0, denominator: 0 },
+};
+
+function dayAggregate(day: string): DayAggregate {
+  return {
+    day,
+    total_tickets: 5,
+    ai_first_count: 3,
+    transferred_count: 2,
+    direct_cs_count: 0,
+    outcomes: { ai_end_to_end: 3, ai_then_cs: 2, direct_cs: 0, unclassified: 0 },
+    reopen_lifetime_numerator: 0,
+    reopen_lifetime_denominator: 5,
+    gt4_turn_with_cs: 0,
+    gt4_turn_without_cs: 0,
+    resolved_first_reply_count: 3,
+    ai_reply_sum_ai_first: 3,
+    segments: { skill: {}, app: {}, issue_category: {} },
+    transfer_reasons: EMPTY_DAY_TRANSFER_REASONS,
   };
 }
 
@@ -634,10 +663,94 @@ describe("Below-fold analysis", () => {
       name: "Khách hài lòng tới đâu",
     });
     expect(segmentSection?.nextElementSibling).toBe(csatSection);
+    // freshdeskCookieState defaults to null (unknown) here — the section must
+    // not assert "not connected" for a state it hasn't actually observed yet
+    // (bug #4), and must still offer the connect action since null !== "ok".
     expect(csatSection).toHaveTextContent(
-      "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT.",
+      "Chưa đọc được trạng thái cookie Freshdesk.",
     );
+    expect(
+      within(csatSection).getByRole("button", { name: "Kết nối Freshdesk" }),
+    ).toBeVisible();
     expect(csatSection).not.toHaveTextContent("0 phản hồi");
+  });
+
+  it("day-range mode reads CSAT from the real weekly snapshot instead of the day-range placeholder", () => {
+    // §3.4 bug #4: the day-range synthetic `snapshot` always carries
+    // csat/entry_coverage as null (report-scope.ts), so BelowFold must fall
+    // back to `weeklySnapshot` in day mode rather than reporting "not
+    // connected" when Freshdesk data actually exists.
+    const weeklySnapshot = snapshotWithCsat({ "2026-07-20": csatWeek() });
+    const dayRangeSnapshot: DashboardSnapshot = {
+      ...baseSnapshot,
+      views: {
+        ...baseSnapshot.views,
+        mon_sun: { ...baseSnapshot.views.mon_sun, csat: null, entry_coverage: null },
+      },
+    };
+
+    renderWithQuery(
+      belowFold(dayRangeSnapshot, {
+        weeklySnapshot,
+        dayRange: {
+          from: "2026-07-20",
+          to: "2026-07-21",
+          allDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          plottedDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          activeDay: "",
+          onDaySelect: () => {},
+        },
+      }),
+    );
+
+    const csatSection = screen.getByRole("region", {
+      name: "Khách hài lòng tới đâu",
+    });
+    expect(csatSection).not.toHaveTextContent("Chưa kết nối Freshdesk");
+    expect(
+      within(csatSection).getByText(/CSAT theo tuần trọn vẹn chạm khoảng ngày/),
+    ).toBeVisible();
+  });
+
+  it("names the shortfall instead of listing nothing when the picked range touches no week", () => {
+    // A range landing entirely outside the observed weeks (the "30 ngày qua"
+    // preset on a stale snapshot does this) yields no touched weeks. Joining an
+    // empty list left the sentence as "chạm khoảng ngày: ." — punctuation
+    // around a number that was never there.
+    const weeklySnapshot = snapshotWithCsat({ "2026-07-20": csatWeek() });
+
+    renderWithQuery(
+      belowFold(baseSnapshot, {
+        weeklySnapshot,
+        dayRange: {
+          from: "2026-07-20",
+          to: "2026-07-21",
+          allDays: [],
+          plottedDays: [],
+          activeDay: "",
+          onDaySelect: () => {},
+        },
+      }),
+    );
+
+    const csatSection = screen.getByRole("region", {
+      name: "Khách hài lòng tới đâu",
+    });
+    expect(csatSection).toHaveTextContent(
+      "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT.",
+    );
+    expect(csatSection).not.toHaveTextContent("chạm khoảng ngày: .");
+  });
+
+  it("shows the Freshdesk connect action when cookie state is unknown, not just when it is expired or missing", () => {
+    renderWithQuery(belowFold(baseSnapshot, { freshdeskCookieState: null }));
+
+    const csatSection = screen.getByRole("region", {
+      name: "Khách hài lòng tới đâu",
+    });
+    expect(
+      within(csatSection).getByRole("button", { name: "Kết nối Freshdesk" }),
+    ).toBeVisible();
   });
 
   it("keeps Freshdesk outcome reconciliation out of the dashboard UI", () => {

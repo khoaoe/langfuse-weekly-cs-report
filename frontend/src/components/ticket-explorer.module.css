@@ -95,6 +95,17 @@
   box-shadow: var(--shell-shadow);
 }
 
+.dateRangeInline {
+  display: grid;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.dateRangeInline .dateRangeCalendar,
+.dateRangeInline .dateRangeQuick {
+  width: 100%;
+}
+
 .dateRangeQuick {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

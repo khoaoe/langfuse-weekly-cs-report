@@ -910,7 +910,14 @@ describe("DashboardScreen", () => {
         resolved_first_reply_count: totalTickets,
         ai_reply_sum_ai_first: totalTickets,
         segments: { skill: {}, app: {}, issue_category: {} },
-        transfer_reasons: {},
+        transfer_reasons: {
+          observed_transfer_denominator: 0,
+          triggers: [],
+          step_result_missing: { count: 0, denominator: 0 },
+          tpe: [],
+          guardrail: [],
+          escalation_guard_blocked: { count: 0, denominator: 0 },
+        },
       };
     }
 

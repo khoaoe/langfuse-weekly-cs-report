@@ -103,13 +103,19 @@ export function selectPreviousWeek(
   return weeks.at(-1) ?? null;
 }
 
+export interface ReportRangeScope {
+  readonly from: string;
+  readonly to: string;
+}
+
 export function buildNarrativeInput(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
   activeWeek?: string,
+  range?: ReportRangeScope | null,
 ): NarrativeInput {
   const view = selectView(snapshot, weekDefinition);
-  const current = selectReportWeek(view, activeWeek);
+  const current = range != null ? null : selectReportWeek(view, activeWeek);
   const previous = selectPreviousWeek(view, current);
   const samePeriod =
     current?.cohort_status === "wtd" &&
@@ -195,7 +201,9 @@ export interface LedgerScope {
   readonly aiEndToEndCount: number;
   readonly aiReplyMeanAiFirst: number | null;
   readonly week: WeeklyReportRow | null;
-  readonly kind: "week" | "all" | "selection" | "empty";
+  readonly kind: "week" | "all" | "selection" | "empty" | "range";
+  readonly rangeFrom?: string;
+  readonly rangeTo?: string;
 }
 
 /**
@@ -230,8 +238,32 @@ export function selectScope(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
   activeWeek?: string,
+  range?: ReportRangeScope | null,
 ): LedgerScope {
   const view = selectView(snapshot, weekDefinition);
+  if (range != null) {
+    const observedWeeks = view.weekly.filter((row) => row.has_data);
+    return {
+      eligible: view.totals.eligible_ticket_count,
+      aiFirstCount: view.ai_first.count,
+      aiFirstRate: view.ai_first.rate,
+      transferTotal: view.totals.transfer_total,
+      reopenNumerator: view.reopen.lifetime.numerator,
+      reopenDenominator: view.reopen.lifetime.denominator,
+      gt4WithoutCs: view.rule_gt4.gt4_turn_without_cs,
+      directCsCount: view.outcomes.direct_cs,
+      resolvedFirstReply: observedWeeks.reduce(
+        (total, row) => total + row.resolved_first_reply,
+        0,
+      ),
+      aiEndToEndCount: view.outcomes.ai_end_to_end,
+      aiReplyMeanAiFirst: weightedReplyMean(observedWeeks),
+      week: null,
+      kind: "range",
+      rangeFrom: range.from,
+      rangeTo: range.to,
+    };
+  }
   const week = selectReportWeek(view, activeWeek);
   if (week === null) {
     const observedWeeks = view.weekly.filter((row) => row.has_data);
@@ -294,14 +326,17 @@ export function selectLedger(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
   activeWeek?: string,
+  range?: ReportRangeScope | null,
 ): LedgerGroup[] {
-  const scope = selectScope(snapshot, weekDefinition, activeWeek);
+  const scope = selectScope(snapshot, weekDefinition, activeWeek, range);
   const populationLabel =
     scope.kind === "all"
       ? "ticket trong toàn kỳ"
       : scope.kind === "selection"
         ? "ticket trong các tuần đã chọn"
-        : "ticket tuần này";
+        : scope.kind === "range"
+          ? "ticket trong khoảng ngày"
+          : "ticket tuần này";
 
   const ticketCells: LedgerCell[] = [
     {
@@ -425,8 +460,9 @@ export function selectAttentionItems(
   snapshot: DashboardSnapshot,
   weekDefinition: WeekDefinition,
   activeWeek?: string,
+  range?: ReportRangeScope | null,
 ): AttentionItem[] {
-  const scope = selectScope(snapshot, weekDefinition, activeWeek);
+  const scope = selectScope(snapshot, weekDefinition, activeWeek, range);
   const items: AttentionItem[] = [];
 
   if (scope.gt4WithoutCs > 0) {

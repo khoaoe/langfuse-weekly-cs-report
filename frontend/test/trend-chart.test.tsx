@@ -11,6 +11,15 @@ import {
 } from "../src/lib/dashboard-schema";
 import { BelowFold } from "../src/components/BelowFold";
 
+const EMPTY_DAY_TRANSFER_REASONS: DayAggregate["transfer_reasons"] = {
+  observed_transfer_denominator: 0,
+  triggers: [],
+  step_result_missing: { count: 0, denominator: 0 },
+  tpe: [],
+  guardrail: [],
+  escalation_guard_blocked: { count: 0, denominator: 0 },
+};
+
 function dayAgg(overrides: Partial<DayAggregate> & { day: string }): DayAggregate {
   return {
     total_tickets: 0,
@@ -25,7 +34,7 @@ function dayAgg(overrides: Partial<DayAggregate> & { day: string }): DayAggregat
     resolved_first_reply_count: 0,
     ai_reply_sum_ai_first: 0,
     segments: { skill: {}, app: {}, issue_category: {} },
-    transfer_reasons: {},
+    transfer_reasons: EMPTY_DAY_TRANSFER_REASONS,
     ...overrides,
   };
 }
@@ -574,8 +583,47 @@ describe("transfer diagnostics day mode note", () => {
     );
   }
 
-  it("shows a note that transfer diagnostics read by full week, not the selected day range", () => {
+  it("reads transfer diagnostics straight from the selected day range once the backend carries the block, with no weekly fallback note", () => {
     renderWithWeeklySnapshot();
+    expect(
+      screen.queryByText(
+        "Chẩn đoán chuyển CS và TPE tính theo tuần trọn vẹn (03/08–09/08), không theo khoảng ngày đã chọn.",
+      ),
+    ).toBeNull();
+  });
+
+  it("falls back to the latest complete week (with a note) when a day in range still lacks the transfer_reasons block", () => {
+    const missingBlockDays: DayAggregate[] = [
+      dayAgg({ day: "2026-08-10", total_tickets: 5, ai_first_count: 3 }),
+      { ...dayAgg({ day: "2026-08-11", total_tickets: 5, ai_first_count: 3 }), transfer_reasons: null },
+    ];
+    const latestComplete = week("2026-08-03", {
+      cohort_status: "complete",
+      has_data: true,
+    });
+    const weeklySnapshot = snapshotWithWeeks([latestComplete]);
+    const daySnapshot = snapshotWithWeeks([latestComplete]);
+    render(
+      <BelowFold
+        snapshot={daySnapshot}
+        weeklySnapshot={weeklySnapshot}
+        weekDefinition="mon_sun"
+        activeWeek=""
+        onWeekSelect={() => {}}
+        onSegmentSelect={() => {}}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        onCsatBreakdownSelect={() => {}}
+        onCsatBreakdownGroupingChange={() => {}}
+        dayRange={{
+          from: "2026-08-10",
+          to: "2026-08-11",
+          allDays: missingBlockDays,
+          plottedDays: missingBlockDays,
+          activeDay: "",
+          onDaySelect: () => {},
+        }}
+      />,
+    );
     expect(
       screen.getByText(
         "Chẩn đoán chuyển CS và TPE tính theo tuần trọn vẹn (03/08–09/08), không theo khoảng ngày đã chọn.",

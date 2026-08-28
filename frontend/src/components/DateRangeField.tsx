@@ -15,6 +15,10 @@ export interface DateRangeFieldProps {
   readonly idPrefix?: string;
   readonly clearLabel?: string;
   readonly className?: string;
+  /** "inline" drops the `<details>` popover so callers that already render
+   * their own popover (e.g. `ReportScopePicker`) don't nest one inside
+   * another. */
+  readonly variant?: "popover" | "inline";
 }
 
 const WEEKDAY_LABELS = ["T2", "T3", "T4", "T5", "T6", "T7", "CN"];
@@ -94,6 +98,7 @@ export function DateRangeField({
   idPrefix = "openedDateRange",
   clearLabel = "Tất cả ngày",
   className = styles.field,
+  variant = "popover",
 }: DateRangeFieldProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
   const labelId = `${idPrefix}Label`;
@@ -157,6 +162,94 @@ export function DateRangeField({
     day.getTime() >= rangeStart.getTime() &&
     day.getTime() <= rangeEnd.getTime();
 
+  const panelBody = (
+    <>
+      <div className={styles.dateRangeQuick}>
+        {QUICK_RANGES.map((range) => (
+          <button
+            key={range.label}
+            type="button"
+            className={styles.dateRangeQuickButton}
+            onClick={() => applyQuickRange(range.days)}
+          >
+            {range.label}
+          </button>
+        ))}
+        <button
+          type="button"
+          className={styles.dateRangeQuickButton}
+          onClick={clearRange}
+        >
+          {clearLabel}
+        </button>
+      </div>
+      <div className={styles.dateRangeCalendar}>
+        <div className={styles.dateRangeCalendarHeader}>
+          <button
+            type="button"
+            aria-label="Tháng trước"
+            onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))}
+          >
+            ‹
+          </button>
+          <span>
+            {visibleMonth.toLocaleDateString("vi-VN", {
+              month: "long",
+              year: "numeric",
+            })}
+          </span>
+          <button
+            type="button"
+            aria-label="Tháng sau"
+            onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))}
+          >
+            ›
+          </button>
+        </div>
+        <div className={styles.dateRangeWeekdays}>
+          {WEEKDAY_LABELS.map((label) => (
+            <span key={label}>{label}</span>
+          ))}
+        </div>
+        {calendarWeeks(visibleMonth).map((week) => (
+          <div key={week[0]?.getTime()} className={styles.dateRangeWeek}>
+            {week.map((day) => {
+              const outsideMonth = day.getMonth() !== visibleMonth.getMonth();
+              const isStart =
+                rangeStart !== null && day.getTime() === rangeStart.getTime();
+              const isEnd =
+                rangeEnd !== null && day.getTime() === rangeEnd.getTime();
+              return (
+                <button
+                  key={day.getTime()}
+                  type="button"
+                  className={styles.dateRangeDay}
+                  data-outside={outsideMonth ? "true" : undefined}
+                  data-selected={isStart || isEnd ? "true" : undefined}
+                  data-in-range={inRange(day) ? "true" : undefined}
+                  onClick={() => pickDay(day)}
+                >
+                  {day.getDate()}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+
+  if (variant === "inline") {
+    return (
+      <div className={className}>
+        <span id={labelId}>{label}</span>
+        <div className={styles.dateRangeInline} role="group" aria-labelledby={labelId}>
+          {panelBody}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={className}>
       <span id={labelId}>{label}</span>
@@ -182,78 +275,7 @@ export function DateRangeField({
           role="group"
           aria-labelledby={labelId}
         >
-          <div className={styles.dateRangeQuick}>
-            {QUICK_RANGES.map((range) => (
-              <button
-                key={range.label}
-                type="button"
-                className={styles.dateRangeQuickButton}
-                onClick={() => applyQuickRange(range.days)}
-              >
-                {range.label}
-              </button>
-            ))}
-            <button
-              type="button"
-              className={styles.dateRangeQuickButton}
-              onClick={clearRange}
-            >
-              {clearLabel}
-            </button>
-          </div>
-          <div className={styles.dateRangeCalendar}>
-            <div className={styles.dateRangeCalendarHeader}>
-              <button
-                type="button"
-                aria-label="Tháng trước"
-                onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))}
-              >
-                ‹
-              </button>
-              <span>
-                {visibleMonth.toLocaleDateString("vi-VN", {
-                  month: "long",
-                  year: "numeric",
-                })}
-              </span>
-              <button
-                type="button"
-                aria-label="Tháng sau"
-                onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))}
-              >
-                ›
-              </button>
-            </div>
-            <div className={styles.dateRangeWeekdays}>
-              {WEEKDAY_LABELS.map((label) => (
-                <span key={label}>{label}</span>
-              ))}
-            </div>
-            {calendarWeeks(visibleMonth).map((week) => (
-              <div key={week[0]?.getTime()} className={styles.dateRangeWeek}>
-                {week.map((day) => {
-                  const outsideMonth = day.getMonth() !== visibleMonth.getMonth();
-                  const isStart =
-                    rangeStart !== null && day.getTime() === rangeStart.getTime();
-                  const isEnd =
-                    rangeEnd !== null && day.getTime() === rangeEnd.getTime();
-                  return (
-                    <button
-                      key={day.getTime()}
-                      type="button"
-                      className={styles.dateRangeDay}
-                      data-outside={outsideMonth ? "true" : undefined}
-                      data-selected={isStart || isEnd ? "true" : undefined}
-                      data-in-range={inRange(day) ? "true" : undefined}
-                      onClick={() => pickDay(day)}
-                    >
-                      {day.getDate()}
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
+          {panelBody}
         </div>
       </details>
     </div>

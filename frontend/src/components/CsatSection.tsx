@@ -161,7 +161,18 @@ function aggregateWeeks(weeks: readonly CsatWeek[]): CsatWeek | null {
   };
 }
 
-function selectCsatScope(csat: Csat, effectiveWeek: string): CsatWeek | null {
+function selectCsatScope(
+  csat: Csat,
+  effectiveWeek: string,
+  scopeWeeks?: readonly string[],
+): CsatWeek | null {
+  if (scopeWeeks !== undefined) {
+    return aggregateWeeks(
+      scopeWeeks
+        .map((week) => csat.by_week[week])
+        .filter((week): week is CsatWeek => week !== undefined),
+    );
+  }
   if (effectiveWeek !== "") {
     return csat.by_week[effectiveWeek] ?? null;
   }
@@ -434,6 +445,13 @@ export interface CsatSectionProps {
   readonly onBreakdownGroupingChange: () => void;
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
+  /**
+   * Day-range mode: the full weeks the picked day range touches. When set,
+   * CSAT (a week-grain-only Freshdesk read) aggregates exactly these weeks
+   * instead of the single `effectiveWeek`, and the scope line becomes
+   * visible so the reader knows which weeks back the number (§5.15).
+   */
+  readonly scopeWeeks?: readonly string[];
 }
 
 /** Bot-only Freshdesk satisfaction, kept separate from Langfuse metrics. */
@@ -447,20 +465,27 @@ export function CsatSection({
   onBreakdownGroupingChange,
   freshdeskCookieState = null,
   onOpenFreshdeskCookieDialog = () => {},
+  scopeWeeks,
 }: CsatSectionProps) {
   const [grouping, setGrouping] = useState<CsatGrouping>("outcome");
   const activeValue = activeBreakdownFilters[grouping];
   const data = useMemo(
-    () => (csat === null ? null : selectCsatScope(csat, effectiveWeek)),
-    [csat, effectiveWeek],
+    () => (csat === null ? null : selectCsatScope(csat, effectiveWeek, scopeWeeks)),
+    [csat, effectiveWeek, scopeWeeks],
   );
   const stale =
     csat !== null &&
     vietnamDateKey(csat.fetched_at) !== vietnamDateKey(Date.now());
   const scopeLabel =
-    effectiveWeek === ""
-      ? "Phạm vi CSAT: Toàn kỳ · cộng các tuần đã có dữ liệu"
-      : `Phạm vi CSAT: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
+    scopeWeeks !== undefined
+      ? scopeWeeks.length === 0
+        ? "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT."
+        : `CSAT theo tuần trọn vẹn chạm khoảng ngày: ${scopeWeeks
+            .map((week) => formatWeekRange(week, weekDefinition))
+            .join(", ")}. Freshdesk chỉ trả CSAT theo tuần, chưa cắt được theo ngày.`
+      : effectiveWeek === ""
+        ? "Phạm vi CSAT: Toàn kỳ · cộng các tuần đã có dữ liệu"
+        : `Phạm vi CSAT: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
 
   return (
     <section
@@ -475,7 +500,10 @@ export function CsatSection({
           </h2>
         </div>
       </div>
-      <p id="csat-scope" className="visually-hidden">
+      <p
+        id="csat-scope"
+        className={scopeWeeks !== undefined ? undefined : "visually-hidden"}
+      >
         {scopeLabel}
       </p>
 
@@ -484,10 +512,11 @@ export function CsatSection({
           <p>
             {freshdeskCookieState === "expired"
               ? "Cookie Freshdesk đã hết hạn — CSAT đã dừng cập nhật."
-              : "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT."}
+              : freshdeskCookieState === null
+                ? "Chưa đọc được trạng thái cookie Freshdesk."
+                : "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT."}
           </p>
-          {freshdeskCookieState === "expired" ||
-          freshdeskCookieState === "missing" ? (
+          {freshdeskCookieState !== "ok" ? (
             <div className={csatStyles.emptyActions}>
               <button
                 type="button"

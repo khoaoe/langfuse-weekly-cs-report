@@ -24,6 +24,7 @@ from weekly_cs_report.dashboard_cache import ProtectedSnapshotStore, SnapshotMan
 from weekly_cs_report.dashboard_schema import (
     DashboardSnapshot,
     TicketRow,
+    _ticket_public_dict,
     project_dashboard,
 )
 from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
@@ -454,7 +455,11 @@ def test_ticket_endpoint_uses_last_good_snapshot_and_paginates(manager_factory):
 
     assert response.status_code == 200
     assert response.json() == {
-        "items": [asdict(next(row for row in snapshot.tickets if row.ticket_id == "300"))],
+        "items": [
+            _ticket_public_dict(
+                next(row for row in snapshot.tickets if row.ticket_id == "300")
+            )
+        ],
         "page": 2,
         "page_size": 2,
         "total": 3,
@@ -477,6 +482,36 @@ def test_ticket_endpoint_applies_allowlisted_sort_before_pagination(manager_fact
         "300",
         "200",
     ]
+
+
+def test_ticket_endpoint_never_leaks_day_grain_diagnostic_fields(manager_factory):
+    """§4.1 privacy contract: `transfer_rule`/`transfer_source`/`transfer_stage`/
+    `transfer_skill`/`guardrail_rules`/`tpe_signals` exist on `TicketRow` only
+    to let day aggregates reconstruct the weekly transfer/TPE grain -- the
+    non-aggregate ticket page must never expose them to the browser."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get("/api/tickets?page=1&page_size=50")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 3
+    for item in body["items"]:
+        for private_field in (
+            "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+            "guardrail_rules", "tpe_signals",
+        ):
+            assert private_field not in item
+    # sort_by must not accept those fields as a Ticket Explorer column either.
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        rejected = client.get("/api/tickets?sort_by=tpe_signals&sort_direction=asc")
+    assert rejected.status_code == 422
 
 
 def test_ticket_endpoint_aggregate_returns_day_buckets_instead_of_ticket_list(
@@ -536,7 +571,23 @@ def test_ticket_endpoint_aggregate_returns_day_buckets_instead_of_ticket_list(
                         }
                     },
                 },
-                "transfer_reasons": {"unknown": 2},
+                "transfer_reasons": {
+                    "observed_transfer_denominator": 2,
+                    "triggers": [
+                        {
+                            "reason": "unknown",
+                            "rule": None,
+                            "source": None,
+                            "stage": None,
+                            "skill": None,
+                            "count": 2,
+                        }
+                    ],
+                    "tpe": [],
+                    "step_result_missing": {"count": 2, "denominator": 2},
+                    "guardrail": [],
+                    "escalation_guard_blocked": {"count": 0, "denominator": 2},
+                },
             }
         ],
     }

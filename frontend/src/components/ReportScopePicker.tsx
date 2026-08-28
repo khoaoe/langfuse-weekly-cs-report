@@ -169,13 +169,15 @@ export function ReportScopePicker({
               </div>
             </>
           ) : (
-            <>
+            <div className={styles.reportScopeRange}>
               <DateRangeField
                 value={activeRange ?? { from: "", to: "" }}
                 onChange={({ from, to }) => onRangeChange(from, to)}
                 label="Khoảng ngày báo cáo"
                 idPrefix="reportRange"
                 clearLabel="Toàn bộ kỳ báo cáo"
+                variant="inline"
+                className={`${styles.reportScopeRangeField}`}
               />
               {activeRange != null ? (
                 <p id="reportRangeSummary" className={styles.reportScopeSummaryLine}>
@@ -186,7 +188,7 @@ export function ReportScopePicker({
                   }`}
                 </p>
               ) : null}
-            </>
+            </div>
           )}
         </div>
       </details>

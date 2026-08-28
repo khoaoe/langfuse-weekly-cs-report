@@ -1,6 +1,11 @@
 import type { DashboardSnapshot, WeekDefinition } from "../lib/dashboard-schema";
 import type { TicketFilters } from "../lib/dashboard-filters";
-import { formatCount, formatWeekRange } from "../lib/format";
+import {
+  dateRangeSpanDays,
+  formatCount,
+  formatDateRangeLabel,
+  formatWeekRange,
+} from "../lib/format";
 import { buildDeterministicNarrative } from "../lib/narrative";
 import {
   COHORT_LABELS,
@@ -9,6 +14,7 @@ import {
   selectLedger,
   selectScope,
   selectView,
+  type ReportRangeScope,
 } from "../lib/selectors";
 import styles from "./dashboard.module.css";
 
@@ -16,6 +22,7 @@ export interface DecisionLedgerProps {
   readonly snapshot: DashboardSnapshot;
   readonly weekDefinition: WeekDefinition;
   readonly activeWeek?: string;
+  readonly reportRange?: ReportRangeScope | null;
   readonly onCellSelect?: (patch: Partial<TicketFilters>) => void;
 }
 
@@ -34,16 +41,26 @@ export function DecisionLedger({
   snapshot,
   weekDefinition,
   activeWeek,
+  reportRange = null,
   onCellSelect,
 }: DecisionLedgerProps) {
   const view = selectView(snapshot, weekDefinition);
-  const scope = selectScope(snapshot, weekDefinition, activeWeek);
+  const scope = selectScope(snapshot, weekDefinition, activeWeek, reportRange);
   const latest = scope.week;
-  const groups = selectLedger(snapshot, weekDefinition, activeWeek);
-  const attention = selectAttentionItems(snapshot, weekDefinition, activeWeek);
-  const narrative = buildDeterministicNarrative(
-    buildNarrativeInput(snapshot, weekDefinition, activeWeek),
+  const groups = selectLedger(snapshot, weekDefinition, activeWeek, reportRange);
+  const attention = selectAttentionItems(
+    snapshot,
+    weekDefinition,
+    activeWeek,
+    reportRange,
   );
+  const narrative = buildDeterministicNarrative(
+    buildNarrativeInput(snapshot, weekDefinition, activeWeek, reportRange),
+  );
+  const rangeSpanDays =
+    scope.kind === "range"
+      ? dateRangeSpanDays(scope.rangeFrom, scope.rangeTo)
+      : null;
 
   return (
     <section className={styles.decision} aria-labelledby="dynamicTitle">
@@ -61,9 +78,18 @@ export function DecisionLedger({
                 ? ` · ${formatCount(
                     view.weekly.filter((week) => week.has_data).length,
                   )} tuần đã chọn`
-              : latest === null
-                ? ""
-                : ` · tuần ${formatWeekRange(latest.cohort_week, weekDefinition)}`}
+                : scope.kind === "range"
+                  ? ` · ${formatDateRangeLabel(
+                      scope.rangeFrom ?? "",
+                      scope.rangeTo ?? "",
+                    )}${
+                      rangeSpanDays === null
+                        ? ""
+                        : ` · ${formatCount(rangeSpanDays)} ngày`
+                    }`
+                  : latest === null
+                    ? ""
+                    : ` · tuần ${formatWeekRange(latest.cohort_week, weekDefinition)}`}
             {` · ${formatCount(scope.eligible)} ticket`}
           </h1>
           <div

@@ -25,6 +25,12 @@ const STATUS_LABELS: Readonly<Record<EntryCoverageStatus, string>> = {
 interface EntryCoverageSectionProps {
   readonly entryCoverage: EntryCoverage | null;
   readonly weekDefinition: WeekDefinition;
+  /**
+   * Day-range mode: a note naming the full weeks the picked range touches —
+   * entry coverage is week-grain-only Freshdesk data, so a day-range reader
+   * needs to know it is not cut to the exact days selected (§5.15).
+   */
+  readonly scopeNote?: string;
 }
 
 function percentage(count: number, total: number): string {
@@ -34,6 +40,7 @@ function percentage(count: number, total: number): string {
 export function EntryCoverageSection({
   entryCoverage,
   weekDefinition,
+  scopeNote,
 }: EntryCoverageSectionProps) {
   const [selectedStatus, setSelectedStatus] =
     useState<EntryCoverageStatus | null>(null);
@@ -116,6 +123,11 @@ export function EntryCoverageSection({
             ? "Chưa có dữ liệu đối chiếu từ Freshdesk."
             : "Chưa có dữ liệu đối chiếu từ Freshdesk trong phạm vi đang chọn."}
         </p>
+        {scopeNote === undefined ? null : (
+          <p id="entry-coverage-scope" className={styles.sectionNote}>
+            {scopeNote}
+          </p>
+        )}
       </section>
     );
   }
@@ -178,6 +190,11 @@ export function EntryCoverageSection({
       <p className={styles.sectionNote}>
         Freshdesk là tập ticket gốc; đối chiếu từ 06/07/2026 với Langfuse và conversation công khai.
       </p>
+      {scopeNote === undefined ? null : (
+        <p id="entry-coverage-scope" className={styles.sectionNote}>
+          {scopeNote}
+        </p>
+      )}
       <div className={entryStyles.flow} role="list" aria-label="Độ phủ xử lý Freshdesk">
         {metricRows.map((metric) => {
           const count = totalFor(metric.key);

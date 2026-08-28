@@ -19,7 +19,12 @@ import {
   selectLatestWeek,
   selectView,
 } from "../lib/selectors";
-import { scopeSnapshotToDayRangeSnapshot, scopeSnapshotToWeeks } from "../lib/report-scope";
+import {
+  buildDayRangeWeekLabels,
+  scopeSnapshotToDayRangeSnapshot,
+  scopeSnapshotToWeeks,
+} from "../lib/report-scope";
+import { formatDateRangeLabel } from "../lib/format";
 import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
@@ -134,7 +139,6 @@ function DashboardBody() {
             snapshot,
             weekDefinition,
             dayRangeData.plottedDays,
-            reportScope.mode === "range" ? reportScope.from : "",
           );
     }
     return multiWeekSelection
@@ -170,6 +174,15 @@ function DashboardBody() {
       weeklySnapshot: snapshot,
     };
   }, [activeDay, dayRangeData, isDayRangeMode, reportScope, snapshot]);
+  const weeklyReportDayRangeProps = useMemo(() => {
+    if (!isDayRangeMode || reportScope.mode !== "range" || dayRangeData === undefined) {
+      return {};
+    }
+    return {
+      dayRangeWeekLabels: buildDayRangeWeekLabels(dayRangeData.plottedDays),
+      dayRangeLabel: formatDateRangeLabel(reportScope.from, reportScope.to),
+    };
+  }, [dayRangeData, isDayRangeMode, reportScope]);
   const currentExplorerWeekPatch = useMemo(
     () =>
       isDayRangeMode && reportScope.mode === "range"
@@ -356,11 +369,13 @@ function DashboardBody() {
             snapshot={reportSnapshot}
             weekDefinition={weekDefinition}
             activeWeek={ledgerScope}
+            reportRange={reportScope.mode === "range" ? reportScope : null}
             onCellSelect={applyLedgerFilter}
           />
           <WeeklyReport
             snapshot={reportSnapshot}
             weekDefinition={weekDefinition}
+            {...weeklyReportDayRangeProps}
           />
           <BelowFold
             snapshot={reportSnapshot}
@@ -413,6 +428,7 @@ function DashboardBody() {
       <AbTestSection
         selectedReportWeeks={selectedReportWeeks}
         weekDefinition={weekDefinition}
+        reportRange={reportScope.mode === "range" ? reportScope : null}
       />
     </AppShell>
     <FreshdeskCookieDialog

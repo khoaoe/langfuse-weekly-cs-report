@@ -12,7 +12,11 @@ import type {
 } from "../lib/dashboard-schema";
 import type { TicketFilterKey, TicketFilters } from "../lib/dashboard-filters";
 import { niceRateTicks, niceVolumeTicks } from "../lib/chart-scale";
-import { rollingRate } from "../lib/report-scope";
+import {
+  aggregateTransferReasonsFromDays,
+  buildDayRangeWeekLabels,
+  rollingRate,
+} from "../lib/report-scope";
 import {
   formatCount,
   formatRate,
@@ -981,42 +985,83 @@ export function BelowFold({
     effectiveWeek === "" ? undefined : view.by_week[effectiveWeek];
   const segments = weeklyDetail?.segments ?? view.segments;
 
-  // §6: TPE/transfer-reason grain doesn't exist per day, so in day mode the
-  // whole diagnostics panel reads the latest complete week from
-  // `weeklySnapshot` instead of the day-range-scoped `view` — never a blend.
+  // §4.3: the day-grain backend now carries the full transfer/TPE shape on
+  // every day, so day mode sums it straight from the plotted days via
+  // `aggregateTransferReasonsFromDays()`. It only falls back to the latest
+  // complete week (with a note) when a day in range still lacks the block —
+  // an older snapshot generated before this contract landed.
   const weeklyView =
     dayRange === undefined
       ? view
       : weeklySnapshot === undefined
         ? view
         : selectView(weeklySnapshot, weekDefinition);
+  const dayRangeTransfer =
+    dayRange === undefined ? null : aggregateTransferReasonsFromDays(dayRange.plottedDays);
+  const usesDayRangeDiagnostics = dayRange !== undefined && dayRangeTransfer !== null;
   const diagnosticsWeek =
-    dayRange === undefined ? selectedWeek : (selectLatestWeek(weeklyView) ?? undefined);
+    dayRange === undefined
+      ? selectedWeek
+      : usesDayRangeDiagnostics
+        ? undefined
+        : (selectLatestWeek(weeklyView) ?? undefined);
   const diagnosticsWeeklyDetail =
     diagnosticsWeek === undefined ? undefined : weeklyView.by_week[diagnosticsWeek.cohort_week];
-  const transfer = diagnosticsWeeklyDetail?.transfer_reasons ?? weeklyView.transfer_reasons;
+  const transfer = usesDayRangeDiagnostics
+    ? dayRangeTransfer
+    : (diagnosticsWeeklyDetail?.transfer_reasons ?? weeklyView.transfer_reasons);
+  // rule_gt4 always has a real day-grain source (aggregateDays() sums
+  // gt4_turn_with_cs/without_cs directly) so day mode never needs the weekly
+  // fallback here, unlike transfer/TPE above.
   const rule =
-    diagnosticsWeek === undefined
-      ? weeklyView.rule_gt4
-      : {
-          gt4_turn_total:
-            diagnosticsWeek.gt4_turn_with_cs + diagnosticsWeek.gt4_turn_without_cs,
-          gt4_turn_with_cs: diagnosticsWeek.gt4_turn_with_cs,
-          gt4_turn_without_cs: diagnosticsWeek.gt4_turn_without_cs,
-          max_replies_rule_fired: diagnosticsWeek.max_replies_rule_fired,
-        };
+    dayRange !== undefined
+      ? view.rule_gt4
+      : diagnosticsWeek === undefined
+        ? weeklyView.rule_gt4
+        : {
+            gt4_turn_total:
+              diagnosticsWeek.gt4_turn_with_cs + diagnosticsWeek.gt4_turn_without_cs,
+            gt4_turn_with_cs: diagnosticsWeek.gt4_turn_with_cs,
+            gt4_turn_without_cs: diagnosticsWeek.gt4_turn_without_cs,
+            max_replies_rule_fired: diagnosticsWeek.max_replies_rule_fired,
+          };
   const dayModeDiagnosticsNote =
-    dayRange === undefined || diagnosticsWeek === undefined
+    dayRange === undefined || usesDayRangeDiagnostics || diagnosticsWeek === undefined
       ? null
       : `Chẩn đoán chuyển CS và TPE tính theo tuần trọn vẹn (${formatWeekRange(
           diagnosticsWeek.cohort_week,
           weekDefinition,
         )}), không theo khoảng ngày đã chọn.`;
+
+  // §3.4: CSAT and entry coverage are week-grain-only Freshdesk reads. The
+  // day-range synthetic `view` always carries them as null (report-scope.ts),
+  // so day mode must read the real weekly snapshot instead of quietly
+  // reporting "not connected".
+  const touchedWeeks = useMemo(
+    () =>
+      dayRange === undefined
+        ? []
+        : Object.keys(buildDayRangeWeekLabels(dayRange.plottedDays)).sort(),
+    [dayRange],
+  );
+  const csat = dayRange === undefined ? view.csat : (weeklyView.csat ?? null);
+  const entryCoverage =
+    dayRange === undefined ? view.entry_coverage : weeklyView.entry_coverage;
+  const entryCoverageScopeNote =
+    dayRange === undefined || touchedWeeks.length === 0
+      ? undefined
+      : `Độ phủ theo tuần trọn vẹn chạm khoảng ngày: ${touchedWeeks
+          .map((week) => formatWeekRange(week, weekDefinition))
+          .join(", ")}.`;
+
   return (
     <>
       <EntryCoverageSection
-        entryCoverage={view.entry_coverage}
+        entryCoverage={entryCoverage}
         weekDefinition={weekDefinition}
+        {...(entryCoverageScopeNote === undefined
+          ? {}
+          : { scopeNote: entryCoverageScopeNote })}
       />
       <section id="trend" className={styles.section} aria-labelledby="trend-title">
         <div className={styles.sectionHead}>
@@ -1081,7 +1126,7 @@ export function BelowFold({
       </section>
 
       <CsatSection
-        csat={view.csat}
+        csat={csat}
         effectiveWeek={effectiveWeek}
         weekDefinition={weekDefinition}
         activeBreakdownFilters={activeCsatBreakdownFilters}
@@ -1092,6 +1137,7 @@ export function BelowFold({
         onBreakdownGroupingChange={onCsatBreakdownGroupingChange}
         freshdeskCookieState={freshdeskCookieState}
         onOpenFreshdeskCookieDialog={onOpenFreshdeskCookieDialog}
+        {...(dayRange === undefined ? {} : { scopeWeeks: touchedWeeks })}
       />
 
       <TransferDiagnostics

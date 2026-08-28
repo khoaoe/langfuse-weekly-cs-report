@@ -47,6 +47,8 @@ export interface WeeklyExportOptions {
   readonly cohortLabel: string;
   readonly updatedAt: string;
   readonly weekDefinition?: WeekDefinition;
+  /** Day-range mode: honest truncated-week label per `cohort_week`, overriding the full week span. */
+  readonly weekLabels?: Readonly<Record<string, string>>;
 }
 
 /** A week with no tickets is reported as absent, never as a row of zeros. */
@@ -57,7 +59,11 @@ const BOM = "﻿";
 export function weekLabel(
   row: Pick<WeeklyExportRow, "cohort_week" | "cohort_status">,
   weekDefinition: WeekDefinition,
+  labelOverride?: string,
 ): string {
+  if (labelOverride !== undefined) {
+    return row.cohort_status === "wtd" ? `${labelOverride} (WTD)` : labelOverride;
+  }
   const range = formatWeekRange(row.cohort_week, weekDefinition);
   return row.cohort_status === "wtd" ? `${range} (WTD)` : range;
 }
@@ -67,12 +73,15 @@ export function weekLabel(
  *
  * Weeks without tickets carry the explicit empty label instead of zeros, so a
  * gap in Langfuse coverage cannot be misread as a week of perfect silence.
+ * `labelOverride` swaps in the honest first/last-touched-day label for a week
+ * truncated by a day-range selection, instead of the full Monday-start span.
  */
 export function weeklyExportCells(
   row: WeeklyExportRow,
   weekDefinition: WeekDefinition = "mon_sun",
+  labelOverride?: string,
 ): string[] {
-  const label = weekLabel(row, weekDefinition);
+  const label = weekLabel(row, weekDefinition, labelOverride);
   if (row.total_tickets === 0) {
     return [
       label,
@@ -127,7 +136,9 @@ export function buildWeeklyTsv(
   return [
     WEEKLY_EXPORT_COLUMNS.map(tsvCell).join("\t"),
     ...newestFirstWeeklyRows(rows).map((row) =>
-      weeklyExportCells(row, weekDefinition).map(tsvCell).join("\t"),
+      weeklyExportCells(row, weekDefinition, options.weekLabels?.[row.cohort_week])
+        .map(tsvCell)
+        .join("\t"),
     ),
   ].join("\n");
 }
@@ -141,7 +152,9 @@ export function buildWeeklyCsv(
     csvMetadataCells(options).map(csvCell).join(","),
     WEEKLY_EXPORT_COLUMNS.map(csvCell).join(","),
     ...newestFirstWeeklyRows(rows).map((row) =>
-      weeklyExportCells(row, weekDefinition).map(csvCell).join(","),
+      weeklyExportCells(row, weekDefinition, options.weekLabels?.[row.cohort_week])
+        .map(csvCell)
+        .join(","),
     ),
   ].join("\r\n");
   // Excel on Windows only detects UTF-8 from the byte-order mark.

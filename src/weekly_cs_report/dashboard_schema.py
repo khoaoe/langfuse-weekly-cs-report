@@ -31,7 +31,7 @@ from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 23
+_STORAGE_VERSION = 24
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -155,8 +155,20 @@ _TICKET_KEYS = frozenset(
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
         "data_quality", "model_core",
+        # Day-grain diagnostic fields (§4.1) -- server-only, never part of the
+        # Ticket Explorer's public projection (`_TICKET_EXPLORER_PUBLIC_KEYS`).
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
     }
 )
+# The public shape `ticket_page()` (non-aggregate) returns to the browser.
+# Deliberately excludes the day-grain diagnostic fields above: they only
+# exist to let day aggregates reconstruct the weekly transfer/TPE grain and
+# must never reach the Ticket Explorer projection (§4.1 privacy contract).
+_TICKET_EXPLORER_PUBLIC_KEYS = _TICKET_KEYS - {
+    "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+    "guardrail_rules", "tpe_signals",
+}
 _WEEKLY_KEYS = frozenset(
     {
         "cohort_week", "cohort_status", "week_definition", "has_data",
@@ -198,6 +210,17 @@ class TicketRow:
     csat_satisfaction: str | None
     data_quality: str
     model_core: str | None = None
+    # Day-grain diagnostic fields (§4.1). Default empty/None so tickets built
+    # before this field set existed still construct; a bumped
+    # `_STORAGE_VERSION` means old *stored* snapshots never reach this
+    # constructor anyway (`dashboard_cache.py` regenerates on version
+    # mismatch instead of migrating field-by-field).
+    transfer_rule: str | None = None
+    transfer_source: str | None = None
+    transfer_stage: str | None = None
+    transfer_skill: str | None = None
+    guardrail_rules: tuple[str, ...] = ()
+    tpe_signals: tuple[tuple[str, str | None, str | None], ...] = ()
 
     def __post_init__(self) -> None:
         _validate_ticket_values(self)
@@ -289,6 +312,10 @@ def project_dashboard(
     ordered_csat = _ordered_csat_by_ticket(
         csat_cache.responses if csat_cache is not None else ()
     )
+    # Built once here and threaded into `_ticket_row()` so each ticket can
+    # bake in a resolved TPE status at generation time -- day aggregates
+    # read only stored `TicketRow`s later, when the taxonomy is gone.
+    tpe_status_index = build_tpe_status_index(result.sessions, run.taxonomy)
     tickets = tuple(sorted(
         (
             _ticket_row(
@@ -296,6 +323,7 @@ def project_dashboard(
                 safe_intents[session.session_id],
                 csat_cache,
                 ordered_csat,
+                tpe_status_index,
             )
             for session in result.sessions
             if _is_safe_ticket_id(session.session_id)
@@ -445,7 +473,25 @@ def ticket_page(
     ]
     rows = _sort_ticket_rows(rows, sort_by, effective_sort_direction)
     start = (page - 1) * page_size
-    return {"items": [asdict(row) for row in rows[start:start + page_size]], "page": page, "page_size": page_size, "total": len(rows)}
+    return {
+        "items": [_ticket_public_dict(row) for row in rows[start:start + page_size]],
+        "page": page,
+        "page_size": page_size,
+        "total": len(rows),
+    }
+
+
+def _ticket_public_dict(row: TicketRow) -> dict[str, object]:
+    """Filter a ticket row down to the Ticket Explorer's public projection.
+
+    `TicketRow` carries day-grain diagnostic fields (`transfer_rule`,
+    `transfer_source`, `transfer_stage`, `transfer_skill`, `guardrail_rules`,
+    `tpe_signals`) that exist only to let day aggregates reconstruct the
+    weekly transfer/TPE grain (§4.1). They must never reach the browser via
+    the non-aggregate ticket page.
+    """
+    full = asdict(row)
+    return {key: full[key] for key in _TICKET_EXPLORER_PUBLIC_KEYS}
 
 
 _DAY_AGGREGATE_SEGMENT_DIMENSIONS = ("skill", "app", "issue_category")
@@ -502,7 +548,6 @@ def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
     segments: dict[str, dict[str, dict[str, int]]] = {
         dimension: {} for dimension in _DAY_AGGREGATE_SEGMENT_DIMENSIONS
     }
-    transfer_reasons: dict[str, int] = {}
     ai_first_count = 0
     transferred_count = 0
     direct_cs_count = 0
@@ -532,10 +577,6 @@ def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
                 gt4_turn_with_cs += 1
             else:
                 gt4_turn_without_cs += 1
-        if row.transfer_reason is not None:
-            transfer_reasons[row.transfer_reason] = (
-                transfer_reasons.get(row.transfer_reason, 0) + 1
-            )
         for dimension in _DAY_AGGREGATE_SEGMENT_DIMENSIONS:
             label = getattr(row, dimension)
             if label is None:
@@ -565,7 +606,7 @@ def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
         "resolved_first_reply_count": resolved_first_reply_count,
         "ai_reply_sum_ai_first": ai_reply_sum_ai_first,
         "segments": segments,
-        "transfer_reasons": transfer_reasons,
+        "transfer_reasons": _day_transfer_reasons(rows),
     }
 
 
@@ -672,7 +713,7 @@ def _validate_ticket_sort(
         if sort_direction is not None:
             raise ValueError("sort_direction is invalid")
         return None
-    if not isinstance(sort_by, str) or sort_by not in _TICKET_KEYS:
+    if not isinstance(sort_by, str) or sort_by not in _TICKET_EXPLORER_PUBLIC_KEYS:
         raise ValueError("sort_by is invalid")
     if sort_direction is None:
         return "asc"
@@ -1401,35 +1442,25 @@ def _tpe_rows_from_signals(
     ]
 
 
-def _transfer_reasons(
-    sessions: tuple[SessionMetrics, ...],
-    tpe_status_index: Mapping[tuple[str, str | None], str],
-) -> dict[str, object]:
-    transferred = tuple(session for session in sessions if session.transferred)
-    tpe_counts: Counter[tuple[str, str | None]] = Counter()
-    guardrail_counts: Counter[str] = Counter()
+def _shape_transfer_reasons(
+    *,
+    denominator: int,
     trigger_counts: Counter[
         tuple[str, str | None, str | None, str | None, str | None]
-    ] = Counter()
-    escalation_blocked = 0
-    step_result_missing = 0
-    for session in transferred:
-        dims = session.dimensions
-        signals = _valid_tpe_signals(dims.tpe_signals)
-        tpe_counts.update(signals)
-        step_result_missing += int(
-            not any(step_result is not None for _, step_result in signals)
-        )
-        # These are overlapping diagnostic indicators, not a partition of
-        # transferred sessions.  Their sum may exceed the denominator and a
-        # "missing reason" must never be inferred by subtraction.
-        for rule in set(session.guardrail_rules):
-            if rule in _GUARDRAIL_RULES:
-                guardrail_counts[rule] += 1
-        escalation_blocked += int(dims.escalation_guard_blocked)
-        trigger_counts[_transfer_trigger_grain(session)] += 1
+    ],
+    tpe_rows: list[dict[str, object]],
+    guardrail_counts: Counter[str],
+    escalation_blocked: int,
+    step_result_missing: int,
+) -> dict[str, object]:
+    """Shapes the `TransferReasonsSchema`-equivalent payload from pre-counted
+    totals.
 
-    tpe_rows = _tpe_rows_from_signals(tpe_counts, tpe_status_index)
+    Shared by the weekly aggregator (`_transfer_reasons`, counting from
+    `SessionMetrics`) and the day-grain aggregator (`_day_transfer_reasons`,
+    counting from `TicketRow`) so the two never drift apart on row shape or
+    sort order -- only how each counts its own source rows differs.
+    """
     guardrail_rows = [
         {"rule": rule, "count": count}
         for rule, count in sorted(
@@ -1437,7 +1468,6 @@ def _transfer_reasons(
             key=lambda item: (-item[1], item[0]),
         )
     ]
-    denominator = len(transferred)
     trigger_rows = [
         {
             "reason": reason,
@@ -1473,6 +1503,96 @@ def _transfer_reasons(
             "denominator": denominator,
         },
     }
+
+
+def _transfer_reasons(
+    sessions: tuple[SessionMetrics, ...],
+    tpe_status_index: Mapping[tuple[str, str | None], str],
+) -> dict[str, object]:
+    transferred = tuple(session for session in sessions if session.transferred)
+    tpe_counts: Counter[tuple[str, str | None]] = Counter()
+    guardrail_counts: Counter[str] = Counter()
+    trigger_counts: Counter[
+        tuple[str, str | None, str | None, str | None, str | None]
+    ] = Counter()
+    escalation_blocked = 0
+    step_result_missing = 0
+    for session in transferred:
+        dims = session.dimensions
+        signals = _valid_tpe_signals(dims.tpe_signals)
+        tpe_counts.update(signals)
+        step_result_missing += int(
+            not any(step_result is not None for _, step_result in signals)
+        )
+        # These are overlapping diagnostic indicators, not a partition of
+        # transferred sessions.  Their sum may exceed the denominator and a
+        # "missing reason" must never be inferred by subtraction.
+        for rule in set(session.guardrail_rules):
+            if rule in _GUARDRAIL_RULES:
+                guardrail_counts[rule] += 1
+        escalation_blocked += int(dims.escalation_guard_blocked)
+        trigger_counts[_transfer_trigger_grain(session)] += 1
+
+    return _shape_transfer_reasons(
+        denominator=len(transferred),
+        trigger_counts=trigger_counts,
+        tpe_rows=_tpe_rows_from_signals(tpe_counts, tpe_status_index),
+        guardrail_counts=guardrail_counts,
+        escalation_blocked=escalation_blocked,
+        step_result_missing=step_result_missing,
+    )
+
+
+def _day_transfer_reasons(rows: list[TicketRow]) -> dict[str, object]:
+    """Day-grain equivalent of `_transfer_reasons()`, counting from stored
+    `TicketRow`s instead of live `SessionMetrics`.
+
+    `tpe_status_index` is unavailable outside generation time
+    (`tpe_status.py`), so each `TicketRow.tpe_signals` entry already carries
+    its resolved status, baked in by `_ticket_row()`. That per-pair status is
+    a pure function of `(transstatus, step_result)`, so it is safe to rebuild
+    a local index from the observed rows and hand it to the same
+    `_tpe_rows_from_signals()` the weekly path uses.
+    """
+    transferred = [row for row in rows if row.transferred]
+    tpe_counts: Counter[tuple[str, str | None]] = Counter()
+    tpe_status_lookup: dict[tuple[str, str | None], str] = {}
+    guardrail_counts: Counter[str] = Counter()
+    trigger_counts: Counter[
+        tuple[str, str | None, str | None, str | None, str | None]
+    ] = Counter()
+    escalation_blocked = 0
+    step_result_missing = 0
+    for row in transferred:
+        signals = row.tpe_signals
+        for transstatus, step_result, status in signals:
+            tpe_counts[(transstatus, step_result)] += 1
+            if status is not None:
+                tpe_status_lookup[(transstatus, step_result)] = status
+        step_result_missing += int(
+            not any(step_result is not None for _, step_result, _ in signals)
+        )
+        for rule in row.guardrail_rules:
+            guardrail_counts[rule] += 1
+        escalation_blocked += int(row.escalation_guard_blocked)
+        trigger_counts[
+            (
+                row.transfer_reason or "unknown",
+                row.transfer_rule,
+                row.transfer_source,
+                row.transfer_stage,
+                row.transfer_skill,
+            )
+        ] += 1
+
+    return _shape_transfer_reasons(
+        denominator=len(transferred),
+        trigger_counts=trigger_counts,
+        tpe_rows=_tpe_rows_from_signals(tpe_counts, tpe_status_lookup),
+        guardrail_counts=guardrail_counts,
+        escalation_blocked=escalation_blocked,
+        step_result_missing=step_result_missing,
+    )
 
 
 def _transfer_trigger_grain(
@@ -1633,6 +1753,7 @@ def _ticket_row(
     safe_intent: str | None,
     csat_cache: CSATCache | None,
     ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
+    tpe_status_index: Mapping[tuple[str, str | None], str],
 ) -> TicketRow:
     dims = session.dimensions
     cohort_week = session.cohort_week.isoformat()
@@ -1644,6 +1765,7 @@ def _ticket_row(
         csat_satisfaction = ordered_csat[session.session_id][
             -1
         ].satisfaction_bucket
+    trigger_grain = _transfer_trigger_grain(session) if session.transferred else None
     return TicketRow(
         ticket_id=session.session_id, opened_at=_utc_iso(session.turn0_timestamp),
         cohort_week=cohort_week, cohort_status=session.cohort_status,
@@ -1657,15 +1779,20 @@ def _ticket_row(
         tpe_code=_unique_tpe_transstatus(dims.tpe_signals),
         tpe_status=None,
         guardrail_rule=_safe_optional(dims.guardrail_rule),
-        transfer_reason=(
-            _transfer_trigger_grain(session)[0]
-            if session.transferred
-            else None
-        ),
+        transfer_reason=trigger_grain[0] if trigger_grain is not None else None,
         escalation_guard_blocked=dims.escalation_guard_blocked,
         csat_satisfaction=csat_satisfaction,
         data_quality=_quality_label(session.data_quality),
         model_core=_safe_optional(dims.model_core),
+        transfer_rule=trigger_grain[1] if trigger_grain is not None else None,
+        transfer_source=trigger_grain[2] if trigger_grain is not None else None,
+        transfer_stage=trigger_grain[3] if trigger_grain is not None else None,
+        transfer_skill=trigger_grain[4] if trigger_grain is not None else None,
+        guardrail_rules=tuple(sorted(set(session.guardrail_rules) & _GUARDRAIL_RULES)),
+        tpe_signals=tuple(
+            (transstatus, step_result, tpe_status_index.get((transstatus, step_result)))
+            for transstatus, step_result in _valid_tpe_signals(dims.tpe_signals)
+        ),
     )
 
 
@@ -1932,8 +2059,22 @@ def _parsed_ticket_date(value: str | None, name: str) -> date | None:
 def _ticket_from_storage(value: object) -> TicketRow:
     ticket = _require_mapping(value, "ticket")
     _require_exact_keys(ticket, _TICKET_KEYS, "ticket")
+    fields = dict(ticket)
+    # JSON has no tuple type: `guardrail_rules`/`tpe_signals` round-trip
+    # through disk as lists (and nested lists for tpe_signals' 3-tuples).
+    # Restore the tuple shape `TicketRow` and `_validate_ticket_values`
+    # require before construction.
+    guardrail_rules = fields.get("guardrail_rules")
+    if isinstance(guardrail_rules, list):
+        fields["guardrail_rules"] = tuple(guardrail_rules)
+    tpe_signals = fields.get("tpe_signals")
+    if isinstance(tpe_signals, list):
+        fields["tpe_signals"] = tuple(
+            tuple(signal) if isinstance(signal, list) else signal
+            for signal in tpe_signals
+        )
     try:
-        return TicketRow(**dict(ticket))
+        return TicketRow(**fields)
     except TypeError as error:
         raise ValueError("stored ticket is invalid") from error
 
@@ -2027,6 +2168,51 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         raise ValueError("csat_satisfaction is invalid")
     if ticket.data_quality not in _QUALITY_LABELS:
         raise ValueError("data_quality is invalid")
+    if ticket.transferred:
+        if ticket.transfer_rule is not None and ticket.transfer_rule not in _GUARDRAIL_RULES:
+            raise ValueError("transfer_rule is invalid")
+    elif ticket.transfer_rule is not None:
+        raise ValueError("transfer_rule must be null for a ticket not transferred")
+    for value, name in (
+        (ticket.transfer_source, "transfer_source"),
+        (ticket.transfer_stage, "transfer_stage"),
+        (ticket.transfer_skill, "transfer_skill"),
+    ):
+        if value is not None:
+            _safe_string(value, name)
+    if not ticket.transferred and (
+        ticket.transfer_source is not None
+        or ticket.transfer_stage is not None
+        or ticket.transfer_skill is not None
+    ):
+        raise ValueError("transfer diagnostic fields must be null for a ticket not transferred")
+    if not isinstance(ticket.guardrail_rules, tuple) or not all(
+        isinstance(rule, str) and rule in _GUARDRAIL_RULES
+        for rule in ticket.guardrail_rules
+    ):
+        raise ValueError("guardrail_rules is invalid")
+    if len(set(ticket.guardrail_rules)) != len(ticket.guardrail_rules) or list(
+        ticket.guardrail_rules
+    ) != sorted(ticket.guardrail_rules):
+        raise ValueError("guardrail_rules must be sorted, de-duplicated")
+    if not isinstance(ticket.tpe_signals, tuple):
+        raise ValueError("tpe_signals is invalid")
+    for signal in ticket.tpe_signals:
+        if not isinstance(signal, tuple) or len(signal) != 3:
+            raise ValueError("tpe_signals is invalid")
+        transstatus, step_result, status = signal
+        if (
+            not isinstance(transstatus, str)
+            or _TPE_CODE_PATTERN.fullmatch(transstatus) is None
+        ):
+            raise ValueError("tpe_signals is invalid")
+        if step_result is not None and (
+            not isinstance(step_result, str)
+            or _TPE_CODE_PATTERN.fullmatch(step_result) is None
+        ):
+            raise ValueError("tpe_signals is invalid")
+        if status is not None:
+            _safe_string(status, "tpe_signals status")
 
 
 def _validate_dashboard(value: Mapping[str, object], *, generated_at: datetime) -> None:

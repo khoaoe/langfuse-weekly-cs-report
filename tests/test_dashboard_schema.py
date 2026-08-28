@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +13,10 @@ from tests.fixtures.traces import TRANSFER_HTML, TRANSFER_TEXT, trace
 from weekly_cs_report.dashboard_schema import (
     DashboardSnapshot,
     TicketRow,
+    _TICKET_EXPLORER_PUBLIC_KEYS,
     _safe_string,
+    _shape_transfer_reasons,
+    _ticket_public_dict,
     _ticket_sort_value,
     _tpe_rows_from_signals,
     project_dashboard,
@@ -128,7 +132,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 23
+    assert snapshot.storage_dict()["schema_version"] == 24
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -142,6 +146,9 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
         "data_quality", "model_core",
+        # Day-grain diagnostic fields (§4.1) -- server-only.
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
     }
     assert {
         ticket.ticket_id: getattr(ticket, "opened_at", None)
@@ -173,7 +180,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 23
+    value["schema_version"] = 24
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -508,7 +515,7 @@ def test_csat_v11_projects_latest_ticket_rating_outcomes_dimensions_and_feedback
     assert rows["145668"].csat_satisfaction == "unrated"
     assert rows["145669"].csat_satisfaction is None
     assert ticket_page(snapshot, skill="Nhiều skill")["items"] == [
-        asdict(rows["145666"])
+        _ticket_public_dict(rows["145666"])
     ]
     assert ticket_page(snapshot, skill="Chưa ghi nhận")["total"] == 3
     assert ticket_page(snapshot, csat_satisfaction="negative")["total"] == 1
@@ -901,6 +908,126 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
     )
 
 
+def _merge_full_shape_transfer_reasons(
+    days: list[dict[str, object]],
+) -> dict[str, object]:
+    """Sum a list of day-grain `transfer_reasons` payloads into one.
+
+    Mirrors what the frontend's `aggregateTransferReasonsFromDays` does when
+    rolling several day buckets back up into a week -- used here only to
+    prove the backend day-grain aggregator (`_day_transfer_reasons`) carries
+    exactly the same information as the weekly one (`_transfer_reasons`),
+    independent of how the days happen to be split (§6 test #7)."""
+    denominator = 0
+    triggers: Counter[tuple[str, str | None, str | None, str | None, str | None]] = Counter()
+    tpe: Counter[tuple[str, str | None]] = Counter()
+    tpe_status: dict[tuple[str, str | None], str] = {}
+    guardrail: Counter[str] = Counter()
+    step_result_missing = 0
+    escalation_blocked = 0
+    for day in days:
+        reasons = day["transfer_reasons"]
+        denominator += reasons["observed_transfer_denominator"]
+        for row in reasons["triggers"]:
+            triggers[(row["reason"], row["rule"], row["source"], row["stage"], row["skill"])] += row["count"]
+        for row in reasons["tpe"]:
+            key = (row["transstatus"], row["step_result"])
+            tpe[key] += row["count"]
+            if row["status"] is not None:
+                tpe_status[key] = row["status"]
+        for row in reasons["guardrail"]:
+            guardrail[row["rule"]] += row["count"]
+        step_result_missing += reasons["step_result_missing"]["count"]
+        escalation_blocked += reasons["escalation_guard_blocked"]["count"]
+    return _shape_transfer_reasons(
+        denominator=denominator,
+        trigger_counts=triggers,
+        tpe_rows=_tpe_rows_from_signals(tpe, tpe_status),
+        guardrail_counts=guardrail,
+        escalation_blocked=escalation_blocked,
+        step_result_missing=step_result_missing,
+    )
+
+
+def test_day_grain_transfer_reasons_summed_across_days_reconciles_exactly_with_weekly():
+    """§6 test #7: summing the day-grain aggregator across every day of a
+    full week must reproduce the weekly aggregator's output exactly -- same
+    triggers, same TPE grain/status, same guardrail counts, no rounding."""
+    traces = [
+        _meta(
+            trace("first-a", "145665", 0, "2026-07-21T02:00:00Z", TRANSFER_HTML),
+            tpe="-217 Thất bại",
+        ),
+        _meta(
+            trace("first-b", "145666", 0, "2026-07-22T03:00:00Z", TRANSFER_HTML),
+            tpe="-217 Đang xử lý",
+        ),
+        _meta(
+            trace("first-c", "145667", 0, "2026-07-23T04:00:00Z", TRANSFER_HTML),
+            tpe="-383 Đang xử lý",
+        ),
+        _meta(
+            trace("first-d", "145668", 0, "2026-07-24T05:00:00Z", TRANSFER_HTML),
+            tpe="",
+        ),
+    ]
+    run = _run(traces)
+    enriched = []
+    for session in run.result.sessions:
+        if session.session_id == "145665":
+            enriched.append(
+                replace(
+                    session,
+                    dimensions=replace(
+                        session.dimensions,
+                        tpe_signals=(
+                            ("-365", "-1013"),
+                            ("-365", "-1006"),
+                        ),
+                    ),
+                    guardrail_rules=("missing_transaction_id", "off_topic"),
+                )
+            )
+        elif session.session_id == "145666":
+            enriched.append(
+                replace(
+                    session,
+                    dimensions=replace(
+                        session.dimensions,
+                        escalation_guard_blocked=True,
+                        tpe_signals=(("-365", "-1013"),),
+                    ),
+                    guardrail_rules=("missing_transaction_id",),
+                )
+            )
+        elif session.session_id == "145667":
+            enriched.append(
+                replace(
+                    session,
+                    dimensions=replace(
+                        session.dimensions,
+                        tpe_signals=(
+                            ("-383", None),
+                            ("-365", None),
+                        ),
+                    ),
+                )
+            )
+        else:
+            enriched.append(session)
+    run = replace(run, result=replace(run.result, sessions=tuple(enriched)))
+
+    snapshot = project_dashboard(run)
+    weekly_reasons = snapshot.dashboard_dict()["views"]["mon_sun"]["by_week"]["2026-07-20"]["transfer_reasons"]
+
+    days = ticket_day_aggregate(
+        snapshot, opened_from="2026-07-20", opened_to="2026-07-26"
+    )
+    day_summed_reasons = _merge_full_shape_transfer_reasons(days)
+
+    assert day_summed_reasons == weekly_reasons
+
+
 def test_tpe_rows_carry_resolved_status_and_leave_unmapped_null():
     """Status phai di kem tung dong, va cap chua map phai la None."""
     rows = _tpe_rows_from_signals(
@@ -1275,7 +1402,12 @@ def test_ticket_page_filters_all_p5_dimensions_at_ticket_grain_and_preserves_24_
     page = ticket_page(snapshot, cohort_week="2026-07-20", page_size=2)
     assert page["total"] == 3
     assert len(page["items"]) == 2
-    assert set(page["items"][0]) == set(asdict(snapshot.tickets[0]))
+    assert set(page["items"][0]) == _TICKET_EXPLORER_PUBLIC_KEYS
+    for private_key in (
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
+    ):
+        assert private_key not in page["items"][0]
     with pytest.raises(ValueError, match="ticket_id is invalid"):
         ticket_page(snapshot, ticket_id="internal-trace-id")
     assert ticket_page(snapshot, issue_category="Thanh toán-IBFT")["total"] == 3
@@ -1488,7 +1620,7 @@ def test_ticket_day_aggregate_reopen_lifetime_denominator_does_not_divide_by_zer
     assert days[0]["reopen_lifetime_numerator"] == 0
 
 
-def test_ticket_day_aggregate_includes_segments_and_flat_transfer_reason_counts():
+def test_ticket_day_aggregate_includes_segments_and_full_shape_transfer_reasons():
     snapshot = _snapshot()
     base = snapshot.tickets[0]
     ranged_snapshot = replace(
@@ -1507,7 +1639,35 @@ def test_ticket_day_aggregate_includes_segments_and_flat_transfer_reason_counts(
     assert day["segments"]["skill"]["interbank-fund-transfer"]["total"] == 2
     assert day["segments"]["app"]["241 - Chuyển Tiền ATM"]["total"] == 2
     assert day["segments"]["issue_category"]["Thanh toán-IBFT"]["total"] == 2
-    assert day["transfer_reasons"] == {"unknown": 1}
+    # Day-grain transfer_reasons is full-shape (§4.2), not a flat reason->count
+    # dict -- it must be able to reconstruct exactly what the weekly
+    # aggregator would have produced for the same rows.
+    assert day["transfer_reasons"] == {
+        "observed_transfer_denominator": 1,
+        "triggers": [
+            {
+                "reason": "unknown",
+                "rule": None,
+                "source": None,
+                "stage": None,
+                "skill": None,
+                "count": 1,
+            }
+        ],
+        # The base fixture ticket already carries one real TPE signal, so it
+        # rides along on the transferred row copied into this test.
+        "tpe": [
+            {
+                "transstatus": "-365",
+                "step_result": "-1013",
+                "count": 1,
+                "status": "FAILED_FACE_AUTH",
+            }
+        ],
+        "step_result_missing": {"count": 0, "denominator": 1},
+        "guardrail": [],
+        "escalation_guard_blocked": {"count": 0, "denominator": 1},
+    }
 
 
 def test_ticket_day_aggregate_sums_resolved_first_reply_and_ai_reply_counts():
@@ -1798,14 +1958,27 @@ def test_ticket_page_sort_contract_rejects_unknown_field_direction_and_orphan_di
     snapshot = _snapshot()
     projected_fields = set(asdict(snapshot.tickets[0]))
 
-    assert len(projected_fields) == 26
-    for sort_by in projected_fields:
+    assert len(projected_fields) == 32
+    assert projected_fields - _TICKET_EXPLORER_PUBLIC_KEYS == {
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
+    }
+    for sort_by in _TICKET_EXPLORER_PUBLIC_KEYS:
         page = ticket_page(snapshot, sort_by=sort_by, sort_direction="asc")
         assert page["total"] == len(snapshot.tickets)
     assert [
         item["ticket_id"]
         for item in ticket_page(snapshot, sort_by="ticket_id")["items"]
     ] == ["145665", "145666", "145667"]
+
+    # Day-grain-only diagnostic fields must never be a sortable Ticket Explorer
+    # column -- they never reach the public projection either (§4.1).
+    for private_field in (
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
+    ):
+        with pytest.raises(ValueError, match="sort_by is invalid"):
+            ticket_page(snapshot, sort_by=private_field, sort_direction="asc")
 
     with pytest.raises(ValueError, match="sort_by is invalid"):
         ticket_page(snapshot, sort_by="raw_payload", sort_direction="asc")

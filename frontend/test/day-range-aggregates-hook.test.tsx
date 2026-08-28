@@ -6,6 +6,16 @@ import type { ReactNode } from "react";
 
 import { server } from "./msw/server";
 import { useDayRangeAggregates } from "../src/hooks/useDayRangeAggregates";
+import type { DayAggregate } from "../src/lib/dashboard-schema";
+
+const EMPTY_DAY_TRANSFER_REASONS: DayAggregate["transfer_reasons"] = {
+  observed_transfer_denominator: 0,
+  triggers: [],
+  step_result_missing: { count: 0, denominator: 0 },
+  tpe: [],
+  guardrail: [],
+  escalation_guard_blocked: { count: 0, denominator: 0 },
+};
 
 function wrapper({ children }: { readonly children: ReactNode }) {
   const client = new QueryClient({
@@ -70,7 +80,7 @@ describe("useDayRangeAggregates", () => {
       resolved_first_reply_count: 1,
       ai_reply_sum_ai_first: 1,
       segments: { skill: {}, app: {}, issue_category: {} },
-      transfer_reasons: {},
+      transfer_reasons: EMPTY_DAY_TRANSFER_REASONS,
     }));
     server.use(
       http.get("/api/tickets", () => HttpResponse.json({ days })),

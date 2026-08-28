@@ -270,8 +270,7 @@ export function AppShell({
                     ? "Dữ liệu cũ"
                     : "Sẵn sàng"}
             </span>
-            {freshdeskCookieState === "expired" ||
-            freshdeskCookieState === "missing" ? (
+            {freshdeskCookieState !== "ok" ? (
               <button
                 type="button"
                 id="freshdeskCookieChip"

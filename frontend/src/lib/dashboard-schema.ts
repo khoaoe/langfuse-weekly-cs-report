@@ -1404,9 +1404,10 @@ export const DayAggregateSchema = z
     resolved_first_reply_count: nonNegativeInteger,
     ai_reply_sum_ai_first: nonNegativeInteger,
     segments: DayAggregateSegmentsSchema,
-    // Flat { reason: count }, not the full weekly TransferReasons shape --
-    // TicketRow.transfer_reason has no rule/source/stage/skill/tpe breakdown.
-    transfer_reasons: z.record(z.string(), nonNegativeInteger),
+    // Full weekly-shaped TransferReasons, computed per day from the same
+    // per-ticket transfer/guardrail/TPE fields the weekly path reads --
+    // `null` only for a day the server genuinely could not compute it for.
+    transfer_reasons: TransferReasonsSchema.nullable(),
   })
   .strict();
 export type DayAggregate = z.infer<typeof DayAggregateSchema>;

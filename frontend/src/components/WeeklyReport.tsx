@@ -189,6 +189,14 @@ const DEFAULT_WEEKLY_SORT: TableSort<WeeklySortKey> = {
 export interface WeeklyReportProps {
   readonly snapshot: DashboardSnapshot;
   readonly weekDefinition: WeekDefinition;
+  /**
+   * Day-range mode: honest first/last-touched-day label per touched
+   * `cohort_week`, from `buildDayRangeWeekLabels`. Presence alone switches
+   * the section into "Báo cáo theo khoảng ngày" wording.
+   */
+  readonly dayRangeWeekLabels?: Readonly<Record<string, string>>;
+  /** Day-range mode: the picked range, rendered in the title/caption. */
+  readonly dayRangeLabel?: string;
 }
 
 function download(filename: string, content: string, mediaType: string): void {
@@ -208,7 +216,13 @@ function download(filename: string, content: string, mediaType: string): void {
  * so the fourteen-column contract cannot drift between what an operator reads
  * and what they paste into a report.
  */
-export function WeeklyReport({ snapshot, weekDefinition }: WeeklyReportProps) {
+export function WeeklyReport({
+  snapshot,
+  weekDefinition,
+  dayRangeWeekLabels,
+  dayRangeLabel,
+}: WeeklyReportProps) {
+  const isDayRange = dayRangeWeekLabels !== undefined;
   const [allColumns, setAllColumns] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
   const [sort, setSort] =
@@ -228,11 +242,15 @@ export function WeeklyReport({ snapshot, weekDefinition }: WeeklyReportProps) {
     () =>
       weekly.map((row) => ({
         key: row.cohort_week,
-        cells: weeklyExportCells(row, weekDefinition),
+        cells: weeklyExportCells(
+          row,
+          weekDefinition,
+          dayRangeWeekLabels?.[row.cohort_week],
+        ),
         isCurrentWeek: row.cohort_week === currentWeek,
         source: row,
       })),
-    [currentWeek, weekly, weekDefinition],
+    [currentWeek, weekly, weekDefinition, dayRangeWeekLabels],
   );
 
   const rows = useMemo(() => {
@@ -269,8 +287,13 @@ export function WeeklyReport({ snapshot, weekDefinition }: WeeklyReportProps) {
   });
 
   const exportOptions = useMemo(
-    () => ({ cohortLabel, updatedAt, weekDefinition }),
-    [cohortLabel, updatedAt, weekDefinition],
+    () => ({
+      cohortLabel,
+      updatedAt,
+      weekDefinition,
+      ...(dayRangeWeekLabels === undefined ? {} : { weekLabels: dayRangeWeekLabels }),
+    }),
+    [cohortLabel, updatedAt, weekDefinition, dayRangeWeekLabels],
   );
   const emptyWeekCount = rows.filter((row) => !row.source.has_data).length;
   const isCustomSort =
@@ -314,7 +337,9 @@ export function WeeklyReport({ snapshot, weekDefinition }: WeeklyReportProps) {
       <div className={styles.sectionHead}>
         <div>
           <h2 id="weekly-title" className={styles.sectionTitle}>
-            Báo cáo tuần {cohortLabel}
+            {isDayRange
+              ? `Báo cáo theo khoảng ngày ${dayRangeLabel ?? ""}`
+              : `Báo cáo tuần ${cohortLabel}`}
           </h2>
         </div>
         <div className={styles.controls}>
@@ -356,7 +381,9 @@ export function WeeklyReport({ snapshot, weekDefinition }: WeeklyReportProps) {
         className={styles.tableCaption}
         aria-live="polite"
       >
-        {`Báo cáo tuần ${cohortLabel} · cập nhật ${updatedAt}`}
+        {isDayRange
+          ? `Báo cáo theo khoảng ngày ${dayRangeLabel ?? ""} · cập nhật ${updatedAt}`
+          : `Báo cáo tuần ${cohortLabel} · cập nhật ${updatedAt}`}
       </p>
 
       {/*
