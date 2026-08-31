@@ -18,7 +18,7 @@ const OUTCOME_ORDER: readonly Outcome[] = [
 ];
 const GROUP_LIMIT = 10;
 
-interface BreakdownRow {
+export interface BreakdownRow {
   readonly value: string;
   readonly label: string;
   readonly ticket_count: number;
@@ -32,7 +32,12 @@ export function csatGroupingLabel(grouping: CsatGrouping): string {
   return grouping === "skill" ? "Skill" : "Category";
 }
 
-function rowsFor(data: CsatWeek, grouping: CsatGrouping): BreakdownRow[] {
+/**
+ * The rows behind one grouping, at response grain wherever the payload carries
+ * it. Exported so the chart above the table and the table itself read from one
+ * implementation and can never disagree about a group's numbers.
+ */
+export function rowsFor(data: CsatWeek, grouping: CsatGrouping): BreakdownRow[] {
   if (grouping === "outcome") {
     return OUTCOME_ORDER.flatMap((outcome) => {
       const counts = (data.response_by_outcome ?? data.by_outcome)[outcome];
@@ -53,17 +58,77 @@ export function csatBreakdownOptions(
   return rowsFor(data, grouping).map(({ value, label }) => ({ value, label }));
 }
 
+export interface CsatTotals {
+  readonly ticket_count: number;
+  readonly positive: number;
+  readonly neutral: number;
+  readonly negative: number;
+}
+
+/**
+ * Scope totals at response grain, falling back to ticket grain for a snapshot
+ * written before `response_by_outcome` existed. Shared with the charts so the
+ * headline share and the table's total row are the same arithmetic.
+ */
+export function csatResponseTotals(data: CsatWeek): CsatTotals {
+  const byOutcome = data.response_by_outcome;
+  if (byOutcome === undefined) {
+    return {
+      ticket_count: data.response_count,
+      positive: data.positive,
+      neutral: data.neutral,
+      negative: data.negative,
+    };
+  }
+  return OUTCOME_ORDER.reduce<CsatTotals>(
+    (total, outcome) => ({
+      ticket_count: total.ticket_count + byOutcome[outcome].ticket_count,
+      positive: total.positive + byOutcome[outcome].positive,
+      neutral: total.neutral + byOutcome[outcome].neutral,
+      negative: total.negative + byOutcome[outcome].negative,
+    }),
+    { ticket_count: 0, positive: 0, neutral: 0, negative: 0 },
+  );
+}
+
 function ratingCell(count: number, denominator: number) {
   return denominator >= PERCENTAGE_SAMPLE_MINIMUM
     ? `${formatCount(count)} · ${formatRate(count / denominator)}`
     : formatCount(count);
 }
 
+/**
+ * The grouping control, lifted out of the table because it now steers the
+ * ranking chart too. A control that sits below what it changes reads as
+ * belonging to the table alone.
+ */
+export function CsatGroupingField({
+  grouping,
+  onGroupingChange,
+}: {
+  readonly grouping: CsatGrouping;
+  readonly onGroupingChange: (grouping: CsatGrouping) => void;
+}) {
+  return (
+    <label className={csatStyles.groupingField} htmlFor="csatBreakdownGroupingInput">
+      <span>Nhóm theo</span>
+      <select
+        id="csatBreakdownGroupingInput"
+        value={grouping}
+        onChange={(event) => onGroupingChange(event.target.value as CsatGrouping)}
+      >
+        <option value="outcome">Kết quả xử lý</option>
+        <option value="skill">Skill</option>
+        <option value="issue_category">Category</option>
+      </select>
+    </label>
+  );
+}
+
 export interface CsatBreakdownTableProps {
   readonly data: CsatWeek;
   readonly grouping: CsatGrouping;
   readonly scopeKey: string;
-  readonly onGroupingChange: (grouping: CsatGrouping) => void;
   readonly onValueSelect: (grouping: CsatGrouping, value: string) => void;
 }
 
@@ -71,27 +136,11 @@ export function CsatBreakdownTable({
   data,
   grouping,
   scopeKey,
-  onGroupingChange,
   onValueSelect,
 }: CsatBreakdownTableProps) {
   const [expanded, setExpanded] = useState(false);
   const rows = useMemo(() => rowsFor(data, grouping), [data, grouping]);
-  const responseTotals = data.response_by_outcome
-    ? OUTCOME_ORDER.reduce(
-        (total, outcome) => ({
-          ticket_count: total.ticket_count + data.response_by_outcome![outcome].ticket_count,
-          positive: total.positive + data.response_by_outcome![outcome].positive,
-          neutral: total.neutral + data.response_by_outcome![outcome].neutral,
-          negative: total.negative + data.response_by_outcome![outcome].negative,
-        }),
-        { ticket_count: 0, positive: 0, neutral: 0, negative: 0 },
-      )
-    : {
-        ticket_count: data.response_count,
-        positive: data.positive,
-        neutral: data.neutral,
-        negative: data.negative,
-      };
+  const responseTotals = csatResponseTotals(data);
   useEffect(() => setExpanded(false), [grouping, scopeKey]);
   const showAll = expanded;
   const visibleRows = grouping === "outcome" || showAll ? rows : rows.slice(0, GROUP_LIMIT);
@@ -99,21 +148,6 @@ export function CsatBreakdownTable({
 
   return (
     <div className={csatStyles.breakdown}>
-      <label
-        className={csatStyles.groupingField}
-        htmlFor="csatBreakdownGroupingInput"
-      >
-          <span>Nhóm theo</span>
-        <select
-          id="csatBreakdownGroupingInput"
-          value={grouping}
-          onChange={(event) => onGroupingChange(event.target.value as CsatGrouping)}
-        >
-          <option value="outcome">Kết quả xử lý</option>
-          <option value="skill">Skill</option>
-          <option value="issue_category">Category</option>
-        </select>
-      </label>
       <p id="csat-breakdown-caption" className={styles.sectionNote}>
         Mỗi phản hồi survey được tính một lần.
       </p>

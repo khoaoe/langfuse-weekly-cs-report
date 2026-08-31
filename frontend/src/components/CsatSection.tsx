@@ -9,18 +9,24 @@ import type {
 } from "../lib/dashboard-schema";
 import {
   formatCount,
+  formatDateRangeLabel,
   formatUpdatedAt,
   formatWeekRange,
+  formatWeekStart,
 } from "../lib/format";
 import type { TicketFilters } from "../lib/dashboard-filters";
+import { selectScopeDays } from "../lib/report-scope";
+import type { DayRangeScope } from "../lib/report-scope";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
 import {
   CsatBreakdownTable,
   csatBreakdownOptions,
   csatGroupingLabel,
+  CsatGroupingField,
   type CsatGrouping,
 } from "./CsatBreakdownTable";
+import { CsatCharts } from "./CsatCharts";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
@@ -165,7 +171,15 @@ function selectCsatScope(
   csat: Csat,
   effectiveWeek: string,
   scopeWeeks?: readonly string[],
+  scopeDays?: readonly string[] | null,
 ): CsatWeek | null {
+  if (scopeDays != null) {
+    return aggregateWeeks(
+      scopeDays
+        .map((day) => csat.by_day?.[day])
+        .filter((day): day is CsatWeek => day !== undefined),
+    );
+  }
   if (scopeWeeks !== undefined) {
     return aggregateWeeks(
       scopeWeeks
@@ -179,66 +193,64 @@ function selectCsatScope(
   return aggregateWeeks(Object.values(csat.by_week));
 }
 
-interface FeedbackWithWeek extends CsatFeedbackEntry {
-  readonly cohortWeek: string;
+interface FeedbackWithBucket extends CsatFeedbackEntry {
+  readonly bucketKey: string;
 }
 
 function FeedbackDisclosure({
-  csat,
-  effectiveWeek,
-  weekDefinition,
+  buckets,
+  defaultBucketFilter,
+  bucketFieldLabel,
+  allBucketsLabel,
+  formatBucketOption,
   data,
   grouping,
   activeValue,
   onActiveValueChange,
 }: {
-  readonly csat: Csat;
-  readonly effectiveWeek: string;
-  readonly weekDefinition: WeekDefinition;
+  /** The scope's buckets, keyed by cohort week or by cohort day. */
+  readonly buckets: readonly (readonly [string, CsatWeek])[];
+  readonly defaultBucketFilter: string;
+  readonly bucketFieldLabel: string;
+  readonly allBucketsLabel: string;
+  readonly formatBucketOption: (key: string) => string;
   readonly data: CsatWeek;
   readonly grouping: CsatGrouping;
   readonly activeValue: string;
   readonly onActiveValueChange: (value: string) => void;
 }) {
-  const defaultWeekFilter = effectiveWeek !== "" ? effectiveWeek : "all";
   const [expanded, setExpanded] = useState(false);
   const [satisfactionFilter, setSatisfactionFilter] = useState<
     "all" | CsatFeedbackEntry["satisfaction_bucket"]
   >("all");
-  const [weekFilter, setWeekFilter] = useState(defaultWeekFilter);
+  const [weekFilter, setWeekFilter] = useState(defaultBucketFilter);
   const [timeSort, setTimeSort] = useState<"newest" | "oldest">("newest");
   const [page, setPage] = useState(1);
   const groupOptions = useMemo(
     () => csatBreakdownOptions(data, grouping),
     [data, grouping],
   );
-  const feedback = useMemo<FeedbackWithWeek[]>(
+  const feedback = useMemo<FeedbackWithBucket[]>(
     () =>
-      Object.entries(csat.by_week).flatMap(([cohortWeek, week]) =>
-        effectiveWeek === "" || cohortWeek === effectiveWeek
-          ? week.feedback_entries.map((comment) => ({ ...comment, cohortWeek }))
-          : [],
+      buckets.flatMap(([bucketKey, bucket]) =>
+        bucket.feedback_entries.map((comment) => ({ ...comment, bucketKey })),
       ),
-    [csat.by_week, effectiveWeek],
+    [buckets],
   );
   const availableWeeks = useMemo(
     () =>
-      Object.entries(csat.by_week)
-        .filter(
-          ([cohortWeek, week]) =>
-            (effectiveWeek === "" || cohortWeek === effectiveWeek) &&
-            week.feedback_entries.length > 0,
-        )
-        .map(([cohortWeek]) => cohortWeek)
+      buckets
+        .filter(([, bucket]) => bucket.feedback_entries.length > 0)
+        .map(([bucketKey]) => bucketKey)
         .sort((left, right) => right.localeCompare(left)),
-    [csat.by_week, effectiveWeek],
+    [buckets],
   );
   const filteredComments = useMemo(
     () =>
       feedback
         .filter(
           (comment) =>
-            (weekFilter === "all" || comment.cohortWeek === weekFilter) &&
+            (weekFilter === "all" || comment.bucketKey === weekFilter) &&
             (satisfactionFilter === "all" ||
               comment.satisfaction_bucket === satisfactionFilter),
         )
@@ -313,7 +325,7 @@ function FeedbackDisclosure({
               className={csatStyles.commentField}
               htmlFor="csatCommentWeekInput"
             >
-              <span>Tuần mở ticket</span>
+              <span>{bucketFieldLabel}</span>
               <select
                 id="csatCommentWeekInput"
                 value={weekFilter}
@@ -322,10 +334,10 @@ function FeedbackDisclosure({
                   setPage(1);
                 }}
               >
-                <option value="all">Tất cả tuần</option>
-                {availableWeeks.map((cohortWeek) => (
-                  <option key={cohortWeek} value={cohortWeek}>
-                    {`Tuần ${formatWeekRange(cohortWeek, weekDefinition)}`}
+                <option value="all">{allBucketsLabel}</option>
+                {availableWeeks.map((bucketKey) => (
+                  <option key={bucketKey} value={bucketKey}>
+                    {formatBucketOption(bucketKey)}
                   </option>
                 ))}
               </select>
@@ -446,12 +458,16 @@ export interface CsatSectionProps {
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
   /**
-   * Day-range mode: the full weeks the picked day range touches. When set,
-   * CSAT (a week-grain-only Freshdesk read) aggregates exactly these weeks
-   * instead of the single `effectiveWeek`, and the scope line becomes
-   * visible so the reader knows which weeks back the number (§5.15).
+   * Day-range mode: the full weeks the picked day range touches. Used only
+   * as the fallback for a snapshot that predates day-grain CSAT; when the
+   * snapshot carries `by_day`, `dayRange` cuts to the exact days instead.
    */
   readonly scopeWeeks?: readonly string[];
+  /**
+   * Day-range mode: the inclusive range the reader actually picked. CSAT is
+   * cut to exactly these days, matching every other metric on the page.
+   */
+  readonly dayRange?: DayRangeScope;
 }
 
 /** Bot-only Freshdesk satisfaction, kept separate from Langfuse metrics. */
@@ -466,26 +482,69 @@ export function CsatSection({
   freshdeskCookieState = null,
   onOpenFreshdeskCookieDialog = () => {},
   scopeWeeks,
+  dayRange,
 }: CsatSectionProps) {
   const [grouping, setGrouping] = useState<CsatGrouping>("outcome");
   const activeValue = activeBreakdownFilters[grouping];
-  const data = useMemo(
-    () => (csat === null ? null : selectCsatScope(csat, effectiveWeek, scopeWeeks)),
-    [csat, effectiveWeek, scopeWeeks],
+  const scopeDays = useMemo(
+    () =>
+      csat === null || dayRange === undefined
+        ? null
+        : selectScopeDays(csat.by_day, dayRange),
+    [csat, dayRange],
   );
+  const data = useMemo(
+    () =>
+      csat === null
+        ? null
+        : selectCsatScope(csat, effectiveWeek, scopeWeeks, scopeDays),
+    [csat, effectiveWeek, scopeDays, scopeWeeks],
+  );
+  /** The buckets behind `data`, so the comment list can never drift from it. */
+  const scopedBuckets = useMemo<readonly (readonly [string, CsatWeek])[]>(() => {
+    if (csat === null) {
+      return [];
+    }
+    const pick = (
+      keys: readonly string[],
+      source: Readonly<Record<string, CsatWeek>>,
+    ) =>
+      keys.flatMap((key) => {
+        const bucket = source[key];
+        return bucket === undefined ? [] : [[key, bucket] as const];
+      });
+    if (scopeDays != null) {
+      return pick(scopeDays, csat.by_day ?? {});
+    }
+    if (scopeWeeks !== undefined) {
+      return pick(scopeWeeks, csat.by_week);
+    }
+    if (effectiveWeek !== "") {
+      return pick([effectiveWeek], csat.by_week);
+    }
+    return Object.entries(csat.by_week);
+  }, [csat, effectiveWeek, scopeDays, scopeWeeks]);
   const stale =
     csat !== null &&
     vietnamDateKey(csat.fetched_at) !== vietnamDateKey(Date.now());
+  const dayGrain = scopeDays != null;
   const scopeLabel =
-    scopeWeeks !== undefined
-      ? scopeWeeks.length === 0
-        ? "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT."
-        : `CSAT theo tuần trọn vẹn chạm khoảng ngày: ${scopeWeeks
-            .map((week) => formatWeekRange(week, weekDefinition))
-            .join(", ")}. Freshdesk chỉ trả CSAT theo tuần, chưa cắt được theo ngày.`
-      : effectiveWeek === ""
-        ? "Phạm vi CSAT: Toàn kỳ · cộng các tuần đã có dữ liệu"
-        : `Phạm vi CSAT: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
+    dayGrain && dayRange !== undefined
+      ? scopeDays.length === 0
+        ? "Không có ticket nào có CSAT trong khoảng ngày đã chọn."
+        : `Phạm vi CSAT: ${formatDateRangeLabel(
+            dayRange.from,
+            dayRange.to,
+          )} · đúng khoảng ngày đã chọn`
+      : scopeWeeks !== undefined
+        ? scopeWeeks.length === 0
+          ? "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT."
+          : `CSAT theo tuần trọn vẹn chạm khoảng ngày: ${scopeWeeks
+              .map((week) => formatWeekRange(week, weekDefinition))
+              .join(", ")}. Bản dữ liệu này chưa có CSAT theo ngày.`
+        : effectiveWeek === ""
+          ? "Phạm vi CSAT: Toàn kỳ · cộng các tuần đã có dữ liệu"
+          : `Phạm vi CSAT: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
 
   return (
     <section
@@ -538,21 +597,41 @@ export function CsatSection({
         </p>
       ) : (
         <>
-          <CsatBreakdownTable
-            data={data}
+          <CsatGroupingField
             grouping={grouping}
-            scopeKey={effectiveWeek}
             onGroupingChange={(nextGrouping) => {
               setGrouping(nextGrouping);
               onBreakdownGroupingChange();
             }}
+          />
+          <CsatCharts
+            data={data}
+            buckets={scopedBuckets}
+            grouping={grouping}
+            dayGrain={dayGrain}
+            weekDefinition={weekDefinition}
+          />
+          <CsatBreakdownTable
+            data={data}
+            grouping={grouping}
+            scopeKey={effectiveWeek}
             onValueSelect={onBreakdownRowSelect}
           />
           <FeedbackDisclosure
-            key={`${effectiveWeek}:${csat.fetched_at}`}
-            csat={csat}
-            effectiveWeek={effectiveWeek}
-            weekDefinition={weekDefinition}
+            key={`${dayGrain ? `${dayRange?.from}:${dayRange?.to}` : effectiveWeek}:${csat.fetched_at}`}
+            buckets={scopedBuckets}
+            defaultBucketFilter={
+              !dayGrain && scopeWeeks === undefined && effectiveWeek !== ""
+                ? effectiveWeek
+                : "all"
+            }
+            bucketFieldLabel={dayGrain ? "Ngày mở ticket" : "Tuần mở ticket"}
+            allBucketsLabel={dayGrain ? "Tất cả ngày" : "Tất cả tuần"}
+            formatBucketOption={(key) =>
+              dayGrain
+                ? `Ngày ${formatWeekStart(key)}`
+                : `Tuần ${formatWeekRange(key, weekDefinition)}`
+            }
             data={data}
             grouping={grouping}
             activeValue={activeValue}

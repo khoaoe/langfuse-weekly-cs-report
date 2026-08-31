@@ -1,0 +1,212 @@
+/* CSAT charts. One bar grammar at three altitudes -- whole scope, over time,
+   per group -- so a reader learns the encoding once. Colours are mixed against
+   `--surface` rather than hard-coded, which is what keeps the same rules
+   correct in both themes. */
+
+.charts {
+  display: grid;
+  gap: var(--space-5);
+  width: 100%;
+  min-width: 0;
+  margin-top: var(--space-4);
+}
+
+.headline {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+}
+
+.headlineFigure {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.headlineValue {
+  color: var(--critical-text);
+  font-size: clamp(2.25rem, 6vw, 3rem);
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.headlineLabel {
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.headlineSupport {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- The bar, shared by the headline and every group row --- */
+
+.bar {
+  display: flex;
+  overflow: hidden;
+  width: 100%;
+  height: 14px;
+  border-radius: var(--radius-tight);
+  background: var(--surface-sunken);
+}
+
+.barSegment {
+  flex-basis: 0;
+  min-width: 2px;
+}
+
+.negative {
+  background: color-mix(in srgb, var(--critical-text) 88%, var(--surface));
+  fill: color-mix(in srgb, var(--critical-text) 88%, var(--surface));
+}
+
+/* Neutral is 60% of the mass and nothing to act on, so it keeps the hue that
+   labels it elsewhere on the page and gives up the weight. */
+.neutral {
+  background: color-mix(in srgb, var(--warning-text) 34%, var(--surface));
+  fill: color-mix(in srgb, var(--warning-text) 34%, var(--surface));
+}
+
+.positive {
+  background: color-mix(in srgb, var(--success-text) 72%, var(--surface));
+  fill: color-mix(in srgb, var(--success-text) 72%, var(--surface));
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legendItem {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 13px;
+}
+
+.swatch {
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.legendLabel {
+  color: var(--ink);
+}
+
+.legendValue {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Panels --- */
+
+.panel {
+  display: grid;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.panelTitle {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.panelNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* --- Time chart --- */
+
+.chartViewport {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  margin-top: var(--space-1);
+}
+
+.chartSvg {
+  display: block;
+  width: 100%;
+  min-width: 560px;
+  height: auto;
+}
+
+.gridLine {
+  stroke: var(--rule);
+  stroke-width: 1;
+}
+
+.axisLabel {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+/* --- Group ranking --- */
+
+.groupList {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.groupRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 2.6fr) auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.groupRow .bar {
+  height: 10px;
+}
+
+.groupLabel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
+.groupValue {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .groupRow {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .groupRow .bar {
+    grid-column: 1 / -1;
+    order: 3;
+  }
+}
