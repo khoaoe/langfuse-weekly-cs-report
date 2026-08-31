@@ -128,7 +128,7 @@ export function DecisionLedger({
           {groups.map((group) => (
             <div key={group.id} className={styles.ledgerGroupBlock}>
               <h3 id={group.id} className={styles.ledgerGroupHeading}>
-                {group.label}
+                <span className={styles.ledgerGroupLabel}>{group.label}</span>
                 <span className={styles.ledgerGroupDenominator}>
                   {group.denominator}
                 </span>

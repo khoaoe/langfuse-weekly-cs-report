@@ -531,20 +531,37 @@
   border-top: 1px solid var(--rule);
 }
 
+/* Caption bar, not a floating label. Nhãn nhóm và mẫu số của nó là một câu
+   ("Theo ticket · 3.358 ticket"), nên chúng phải đứng cạnh nhau: đẩy mẫu số
+   ra mép phải của một khung rộng 1400px để lại 1200px trống ở giữa, và mắt
+   không còn nối được hai mảnh với nhau. */
 .ledgerGroupHeading {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
+  justify-content: flex-start;
+  flex-wrap: wrap;
   gap: var(--space-2);
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .ledgerGroupDenominator {
   color: var(--muted);
+  font-size: 13px;
   font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
   font-variant-numeric: tabular-nums;
+}
+
+/* Dấu phân cách thay cho khoảng trống: giữ hai vế trong cùng một dòng đọc. */
+.ledgerGroupDenominator::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--muted);
 }
 
 .ledgerScope {
@@ -986,8 +1003,36 @@
     border-radius: 0;
   }
 
+  /* Inside the card the two groups are structurally identical rows: caption
+     bar, then cells. The asymmetric padding-top that made "Theo ticket" sit
+     higher than "Theo lượt CS-agent trả lời" is dropped here — the sunken bar
+     already separates the groups, so the rule and the extra padding only
+     produced two different vertical rhythms. */
+  .ledgerGroup {
+    gap: 0;
+  }
+
+  .ledgerGroupBlock {
+    gap: 0;
+  }
+
+  .ledgerGroupBlock + .ledgerGroupBlock {
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  /* Same 16px inset as .ledgerCell so the group label lines up with the cell
+     labels it governs instead of hanging 16px to their left. */
   .ledgerGroupHeading {
-    padding-bottom: var(--space-1);
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-sunken);
+    border-top: 1px solid var(--rule);
+  }
+
+  /* .headline already closes with a rule; a second one here would stack two
+     1px lines into a 2px seam that reads as a rendering fault. */
+  .ledgerGroupBlock:first-child .ledgerGroupHeading {
+    border-top: 0;
   }
 }
 
