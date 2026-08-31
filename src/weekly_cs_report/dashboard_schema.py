@@ -10,9 +10,9 @@ accidentally grow an unreviewed JSON surface.
 from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import re
-from typing import Mapping
+from typing import AbstractSet, Mapping, Sequence
 from unicodedata import category, decimal, normalize
 from zoneinfo import ZoneInfo
 
@@ -615,6 +615,8 @@ def entry_coverage_ticket_page(
     *,
     week_definition: str = "mon_sun",
     cohort_weeks: str | None = None,
+    opened_from: str | None = None,
+    opened_to: str | None = None,
     status: str | None = None,
     page: int = 1,
     page_size: int = 10,
@@ -629,6 +631,13 @@ def entry_coverage_ticket_page(
         raise ValueError("status is invalid")
     if sort_by not in {"opened_at", "ticket_id"}:
         raise ValueError("sort_by is invalid")
+    # Vietnam-local opening day, inclusive at both ends -- the same window the
+    # day-grain aggregate above the drill-down is built from. Without it the
+    # list would show whole weeks while the counts show the picked days.
+    from_day = None if opened_from is None else _day_string(opened_from, "opened_from")
+    to_day = None if opened_to is None else _day_string(opened_to, "opened_to")
+    if from_day is not None and to_day is not None and from_day > to_day:
+        raise ValueError("opened_from is invalid")
     if sort_dir not in _TICKET_SORT_DIRECTIONS:
         raise ValueError("sort_dir is invalid")
     if isinstance(page, bool) or not isinstance(page, int) or page < 1:
@@ -651,19 +660,23 @@ def entry_coverage_ticket_page(
     elif not selected_weeks.issubset(allowed_weeks):
         raise ValueError("cohort_weeks contains a week outside this view")
 
-    rows = [
-        record
-        for record in snapshot.entry_coverage_tickets
-        if record.cohort_week in selected_weeks
-        and (status is None or record.status == status)
-        and (
-            week_definition == "mon_sun"
-            or _parse_utc_iso(record.opened_at, "entry coverage opened_at")
-            .astimezone(_VIETNAM_TIMEZONE)
-            .weekday()
-            < 5
-        )
-    ]
+    rows = []
+    for record in snapshot.entry_coverage_tickets:
+        if record.cohort_week not in selected_weeks:
+            continue
+        if status is not None and record.status != status:
+            continue
+        opened = _parse_utc_iso(
+            record.opened_at, "entry coverage opened_at"
+        ).astimezone(_VIETNAM_TIMEZONE)
+        if week_definition != "mon_sun" and opened.weekday() >= 5:
+            continue
+        day = opened.date()
+        if from_day is not None and day < from_day:
+            continue
+        if to_day is not None and day > to_day:
+            continue
+        rows.append(record)
     rows.sort(
         key=(
             lambda record: (
@@ -1088,51 +1101,80 @@ def _entry_coverage_payload(
     week_definition: str,
     cache: EntryCoverageCache | None,
 ) -> dict[str, object] | None:
+    """Bucket Freshdesk entry coverage at both week and day grain.
+
+    Every record carries its own `opened_at`, so the weekly shape was a
+    reporting choice, not a property of the source. What the weekly *fetch*
+    genuinely constrains is completeness -- a week never inventoried has no
+    records at all -- and that survives as the `fetched_weeks` gate below,
+    applied once and inherited by both grains.
+
+    `by_day` keys on the ticket's Vietnam-local opening day, the same cohort
+    key `ticket_day_aggregate()` uses, so a day range scopes coverage exactly
+    like every other metric instead of widening to the weeks it touches.
+    """
     if cache is None or cache.fetched_at is None:
         return None
     fetched_weeks = frozenset(cache.fetched_weeks)
-    by_week: dict[str, object] = {}
-    for summary in weekly:
-        cohort_week = summary.cohort_week.isoformat()
-        if cohort_week not in fetched_weeks:
+    observed_weeks = {
+        summary.cohort_week.isoformat()
+        for summary in weekly
+        if summary.cohort_week.isoformat() in fetched_weeks
+    }
+    week_members: dict[str, list[EntryCoverageRecord]] = {
+        cohort_week: [] for cohort_week in observed_weeks
+    }
+    day_members: dict[str, list[EntryCoverageRecord]] = {}
+    for record in cache.records:
+        if record.cohort_week not in observed_weeks:
             continue
-        records = tuple(
-            record
-            for record in cache.records
-            if record.cohort_week == cohort_week
-            and (
-                week_definition == "mon_sun"
-                or _parse_utc_iso(record.opened_at, "entry coverage opened_at")
-                .astimezone(_VIETNAM_TIMEZONE)
-                .weekday()
-                < 5
-            )
-        )
-        counts = Counter(record.status for record in records)
-        by_week[cohort_week] = {
-            "freshdesk_ticket_count": len(records),
-            "ai_replied_only": counts["ai_replied_only"],
-            "ai_replied_then_transferred": counts["ai_replied_then_transferred"],
-            "transferred_without_ai_reply": counts["transferred_without_ai_reply"],
-            "invoked_no_result": counts["invoked_no_result"],
-            "not_observed_invoked": counts["not_observed_invoked"],
-            "not_observed_human_replied": sum(
-                record.status == "not_observed_invoked"
-                and record.human_replied is True
-                for record in records
-            ),
-            "not_observed_no_human_reply": sum(
-                record.status == "not_observed_invoked"
-                and record.human_replied is False
-                for record in records
-            ),
-            "unresolved": counts["unresolved"],
-        }
+        opened = _parse_utc_iso(
+            record.opened_at, "entry coverage opened_at"
+        ).astimezone(_VIETNAM_TIMEZONE)
+        if week_definition != "mon_sun" and opened.weekday() >= 5:
+            continue
+        week_members[record.cohort_week].append(record)
+        day_members.setdefault(opened.date().isoformat(), []).append(record)
     return {
         "source": "freshdesk",
         "source_start_week": ENTRY_COVERAGE_START_WEEK,
         "fetched_at": cache.fetched_at,
-        "by_week": by_week,
+        "by_week": {
+            key: _entry_coverage_bucket(members)
+            for key, members in sorted(week_members.items())
+        },
+        "by_day": {
+            key: _entry_coverage_bucket(members)
+            for key, members in sorted(day_members.items())
+        },
+    }
+
+
+def _entry_coverage_bucket(
+    records: Sequence[EntryCoverageRecord],
+) -> dict[str, object]:
+    """Aggregate one bucket of records, whatever key selected them.
+
+    Grain-agnostic on purpose: a day bucket and a week bucket are the same
+    computation over a different member list, so the two can never drift.
+    """
+    counts = Counter(record.status for record in records)
+    return {
+        "freshdesk_ticket_count": len(records),
+        "ai_replied_only": counts["ai_replied_only"],
+        "ai_replied_then_transferred": counts["ai_replied_then_transferred"],
+        "transferred_without_ai_reply": counts["transferred_without_ai_reply"],
+        "invoked_no_result": counts["invoked_no_result"],
+        "not_observed_invoked": counts["not_observed_invoked"],
+        "not_observed_human_replied": sum(
+            record.status == "not_observed_invoked" and record.human_replied is True
+            for record in records
+        ),
+        "not_observed_no_human_reply": sum(
+            record.status == "not_observed_invoked" and record.human_replied is False
+            for record in records
+        ),
+        "unresolved": counts["unresolved"],
     }
 
 
@@ -1142,156 +1184,201 @@ def _csat_payload(
     cache: CSATCache | None,
     ordered_responses: Mapping[str, tuple[CachedCSATResponse, ...]],
 ) -> dict[str, object] | None:
+    """Bucket bot CSAT at both week and day grain.
+
+    Freshdesk is *fetched* one week at a time, but every response it returns
+    carries its own ticket, and every ticket carries its own opening instant.
+    Nothing about the source forces a weekly report grain -- only the fetch
+    unit is weekly, and that survives here as the completeness gate below
+    (`observed_weeks`), not as the reporting grain.
+
+    `by_day` therefore keys on the ticket's Vietnam-local opening day, the
+    same cohort key `ticket_day_aggregate()` uses, so a day range scopes CSAT
+    exactly like every other metric on the dashboard instead of widening to
+    the full weeks it happens to touch.
+    """
     if cache is None or cache.fetched_at is None:
         return None
-    session_by_ticket = {
-        session.session_id: session
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    observed_weeks = {
+        summary.cohort_week
+        for summary in weekly
+        if summary.cohort_week.isoformat() in fetched_weeks
+    }
+    # A week Freshdesk was never asked about has no responses at all. Letting
+    # its tickets into a bucket would read as "nobody rated us" rather than
+    # "we have not looked", so they are excluded at both grains.
+    scoped = tuple(
+        session
         for session in sessions
         if _is_safe_ticket_id(session.session_id)
+        and session.cohort_week in observed_weeks
+    )
+    week_members: dict[str, list[SessionMetrics]] = {
+        summary.cohort_week.isoformat(): []
+        for summary in weekly
+        if summary.cohort_week in observed_weeks
     }
-    fetched_weeks = frozenset(cache.fetched_weeks)
-    by_week: dict[str, object] = {}
-    for summary in weekly:
-        cohort_week = summary.cohort_week.isoformat()
-        if cohort_week not in fetched_weeks:
-            continue
-        ticket_responses = {
-            ticket_id: responses
-            for ticket_id, responses in ordered_responses.items()
-            if (
-                ticket_id in session_by_ticket
-                and session_by_ticket[ticket_id].cohort_week == summary.cohort_week
-            )
-        }
-        latest = {
-            ticket_id: responses[-1]
-            for ticket_id, responses in ticket_responses.items()
-            if responses
-        }
-        buckets = Counter(
-            response.satisfaction_bucket for response in latest.values()
+    day_members: dict[str, list[SessionMetrics]] = {}
+    for session in scoped:
+        week_members[session.cohort_week.isoformat()].append(session)
+        day = (
+            session.turn0_timestamp.astimezone(_VIETNAM_TIMEZONE).date().isoformat()
         )
-        outcome_counts = {
-            outcome: _empty_csat_counts()
-            for outcome in _OUTCOMES
+        day_members.setdefault(day, []).append(session)
+    return {
+        "source": "freshdesk",
+        "fetched_at": cache.fetched_at,
+        "by_week": {
+            key: _csat_bucket(members, ordered_responses)
+            for key, members in sorted(week_members.items())
+        },
+        "by_day": {
+            key: _csat_bucket(members, ordered_responses)
+            for key, members in sorted(day_members.items())
+        },
+    }
+
+
+def _csat_bucket(
+    sessions: Sequence[SessionMetrics],
+    ordered_responses: Mapping[str, tuple[CachedCSATResponse, ...]],
+) -> dict[str, object]:
+    """Aggregate one bucket of tickets, whatever key selected them.
+
+    Grain-agnostic on purpose: a day bucket and a week bucket are the same
+    computation over a different member list, so the two can never drift.
+    """
+    session_by_ticket = {session.session_id: session for session in sessions}
+    ticket_responses = {
+        ticket_id: ordered_responses[ticket_id]
+        for ticket_id in sorted(session_by_ticket)
+        if ticket_id in ordered_responses
+    }
+    latest = {
+        ticket_id: responses[-1]
+        for ticket_id, responses in ticket_responses.items()
+        if responses
+    }
+    buckets = Counter(
+        response.satisfaction_bucket for response in latest.values()
+    )
+    outcome_counts = {
+        outcome: _empty_csat_counts()
+        for outcome in _OUTCOMES
+    }
+    response_outcome_counts = {
+        outcome: _empty_csat_counts()
+        for outcome in _OUTCOMES
+    }
+    dimension_counts: dict[str, dict[str, dict[str, int]]] = {
+        "skill": {},
+        "issue_category": {},
+    }
+    response_dimension_counts: dict[str, dict[str, dict[str, int]]] = {
+        "skill": {},
+        "issue_category": {},
+    }
+    for ticket_id, response in latest.items():
+        session = session_by_ticket[ticket_id]
+        outcome = _outcome(session.outcome)
+        _increment_csat_counts(outcome_counts[outcome], response)
+        dimension_values = {
+            "skill": _skill_bucket(session),
+            "issue_category": _safe_dimension(
+                session.dimensions.issue_category
+            ),
         }
-        response_outcome_counts = {
-            outcome: _empty_csat_counts()
-            for outcome in _OUTCOMES
+        for dimension, value in dimension_values.items():
+            counts = dimension_counts[dimension].setdefault(
+                value,
+                _empty_csat_counts(),
+            )
+            _increment_csat_counts(counts, response)
+    for ticket_id, responses in ticket_responses.items():
+        session = session_by_ticket[ticket_id]
+        outcome = _outcome(session.outcome)
+        dimension_values = {
+            "skill": _skill_bucket(session),
+            "issue_category": _safe_dimension(
+                session.dimensions.issue_category
+            ),
         }
-        dimension_counts: dict[str, dict[str, dict[str, int]]] = {
-            "skill": {},
-            "issue_category": {},
-        }
-        response_dimension_counts: dict[str, dict[str, dict[str, int]]] = {
-            "skill": {},
-            "issue_category": {},
-        }
-        for ticket_id, response in latest.items():
-            session = session_by_ticket[ticket_id]
-            outcome = _outcome(session.outcome)
-            _increment_csat_counts(outcome_counts[outcome], response)
-            dimension_values = {
-                "skill": _skill_bucket(session),
-                "issue_category": _safe_dimension(
-                    session.dimensions.issue_category
-                ),
-            }
+        for response in responses:
+            _increment_csat_counts(response_outcome_counts[outcome], response)
             for dimension, value in dimension_values.items():
-                counts = dimension_counts[dimension].setdefault(
+                counts = response_dimension_counts[dimension].setdefault(
                     value,
                     _empty_csat_counts(),
                 )
                 _increment_csat_counts(counts, response)
-        for ticket_id, responses in ticket_responses.items():
-            session = session_by_ticket[ticket_id]
-            outcome = _outcome(session.outcome)
-            dimension_values = {
-                "skill": _skill_bucket(session),
-                "issue_category": _safe_dimension(
-                    session.dimensions.issue_category
-                ),
-            }
-            for response in responses:
-                _increment_csat_counts(response_outcome_counts[outcome], response)
-                for dimension, value in dimension_values.items():
-                    counts = response_dimension_counts[dimension].setdefault(
-                        value,
-                        _empty_csat_counts(),
-                    )
-                    _increment_csat_counts(counts, response)
 
-        feedback_entries: list[dict[str, object]] = []
-        for ticket_id, responses in ticket_responses.items():
-            session = session_by_ticket[ticket_id]
-            response_total = len(responses)
-            for response_number, response in enumerate(responses, start=1):
-                if response.comment_redacted is None:
-                    continue
-                feedback_entries.append(
-                    {
-                        "ticket_id": ticket_id,
-                        "responded_at": response.responded_at,
-                        "satisfaction_bucket": response.satisfaction_bucket,
-                        "outcome": _outcome(session.outcome),
-                        "skill": _skill_bucket(session),
-                        "issue_category": _safe_dimension(
-                            session.dimensions.issue_category
-                        ),
-                        "text": response.comment_redacted,
-                        "response_number": response_number,
-                        "response_total": response_total,
-                        "is_latest_for_ticket": response_number == response_total,
-                    }
-                )
-        feedback_entries.sort(
-            key=lambda item: (
-                _parse_utc_iso(item["responded_at"], "CSAT responded_at"),
-                item["ticket_id"],
-                item["response_number"],
+    feedback_entries: list[dict[str, object]] = []
+    for ticket_id, responses in ticket_responses.items():
+        session = session_by_ticket[ticket_id]
+        response_total = len(responses)
+        for response_number, response in enumerate(responses, start=1):
+            if response.comment_redacted is None:
+                continue
+            feedback_entries.append(
+                {
+                    "ticket_id": ticket_id,
+                    "responded_at": response.responded_at,
+                    "satisfaction_bucket": response.satisfaction_bucket,
+                    "outcome": _outcome(session.outcome),
+                    "skill": _skill_bucket(session),
+                    "issue_category": _safe_dimension(
+                        session.dimensions.issue_category
+                    ),
+                    "text": response.comment_redacted,
+                    "response_number": response_number,
+                    "response_total": response_total,
+                    "is_latest_for_ticket": response_number == response_total,
+                }
             )
+    feedback_entries.sort(
+        key=lambda item: (
+            _parse_utc_iso(item["responded_at"], "CSAT responded_at"),
+            item["ticket_id"],
+            item["response_number"],
         )
-        response_count = sum(len(responses) for responses in ticket_responses.values())
-        by_week[cohort_week] = {
-            "response_count": response_count,
-            "ticket_count": len(latest),
-            "positive": buckets["positive"],
-            "neutral": buckets["neutral"],
-            "negative": buckets["negative"],
-            "by_outcome": outcome_counts,
-            "by_dimension": {
-                dimension: [
-                    {"value": value, **counts}
-                    for value, counts in sorted(
-                        values.items(),
-                        key=lambda item: (
-                            -item[1]["ticket_count"],
-                            _natural_string_sort_key(item[0]),
-                        ),
-                    )
-                ]
-                for dimension, values in dimension_counts.items()
-            },
-            "response_by_outcome": response_outcome_counts,
-            "response_by_dimension": {
-                dimension: [
-                    {"value": value, **counts}
-                    for value, counts in sorted(
-                        values.items(),
-                        key=lambda item: (
-                            -item[1]["ticket_count"],
-                            _natural_string_sort_key(item[0]),
-                        ),
-                    )
-                ]
-                for dimension, values in response_dimension_counts.items()
-            },
-            "feedback_entries": feedback_entries,
-        }
+    )
+    response_count = sum(len(responses) for responses in ticket_responses.values())
     return {
-        "source": "freshdesk",
-        "fetched_at": cache.fetched_at,
-        "by_week": by_week,
+        "response_count": response_count,
+        "ticket_count": len(latest),
+        "positive": buckets["positive"],
+        "neutral": buckets["neutral"],
+        "negative": buckets["negative"],
+        "by_outcome": outcome_counts,
+        "by_dimension": {
+            dimension: [
+                {"value": value, **counts}
+                for value, counts in sorted(
+                    values.items(),
+                    key=lambda item: (
+                        -item[1]["ticket_count"],
+                        _natural_string_sort_key(item[0]),
+                    ),
+                )
+            ]
+            for dimension, values in dimension_counts.items()
+        },
+        "response_by_outcome": response_outcome_counts,
+        "response_by_dimension": {
+            dimension: [
+                {"value": value, **counts}
+                for value, counts in sorted(
+                    values.items(),
+                    key=lambda item: (
+                        -item[1]["ticket_count"],
+                        _natural_string_sort_key(item[0]),
+                    ),
+                )
+            ]
+            for dimension, values in response_dimension_counts.items()
+        },
+        "feedback_entries": feedback_entries,
     }
 
 
@@ -2402,9 +2489,12 @@ def _validate_entry_coverage(
     if value is None:
         return
     coverage = _require_mapping(value, "view.entry_coverage")
+    # `by_day` arrived with day-range coverage scoping. A snapshot written
+    # before that is still valid and simply carries no day grain.
     _require_exact_keys(
         coverage,
-        {"source", "source_start_week", "fetched_at", "by_week"},
+        {"source", "source_start_week", "fetched_at", "by_week"}
+        | ({"by_day"} if "by_day" in coverage else set()),
         "view.entry_coverage",
     )
     if coverage["source"] != "freshdesk":
@@ -2428,38 +2518,57 @@ def _validate_entry_coverage(
     }
     for cohort_week, raw_counts in by_week.items():
         _week_string(cohort_week, "view.entry_coverage.by_week key")
-        counts = _require_mapping(
+        _validate_entry_coverage_bucket(
             raw_counts,
-            f"view.entry_coverage.by_week.{cohort_week}",
-        )
-        _require_exact_keys(
-            counts,
             count_keys,
             f"view.entry_coverage.by_week.{cohort_week}",
         )
-        for key in count_keys:
-            _nonnegative_int(
-                counts[key],
-                f"view.entry_coverage.by_week.{cohort_week}.{key}",
-            )
-        status_total = sum(
-            counts[key]
-            for key in (
-                "ai_replied_only",
-                "ai_replied_then_transferred",
-                "transferred_without_ai_reply",
-                "invoked_no_result",
-                "not_observed_invoked",
-                "unresolved",
-            )
+    if "by_day" not in coverage:
+        return
+    by_day = _require_mapping(coverage["by_day"], "view.entry_coverage.by_day")
+    for day, raw_counts in by_day.items():
+        parsed_day = _day_string(day, "view.entry_coverage.by_day key")
+        # A day belongs to exactly one cohort week, and only weeks this view
+        # observed may appear -- the same containment rule `by_week` gets,
+        # applied one grain down.
+        if (
+            parsed_day - timedelta(days=parsed_day.weekday())
+        ).isoformat() not in weekly_by_key:
+            raise ValueError("view.entry_coverage contains a day outside this view")
+        _validate_entry_coverage_bucket(
+            raw_counts,
+            count_keys,
+            f"view.entry_coverage.by_day.{day}",
         )
-        if counts["freshdesk_ticket_count"] != status_total:
-            raise ValueError("entry coverage status counts do not reconcile")
-        if counts["not_observed_invoked"] != (
-            counts["not_observed_human_replied"]
-            + counts["not_observed_no_human_reply"]
-        ):
-            raise ValueError("entry coverage human counts do not reconcile")
+
+
+def _validate_entry_coverage_bucket(
+    raw_counts: object,
+    count_keys: AbstractSet[str],
+    path: str,
+) -> None:
+    """Validate one coverage bucket. Grain-agnostic, like `_entry_coverage_bucket()`."""
+    counts = _require_mapping(raw_counts, path)
+    _require_exact_keys(counts, count_keys, path)
+    for key in count_keys:
+        _nonnegative_int(counts[key], f"{path}.{key}")
+    status_total = sum(
+        counts[key]
+        for key in (
+            "ai_replied_only",
+            "ai_replied_then_transferred",
+            "transferred_without_ai_reply",
+            "invoked_no_result",
+            "not_observed_invoked",
+            "unresolved",
+        )
+    )
+    if counts["freshdesk_ticket_count"] != status_total:
+        raise ValueError("entry coverage status counts do not reconcile")
+    if counts["not_observed_invoked"] != (
+        counts["not_observed_human_replied"] + counts["not_observed_no_human_reply"]
+    ):
+        raise ValueError("entry coverage human counts do not reconcile")
 
 
 def _validate_csat(
@@ -2469,241 +2578,293 @@ def _validate_csat(
     if value is None:
         return
     csat = _require_mapping(value, "view.csat")
-    _require_exact_keys(csat, {"source", "fetched_at", "by_week"}, "view.csat")
+    # `by_day` arrived with day-range CSAT scoping. A snapshot written before
+    # that is still valid and simply carries no day grain.
+    _require_exact_keys(
+        csat,
+        {"source", "fetched_at", "by_week"}
+        | ({"by_day"} if "by_day" in csat else set()),
+        "view.csat",
+    )
     if csat["source"] != "freshdesk":
         raise ValueError("view.csat source is invalid")
     _parse_utc_iso(csat["fetched_at"], "view.csat.fetched_at")
     by_week = _require_mapping(csat["by_week"], "view.csat.by_week")
     if not set(by_week).issubset(weekly_by_key):
         raise ValueError("view.csat contains a week outside this view")
-    count_keys = {"response_count", "ticket_count", *_CSAT_BUCKETS}
     for cohort_week, raw_counts in by_week.items():
         _week_string(cohort_week, "view.csat.by_week key")
-        counts = _require_mapping(raw_counts, f"view.csat.by_week.{cohort_week}")
-        _require_exact_keys(
-            counts,
-            count_keys
-            | {
-                "by_outcome",
-                "by_dimension",
-                "response_by_outcome",
-                "response_by_dimension",
-                "feedback_entries",
-            },
+        _validate_csat_bucket(
+            raw_counts,
             f"view.csat.by_week.{cohort_week}",
+            weekly_by_key[cohort_week]["total_tickets"],
         )
-        for key in count_keys:
-            _nonnegative_int(
-                counts[key],
-                f"view.csat.by_week.{cohort_week}.{key}",
-            )
-        if counts["response_count"] < counts["ticket_count"]:
-            raise ValueError("view.csat ticket count exceeds response count")
-        if counts["ticket_count"] != sum(counts[key] for key in _CSAT_BUCKETS):
-            raise ValueError("view.csat ticket counts do not reconcile")
-        if counts["ticket_count"] > weekly_by_key[cohort_week]["total_tickets"]:
-            raise ValueError("view.csat ticket count exceeds weekly population")
+    if "by_day" not in csat:
+        return
+    by_day = _require_mapping(csat["by_day"], "view.csat.by_day")
+    for day, raw_counts in by_day.items():
+        parsed_day = _day_string(day, "view.csat.by_day key")
+        # A day belongs to exactly one cohort week, and only weeks this view
+        # observed may appear -- the same containment rule `by_week` gets,
+        # applied one grain down.
+        cohort_week = (
+            parsed_day - timedelta(days=parsed_day.weekday())
+        ).isoformat()
+        if cohort_week not in weekly_by_key:
+            raise ValueError("view.csat contains a day outside this view")
+        _validate_csat_bucket(
+            raw_counts,
+            f"view.csat.by_day.{day}",
+            weekly_by_key[cohort_week]["total_tickets"],
+        )
 
-        by_outcome = _require_mapping(
-            counts["by_outcome"],
-            f"view.csat.by_week.{cohort_week}.by_outcome",
-        )
-        _require_exact_keys(
-            by_outcome,
-            set(_OUTCOMES),
-            f"view.csat.by_week.{cohort_week}.by_outcome",
-        )
-        outcome_rows = [
-            _validate_csat_count_row(
-                by_outcome[outcome],
-                f"view.csat outcome {outcome}",
-            )
-            for outcome in _OUTCOMES
-        ]
-        _validate_csat_rollup(counts, outcome_rows, "outcome")
 
-        by_dimension = _require_mapping(
-            counts["by_dimension"],
-            f"view.csat.by_week.{cohort_week}.by_dimension",
+def _day_string(value: object, label: str) -> date:
+    if not isinstance(value, str):
+        raise ValueError(f"{label} is invalid")
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"{label} is invalid") from None
+
+
+def _validate_csat_bucket(
+    raw_counts: object,
+    path: str,
+    population_cap: object,
+) -> None:
+    """Validate one CSAT bucket. Grain-agnostic, like `_csat_bucket()`.
+
+    `population_cap` is the ticket population the bucket may not exceed: its
+    own week at week grain, and its containing week at day grain -- a day can
+    never hold more rated tickets than the week it sits in.
+    """
+    count_keys = {"response_count", "ticket_count", *_CSAT_BUCKETS}
+    counts = _require_mapping(raw_counts, path)
+    _require_exact_keys(
+        counts,
+        count_keys
+        | {
+            "by_outcome",
+            "by_dimension",
+            "response_by_outcome",
+            "response_by_dimension",
+            "feedback_entries",
+        },
+        path,
+    )
+    for key in count_keys:
+        _nonnegative_int(
+            counts[key],
+            f"{path}.{key}",
         )
-        _require_exact_keys(
-            by_dimension,
-            {"skill", "issue_category"},
-            f"view.csat.by_week.{cohort_week}.by_dimension",
+    if counts["response_count"] < counts["ticket_count"]:
+        raise ValueError("view.csat ticket count exceeds response count")
+    if counts["ticket_count"] != sum(counts[key] for key in _CSAT_BUCKETS):
+        raise ValueError("view.csat ticket counts do not reconcile")
+    if counts["ticket_count"] > population_cap:
+        raise ValueError("view.csat ticket count exceeds weekly population")
+
+    by_outcome = _require_mapping(
+        counts["by_outcome"],
+        f"{path}.by_outcome",
+    )
+    _require_exact_keys(
+        by_outcome,
+        set(_OUTCOMES),
+        f"{path}.by_outcome",
+    )
+    outcome_rows = [
+        _validate_csat_count_row(
+            by_outcome[outcome],
+            f"view.csat outcome {outcome}",
         )
-        for dimension in ("skill", "issue_category"):
-            raw_rows = by_dimension[dimension]
-            if not isinstance(raw_rows, list):
-                raise ValueError("view.csat dimension rows are invalid")
-            labels: set[str] = set()
-            dimension_rows: list[Mapping[str, object]] = []
-            for raw_row in raw_rows:
-                row = _require_mapping(raw_row, "view.csat dimension row")
-                _require_exact_keys(
-                    row,
-                    {"value", "ticket_count", *_CSAT_BUCKETS},
+        for outcome in _OUTCOMES
+    ]
+    _validate_csat_rollup(counts, outcome_rows, "outcome")
+
+    by_dimension = _require_mapping(
+        counts["by_dimension"],
+        f"{path}.by_dimension",
+    )
+    _require_exact_keys(
+        by_dimension,
+        {"skill", "issue_category"},
+        f"{path}.by_dimension",
+    )
+    for dimension in ("skill", "issue_category"):
+        raw_rows = by_dimension[dimension]
+        if not isinstance(raw_rows, list):
+            raise ValueError("view.csat dimension rows are invalid")
+        labels: set[str] = set()
+        dimension_rows: list[Mapping[str, object]] = []
+        for raw_row in raw_rows:
+            row = _require_mapping(raw_row, "view.csat dimension row")
+            _require_exact_keys(
+                row,
+                {"value", "ticket_count", *_CSAT_BUCKETS},
+                "view.csat dimension row",
+            )
+            label = _safe_string(row["value"], "view.csat dimension value")
+            if label in labels:
+                raise ValueError("view.csat dimension values are duplicated")
+            labels.add(label)
+            dimension_rows.append(
+                _validate_csat_count_row(
+                    {
+                        key: row[key]
+                        for key in ("ticket_count", *_CSAT_BUCKETS)
+                    },
                     "view.csat dimension row",
                 )
-                label = _safe_string(row["value"], "view.csat dimension value")
-                if label in labels:
-                    raise ValueError("view.csat dimension values are duplicated")
-                labels.add(label)
-                dimension_rows.append(
-                    _validate_csat_count_row(
-                        {
-                            key: row[key]
-                            for key in ("ticket_count", *_CSAT_BUCKETS)
-                        },
-                        "view.csat dimension row",
-                    )
-                )
-            _validate_csat_rollup(counts, dimension_rows, "dimension")
-
-        response_by_outcome = _require_mapping(
-            counts["response_by_outcome"],
-            f"view.csat.by_week.{cohort_week}.response_by_outcome",
-        )
-        _require_exact_keys(
-            response_by_outcome,
-            set(_OUTCOMES),
-            f"view.csat.by_week.{cohort_week}.response_by_outcome",
-        )
-        response_outcome_rows = [
-            _validate_csat_count_row(
-                response_by_outcome[outcome],
-                f"view.csat response outcome {outcome}",
             )
-            for outcome in _OUTCOMES
-        ]
-        response_totals = {
-            "ticket_count": counts["response_count"],
-            **{
-                bucket: sum(row[bucket] for row in response_outcome_rows)
-                for bucket in _CSAT_BUCKETS
-            },
-        }
-        _validate_csat_rollup(response_totals, response_outcome_rows, "response outcome")
+        _validate_csat_rollup(counts, dimension_rows, "dimension")
 
-        response_by_dimension = _require_mapping(
-            counts["response_by_dimension"],
-            f"view.csat.by_week.{cohort_week}.response_by_dimension",
+    response_by_outcome = _require_mapping(
+        counts["response_by_outcome"],
+        f"{path}.response_by_outcome",
+    )
+    _require_exact_keys(
+        response_by_outcome,
+        set(_OUTCOMES),
+        f"{path}.response_by_outcome",
+    )
+    response_outcome_rows = [
+        _validate_csat_count_row(
+            response_by_outcome[outcome],
+            f"view.csat response outcome {outcome}",
         )
-        _require_exact_keys(
-            response_by_dimension,
-            {"skill", "issue_category"},
-            f"view.csat.by_week.{cohort_week}.response_by_dimension",
-        )
-        for dimension in ("skill", "issue_category"):
-            raw_rows = response_by_dimension[dimension]
-            if not isinstance(raw_rows, list):
-                raise ValueError("view.csat response dimension rows are invalid")
-            labels: set[str] = set()
-            response_dimension_rows: list[Mapping[str, object]] = []
-            for raw_row in raw_rows:
-                row = _require_mapping(raw_row, "view.csat response dimension row")
-                _require_exact_keys(
-                    row,
-                    {"value", "ticket_count", *_CSAT_BUCKETS},
+        for outcome in _OUTCOMES
+    ]
+    response_totals = {
+        "ticket_count": counts["response_count"],
+        **{
+            bucket: sum(row[bucket] for row in response_outcome_rows)
+            for bucket in _CSAT_BUCKETS
+        },
+    }
+    _validate_csat_rollup(response_totals, response_outcome_rows, "response outcome")
+
+    response_by_dimension = _require_mapping(
+        counts["response_by_dimension"],
+        f"{path}.response_by_dimension",
+    )
+    _require_exact_keys(
+        response_by_dimension,
+        {"skill", "issue_category"},
+        f"{path}.response_by_dimension",
+    )
+    for dimension in ("skill", "issue_category"):
+        raw_rows = response_by_dimension[dimension]
+        if not isinstance(raw_rows, list):
+            raise ValueError("view.csat response dimension rows are invalid")
+        labels: set[str] = set()
+        response_dimension_rows: list[Mapping[str, object]] = []
+        for raw_row in raw_rows:
+            row = _require_mapping(raw_row, "view.csat response dimension row")
+            _require_exact_keys(
+                row,
+                {"value", "ticket_count", *_CSAT_BUCKETS},
+                "view.csat response dimension row",
+            )
+            label = _safe_string(
+                row["value"], "view.csat response dimension value"
+            )
+            if label in labels:
+                raise ValueError(
+                    "view.csat response dimension values are duplicated"
+                )
+            labels.add(label)
+            response_dimension_rows.append(
+                _validate_csat_count_row(
+                    {
+                        key: row[key]
+                        for key in ("ticket_count", *_CSAT_BUCKETS)
+                    },
                     "view.csat response dimension row",
                 )
-                label = _safe_string(
-                    row["value"], "view.csat response dimension value"
-                )
-                if label in labels:
-                    raise ValueError(
-                        "view.csat response dimension values are duplicated"
-                    )
-                labels.add(label)
-                response_dimension_rows.append(
-                    _validate_csat_count_row(
-                        {
-                            key: row[key]
-                            for key in ("ticket_count", *_CSAT_BUCKETS)
-                        },
-                        "view.csat response dimension row",
-                    )
-                )
-            _validate_csat_rollup(
-                response_totals,
-                response_dimension_rows,
-                "response dimension",
             )
+        _validate_csat_rollup(
+            response_totals,
+            response_dimension_rows,
+            "response dimension",
+        )
 
-        feedback_entries = counts["feedback_entries"]
-        if (
-            not isinstance(feedback_entries, list)
-            or len(feedback_entries) > counts["response_count"]
-        ):
-            raise ValueError("view.csat feedback entries are invalid")
-        ticket_metadata: dict[str, tuple[object, ...]] = {}
-        ticket_numbers: dict[str, set[int]] = defaultdict(set)
-        for raw_entry in feedback_entries:
-            entry = _require_mapping(raw_entry, "view.csat feedback entry")
-            _require_exact_keys(
-                entry,
-                {
-                    "ticket_id",
-                    "responded_at",
-                    "satisfaction_bucket",
-                    "outcome",
-                    "skill",
-                    "issue_category",
-                    "text",
-                    "response_number",
-                    "response_total",
-                    "is_latest_for_ticket",
-                },
-                "view.csat feedback entry",
-            )
-            if not _is_safe_ticket_id(entry["ticket_id"]):
-                raise ValueError("view.csat feedback ticket_id is invalid")
-            _parse_utc_iso(
-                entry["responded_at"],
-                "view.csat feedback responded_at",
-            )
-            if entry["satisfaction_bucket"] not in _CSAT_BUCKETS:
-                raise ValueError("view.csat feedback bucket is invalid")
-            if entry["outcome"] not in _OUTCOMES:
-                raise ValueError("view.csat feedback outcome is invalid")
-            skill = _safe_string(entry["skill"], "view.csat feedback skill")
-            issue_category = _safe_string(
-                entry["issue_category"],
-                "view.csat feedback issue_category",
-            )
-            text = _safe_string(entry["text"], "view.csat feedback text")
-            if _COMMENT_URL.search(text):
-                raise ValueError("view.csat feedback text is unsafe")
-            if len(text) > 200:
-                raise ValueError("view.csat feedback text is invalid")
-            response_number = _positive_int(
-                entry["response_number"],
-                "view.csat feedback response number",
-            )
-            response_total = _positive_int(
-                entry["response_total"],
-                "view.csat feedback response total",
-            )
-            if response_number > response_total:
-                raise ValueError("view.csat feedback response number exceeds total")
-            if response_total > counts["response_count"]:
-                raise ValueError("view.csat feedback response total is invalid")
-            if not isinstance(entry["is_latest_for_ticket"], bool):
-                raise ValueError("view.csat feedback latest marker is invalid")
-            if entry["is_latest_for_ticket"] != (response_number == response_total):
-                raise ValueError("view.csat feedback latest marker is inconsistent")
-            ticket_id = entry["ticket_id"]
-            metadata = (
-                response_total,
-                entry["outcome"],
-                skill,
-                issue_category,
-            )
-            if ticket_id in ticket_metadata and ticket_metadata[ticket_id] != metadata:
-                raise ValueError("view.csat feedback ticket metadata is inconsistent")
-            if response_number in ticket_numbers[ticket_id]:
-                raise ValueError("view.csat feedback response number is duplicated")
-            ticket_metadata[ticket_id] = metadata
-            ticket_numbers[ticket_id].add(response_number)
+    feedback_entries = counts["feedback_entries"]
+    if (
+        not isinstance(feedback_entries, list)
+        or len(feedback_entries) > counts["response_count"]
+    ):
+        raise ValueError("view.csat feedback entries are invalid")
+    ticket_metadata: dict[str, tuple[object, ...]] = {}
+    ticket_numbers: dict[str, set[int]] = defaultdict(set)
+    for raw_entry in feedback_entries:
+        entry = _require_mapping(raw_entry, "view.csat feedback entry")
+        _require_exact_keys(
+            entry,
+            {
+                "ticket_id",
+                "responded_at",
+                "satisfaction_bucket",
+                "outcome",
+                "skill",
+                "issue_category",
+                "text",
+                "response_number",
+                "response_total",
+                "is_latest_for_ticket",
+            },
+            "view.csat feedback entry",
+        )
+        if not _is_safe_ticket_id(entry["ticket_id"]):
+            raise ValueError("view.csat feedback ticket_id is invalid")
+        _parse_utc_iso(
+            entry["responded_at"],
+            "view.csat feedback responded_at",
+        )
+        if entry["satisfaction_bucket"] not in _CSAT_BUCKETS:
+            raise ValueError("view.csat feedback bucket is invalid")
+        if entry["outcome"] not in _OUTCOMES:
+            raise ValueError("view.csat feedback outcome is invalid")
+        skill = _safe_string(entry["skill"], "view.csat feedback skill")
+        issue_category = _safe_string(
+            entry["issue_category"],
+            "view.csat feedback issue_category",
+        )
+        text = _safe_string(entry["text"], "view.csat feedback text")
+        if _COMMENT_URL.search(text):
+            raise ValueError("view.csat feedback text is unsafe")
+        if len(text) > 200:
+            raise ValueError("view.csat feedback text is invalid")
+        response_number = _positive_int(
+            entry["response_number"],
+            "view.csat feedback response number",
+        )
+        response_total = _positive_int(
+            entry["response_total"],
+            "view.csat feedback response total",
+        )
+        if response_number > response_total:
+            raise ValueError("view.csat feedback response number exceeds total")
+        if response_total > counts["response_count"]:
+            raise ValueError("view.csat feedback response total is invalid")
+        if not isinstance(entry["is_latest_for_ticket"], bool):
+            raise ValueError("view.csat feedback latest marker is invalid")
+        if entry["is_latest_for_ticket"] != (response_number == response_total):
+            raise ValueError("view.csat feedback latest marker is inconsistent")
+        ticket_id = entry["ticket_id"]
+        metadata = (
+            response_total,
+            entry["outcome"],
+            skill,
+            issue_category,
+        )
+        if ticket_id in ticket_metadata and ticket_metadata[ticket_id] != metadata:
+            raise ValueError("view.csat feedback ticket metadata is inconsistent")
+        if response_number in ticket_numbers[ticket_id]:
+            raise ValueError("view.csat feedback response number is duplicated")
+        ticket_metadata[ticket_id] = metadata
+        ticket_numbers[ticket_id].add(response_number)
 
 
 def _validate_outcome_reconciliation(

@@ -19,6 +19,7 @@ import {
 } from "../lib/report-scope";
 import {
   formatCount,
+  formatDateRangeLabel,
   formatRate,
   formatRateAxis,
   formatWeekRange,
@@ -1033,10 +1034,11 @@ export function BelowFold({
           weekDefinition,
         )}), không theo khoảng ngày đã chọn.`;
 
-  // §3.4: CSAT and entry coverage are week-grain-only Freshdesk reads. The
-  // day-range synthetic `view` always carries them as null (report-scope.ts),
-  // so day mode must read the real weekly snapshot instead of quietly
-  // reporting "not connected".
+  // The day-range synthetic `view` carries CSAT and entry coverage as null
+  // (report-scope.ts), so day mode reads the real weekly snapshot instead of
+  // quietly reporting "not connected". `touchedWeeks` is now only the
+  // fallback for snapshots written before day grain existed -- both CSAT and
+  // entry coverage cut to the picked range exactly when `by_day` is present.
   const touchedWeeks = useMemo(
     () =>
       dayRange === undefined
@@ -1048,11 +1050,18 @@ export function BelowFold({
   const entryCoverage =
     dayRange === undefined ? view.entry_coverage : weeklyView.entry_coverage;
   const entryCoverageScopeNote =
-    dayRange === undefined || touchedWeeks.length === 0
+    dayRange === undefined
       ? undefined
-      : `Độ phủ theo tuần trọn vẹn chạm khoảng ngày: ${touchedWeeks
-          .map((week) => formatWeekRange(week, weekDefinition))
-          .join(", ")}.`;
+      : entryCoverage !== null && entryCoverage.by_day !== undefined
+        ? `Phạm vi độ phủ: ${formatDateRangeLabel(
+            dayRange.from,
+            dayRange.to,
+          )} · đúng khoảng ngày đã chọn`
+        : touchedWeeks.length === 0
+          ? undefined
+          : `Độ phủ theo tuần trọn vẹn chạm khoảng ngày: ${touchedWeeks
+              .map((week) => formatWeekRange(week, weekDefinition))
+              .join(", ")}. Bản dữ liệu này chưa có độ phủ theo ngày.`;
 
   return (
     <>
@@ -1062,6 +1071,9 @@ export function BelowFold({
         {...(entryCoverageScopeNote === undefined
           ? {}
           : { scopeNote: entryCoverageScopeNote })}
+        {...(dayRange === undefined
+          ? {}
+          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
       />
       <section id="trend" className={styles.section} aria-labelledby="trend-title">
         <div className={styles.sectionHead}>
@@ -1137,7 +1149,15 @@ export function BelowFold({
         onBreakdownGroupingChange={onCsatBreakdownGroupingChange}
         freshdeskCookieState={freshdeskCookieState}
         onOpenFreshdeskCookieDialog={onOpenFreshdeskCookieDialog}
-        {...(dayRange === undefined ? {} : { scopeWeeks: touchedWeeks })}
+        {...(dayRange === undefined
+          ? {}
+          : {
+              // Both are passed: CSAT cuts to the exact days when the
+              // snapshot carries day grain, and falls back to the touched
+              // weeks when it does not (see CsatSection).
+              scopeWeeks: touchedWeeks,
+              dayRange: { from: dayRange.from, to: dayRange.to },
+            })}
       />
 
       <TransferDiagnostics

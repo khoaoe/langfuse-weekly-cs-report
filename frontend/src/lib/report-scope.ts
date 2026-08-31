@@ -397,7 +397,40 @@ function scopeEntryCoverage(
 ): EntryCoverage | null {
   return coverage === null
     ? null
-    : { ...coverage, by_week: filterByWeek(coverage.by_week, selected) };
+    : {
+        ...coverage,
+        by_week: filterByWeek(coverage.by_week, selected),
+        // A spread would carry every day of every unselected week through
+        // untouched, leaving a projection whose two grains disagree about
+        // what is in scope.
+        ...(coverage.by_day === undefined
+          ? {}
+          : { by_day: filterByWeekOfDay(coverage.by_day, selected) }),
+      };
+}
+
+/** An inclusive Vietnam-local day window, as the day-range picker reports it. */
+export interface DayRangeScope {
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * The day keys inside an inclusive range, or `null` when the payload carries no
+ * day grain at all (written before day-grain scoping existed). An empty array is
+ * a real answer -- "nothing opened in that range" -- and must not be confused
+ * with the missing-grain case, which falls back to whole weeks.
+ */
+export function selectScopeDays(
+  byDay: Readonly<Record<string, unknown>> | undefined,
+  dayRange: DayRangeScope,
+): readonly string[] | null {
+  if (byDay === undefined) {
+    return null;
+  }
+  return Object.keys(byDay)
+    .filter((day) => day >= dayRange.from && day <= dayRange.to)
+    .sort();
 }
 
 function filterByWeek<T>(
@@ -406,6 +439,24 @@ function filterByWeek<T>(
 ): Record<string, T> {
   return Object.fromEntries(
     Object.entries(byWeek).filter(([cohortWeek]) => selected.has(cohortWeek)),
+  );
+}
+
+/** Same containment rule as `filterByWeek()`, applied to day-keyed buckets. */
+function filterByWeekOfDay<T>(
+  byDay: Readonly<Record<string, T>>,
+  selected: ReadonlySet<string>,
+): Record<string, T> {
+  return Object.fromEntries(
+    Object.entries(byDay).filter(([day]) => {
+      const parsed = parseIsoDate(day);
+      if (parsed === null) {
+        return false;
+      }
+      const weekStart = new Date(parsed);
+      weekStart.setUTCDate(parsed.getUTCDate() - ((parsed.getUTCDay() + 6) % 7));
+      return selected.has(weekStart.toISOString().slice(0, 10));
+    }),
   );
 }
 
@@ -566,7 +617,16 @@ export function scopeSnapshotToWeeks(
     csat:
       view.csat === null
         ? null
-        : { ...view.csat, by_week: filterByWeek(view.csat.by_week, selected) },
+        : {
+            ...view.csat,
+            by_week: filterByWeek(view.csat.by_week, selected),
+            // A spread would carry every day of every unselected week
+            // through untouched, leaving a projection whose two grains
+            // disagree about what is in scope.
+            ...(view.csat.by_day === undefined
+              ? {}
+              : { by_day: filterByWeekOfDay(view.csat.by_day, selected) }),
+          },
     outcome_reconciliation:
       view.outcome_reconciliation === null
         ? null

@@ -19,11 +19,15 @@ from weekly_cs_report.dashboard_schema import (
     _ticket_public_dict,
     _ticket_sort_value,
     _tpe_rows_from_signals,
+    entry_coverage_ticket_page,
     project_dashboard,
     ticket_day_aggregate,
     ticket_page,
 )
-from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
+from weekly_cs_report.entry_coverage_cache import (
+    EntryCoverageCache,
+    EntryCoverageRecord,
+)
 from weekly_cs_report.csat_cache import (
     CSATCache,
     CSATCacheStats,
@@ -523,6 +527,152 @@ def test_csat_v11_projects_latest_ticket_rating_outcomes_dimensions_and_feedback
     serialized = json.dumps(dashboard)
     for forbidden in ("agent_id", "agent_name", "survey_id", "rating_raw", "response_key", "body_text"):
         assert forbidden not in serialized
+
+
+def test_csat_buckets_by_vietnam_cohort_day_and_sums_back_to_its_week():
+    dashboard = _csat_v11_snapshot().dashboard_dict()
+
+    mon_sun = dashboard["views"]["mon_sun"]["csat"]
+    mon_fri = dashboard["views"]["mon_fri"]["csat"]
+    by_day = mon_sun["by_day"]
+
+    # One bucket per day a ticket opened on, keyed in Vietnam local time. The
+    # weekend ticket is stamped 2026-07-24T18:00Z, which is already Saturday
+    # the 25th in Vietnam -- a UTC-keyed cut would file it under Friday.
+    assert sorted(by_day) == [
+        "2026-07-21",
+        "2026-07-22",
+        "2026-07-23",
+        "2026-07-24",
+        "2026-07-25",
+    ]
+    # 2026-07-14 opened a ticket too, but its week was never fetched from
+    # Freshdesk. Neither grain may invent a bucket for it.
+    assert "2026-07-14" not in by_day
+    assert "2026-07-13" not in mon_sun["by_week"]
+
+    # 145665's two responses both land on its opening day, not on the days
+    # the customer happened to answer (07-21 and 07-22).
+    assert by_day["2026-07-21"]["response_count"] == 2
+    assert by_day["2026-07-21"]["ticket_count"] == 1
+    assert by_day["2026-07-21"]["negative"] == 1
+    assert by_day["2026-07-24"]["response_count"] == 0
+
+    # Day grain composes upward: it is the same population as the week, only
+    # cut finer. If these ever disagree the two grains have drifted.
+    for field in ("response_count", "ticket_count", "positive", "neutral", "negative"):
+        assert sum(day[field] for day in by_day.values()) == (
+            mon_sun["by_week"]["2026-07-20"][field]
+        ), field
+
+    # mon_fri drops the weekend-start ticket at both grains, exactly as it
+    # drops it everywhere else on the dashboard.
+    assert "2026-07-25" not in mon_fri["by_day"]
+    assert sum(
+        day["ticket_count"] for day in mon_fri["by_day"].values()
+    ) == mon_fri["by_week"]["2026-07-20"]["ticket_count"]
+
+    assert [
+        item["ticket_id"] for item in by_day["2026-07-21"]["feedback_entries"]
+    ] == ["145665", "145665"]
+
+
+def _entry_coverage_snapshot() -> DashboardSnapshot:
+    """The same three tickets as `_snapshot()`, plus one in an unfetched week."""
+    run = _run(
+        [
+            _meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply")),
+            _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML)),
+            # 18:00Z on Friday the 24th is already Saturday the 25th in Vietnam.
+            _meta(trace("weekend", "145666", 0, "2026-07-24T18:00:00Z", "AI reply")),
+            _meta(trace("unfetched", "145669", 0, "2026-07-14T02:00:00Z", "AI reply")),
+        ]
+    )
+    cache = EntryCoverageCache(
+        fetched_weeks={"2026-07-20": "2026-08-04T01:00:00Z"},
+        records=(
+            EntryCoverageRecord(
+                ticket_id="145665",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+                status="ai_replied_only",
+                human_replied=None,
+            ),
+            EntryCoverageRecord(
+                ticket_id="145667",
+                opened_at="2026-07-22T02:00:00Z",
+                cohort_week="2026-07-20",
+                status="not_observed_invoked",
+                human_replied=True,
+            ),
+            EntryCoverageRecord(
+                ticket_id="145666",
+                opened_at="2026-07-24T18:00:00Z",
+                cohort_week="2026-07-20",
+                status="unresolved",
+                human_replied=None,
+            ),
+            EntryCoverageRecord(
+                ticket_id="145669",
+                opened_at="2026-07-14T02:00:00Z",
+                cohort_week="2026-07-13",
+                status="ai_replied_only",
+                human_replied=None,
+            ),
+        ),
+    )
+    return project_dashboard(run, entry_coverage_cache=cache)
+
+
+def test_entry_coverage_buckets_by_vietnam_day_and_sums_back_to_its_week():
+    dashboard = _entry_coverage_snapshot().dashboard_dict()
+
+    mon_sun = dashboard["views"]["mon_sun"]["entry_coverage"]
+    mon_fri = dashboard["views"]["mon_fri"]["entry_coverage"]
+    by_day = mon_sun["by_day"]
+
+    # One bucket per Vietnam-local opening day. The 18:00Z record belongs to
+    # Saturday the 25th; a UTC-keyed cut would file it under Friday.
+    assert sorted(by_day) == ["2026-07-20", "2026-07-22", "2026-07-25"]
+    # 2026-07-14 has a record, but its week was never inventoried from
+    # Freshdesk. Neither grain may invent a bucket for it.
+    assert "2026-07-14" not in by_day
+    assert "2026-07-13" not in mon_sun["by_week"]
+
+    assert by_day["2026-07-22"]["not_observed_invoked"] == 1
+    assert by_day["2026-07-22"]["not_observed_human_replied"] == 1
+    assert by_day["2026-07-25"]["unresolved"] == 1
+
+    # Day grain composes upward: same population, cut finer. If these ever
+    # disagree the two grains have drifted.
+    week = mon_sun["by_week"]["2026-07-20"]
+    for field in week:
+        assert sum(day[field] for day in by_day.values()) == week[field], field
+
+    # mon_fri drops the weekend-start record at both grains, exactly as it
+    # drops it everywhere else on the dashboard.
+    assert "2026-07-25" not in mon_fri["by_day"]
+    assert mon_fri["by_week"]["2026-07-20"]["freshdesk_ticket_count"] == 2
+    assert (
+        sum(day["freshdesk_ticket_count"] for day in mon_fri["by_day"].values()) == 2
+    )
+
+
+def test_entry_coverage_ticket_page_cuts_to_the_picked_days():
+    snapshot = _entry_coverage_snapshot()
+
+    days = entry_coverage_ticket_page(
+        snapshot,
+        opened_from="2026-07-20",
+        opened_to="2026-07-22",
+    )
+    weeks = entry_coverage_ticket_page(snapshot, cohort_weeks="2026-07-20")
+
+    # The drill-down must answer for the same population as the counts above
+    # it: the whole week holds the weekend record, the picked days do not.
+    assert [item["ticket_id"] for item in days["items"]] == ["145667", "145665"]
+    assert days["total"] == 2
+    assert weeks["total"] == 3
 
 
 def test_missing_csat_cache_projects_explicit_null_in_both_views():

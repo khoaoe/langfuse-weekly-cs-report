@@ -11,6 +11,8 @@ import {
   DashboardEnvelopeSchema,
   type DashboardSnapshot,
   type DayAggregate,
+  type EntryCoverage,
+  type EntryCoverageWeek,
   type Segments,
   type WeeklyReportRow,
 } from "../src/lib/dashboard-schema";
@@ -147,6 +149,7 @@ function csatComments(count: number): CsatWeek["feedback_entries"] {
 function snapshotWithCsat(
   byWeek: CsatPayload["by_week"],
   fetchedAt = new Date(Date.now() - 60 * 60 * 1_000).toISOString(),
+  byDay?: CsatPayload["by_day"],
 ): DashboardSnapshot {
   const view = baseSnapshot.views.mon_sun;
   const currentWeek = view.weekly[0];
@@ -172,6 +175,7 @@ function snapshotWithCsat(
           source: "freshdesk",
           fetched_at: fetchedAt,
           by_week: byWeek,
+          ...(byDay === undefined ? {} : { by_day: byDay }),
         },
       },
     },
@@ -206,7 +210,26 @@ function dayAggregate(day: string): DayAggregate {
   };
 }
 
-function snapshotWithEntryCoverage(): DashboardSnapshot {
+function coverageBucket(
+  overrides: Partial<EntryCoverageWeek> = {},
+): EntryCoverageWeek {
+  return {
+    freshdesk_ticket_count: 4,
+    ai_replied_only: 1,
+    ai_replied_then_transferred: 0,
+    transferred_without_ai_reply: 0,
+    invoked_no_result: 1,
+    not_observed_invoked: 2,
+    not_observed_human_replied: 1,
+    not_observed_no_human_reply: 1,
+    unresolved: 0,
+    ...overrides,
+  };
+}
+
+function snapshotWithEntryCoverage(
+  byDay?: EntryCoverage["by_day"],
+): DashboardSnapshot {
   const view = baseSnapshot.views.mon_sun;
   return {
     ...baseSnapshot,
@@ -218,19 +241,8 @@ function snapshotWithEntryCoverage(): DashboardSnapshot {
           source: "freshdesk",
           source_start_week: "2026-07-06",
           fetched_at: "2026-08-04T03:00:00Z",
-          by_week: {
-            "2026-07-20": {
-              freshdesk_ticket_count: 4,
-              ai_replied_only: 1,
-              ai_replied_then_transferred: 0,
-              transferred_without_ai_reply: 0,
-              invoked_no_result: 1,
-              not_observed_invoked: 2,
-              not_observed_human_replied: 1,
-              not_observed_no_human_reply: 1,
-              unresolved: 0,
-            },
-          },
+          by_week: { "2026-07-20": coverageBucket() },
+          ...(byDay === undefined ? {} : { by_day: byDay }),
         },
       },
     },
@@ -710,6 +722,110 @@ describe("Below-fold analysis", () => {
     expect(
       within(csatSection).getByText(/CSAT theo tuần trọn vẹn chạm khoảng ngày/),
     ).toBeVisible();
+  });
+
+  it("cuts CSAT to the picked days, not the weeks they touch, when the snapshot carries day grain", () => {
+    // The picked range is Mon-Tue of a week whose Wed also has ratings. Week
+    // grain would report all three days; day grain must report exactly two.
+    // 5 + 5 rated tickets in range, 90 out of range -- so a number anywhere
+    // near 100 means the cut silently widened back to the whole week.
+    const inRange = csatWeek({ positive: 4, neutral: 1, negative: 0 });
+    const outOfRange = csatWeek({ positive: 88, neutral: 1, negative: 1 });
+    const weeklySnapshot = snapshotWithCsat(
+      { "2026-07-20": csatWeek({ positive: 96, neutral: 3, negative: 1 }) },
+      undefined,
+      {
+        "2026-07-20": inRange,
+        "2026-07-21": inRange,
+        "2026-07-22": outOfRange,
+      },
+    );
+
+    renderWithQuery(
+      belowFold(baseSnapshot, {
+        weeklySnapshot,
+        dayRange: {
+          from: "2026-07-20",
+          to: "2026-07-21",
+          allDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          plottedDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          activeDay: "",
+          onDaySelect: () => {},
+        },
+      }),
+    );
+
+    const csatSection = screen.getByRole("region", {
+      name: "Khách hài lòng tới đâu",
+    });
+    expect(
+      within(csatSection).getByText(/Phạm vi CSAT: 20\/07–21\/07/),
+    ).toBeVisible();
+    expect(csatSection).not.toHaveTextContent(
+      "CSAT theo tuần trọn vẹn chạm khoảng ngày",
+    );
+    // 8 positive + 2 neutral over 10 rated tickets: the two in-range days
+    // summed, with 2026-07-22 left out entirely.
+    expect(csatSection).toHaveTextContent("10");
+    expect(csatSection).not.toHaveTextContent("100");
+  });
+
+  it("cuts entry coverage to the picked days, and sends the same window to the drill-down", async () => {
+    const user = userEvent.setup();
+    // The picked range is Mon-Tue of a week whose Wed also has coverage. Week
+    // grain reports 100 tickets; day grain must report exactly the 8 in range.
+    const weeklySnapshot = snapshotWithEntryCoverage({
+      "2026-07-20": coverageBucket({ freshdesk_ticket_count: 4 }),
+      "2026-07-21": coverageBucket({ freshdesk_ticket_count: 4 }),
+      "2026-07-22": coverageBucket({
+        freshdesk_ticket_count: 92,
+        ai_replied_only: 89,
+      }),
+    });
+    weeklySnapshot.views.mon_sun.entry_coverage!.by_week["2026-07-20"] =
+      coverageBucket({ freshdesk_ticket_count: 100, ai_replied_only: 97 });
+    const requested: string[] = [];
+    server.use(
+      http.get("/api/freshdesk-entry-coverage/tickets", ({ request }) => {
+        requested.push(new URL(request.url).search);
+        return HttpResponse.json({ items: [], page: 1, page_size: 10, total: 0 });
+      }),
+    );
+
+    renderWithQuery(
+      belowFold(baseSnapshot, {
+        weeklySnapshot,
+        dayRange: {
+          from: "2026-07-20",
+          to: "2026-07-21",
+          allDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          plottedDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
+          activeDay: "",
+          onDaySelect: () => {},
+        },
+      }),
+    );
+
+    const section = screen.getByRole("region", {
+      name: "Độ phủ xử lý từ Freshdesk",
+    });
+    expect(
+      within(section).getByText(/Phạm vi độ phủ: 20\/07–21\/07/),
+    ).toBeVisible();
+    expect(section).not.toHaveTextContent("Độ phủ theo tuần trọn vẹn");
+    expect(section).toHaveTextContent("Ticket Freshdesk8");
+    // 100 (the week) and 89/92 (the out-of-range day) must appear nowhere.
+    expect(section).not.toHaveTextContent(/Ticket Freshdesk(100|92)/);
+    expect(section).not.toHaveTextContent(/AI đã phản hồi(97|89)/);
+
+    // The list under the counts has to answer for the same population; sending
+    // only the touched week would return the whole week's tickets.
+    await user.click(
+      within(section).getAllByRole("button", { name: "Xem ticket" })[0]!,
+    );
+    await waitFor(() => expect(requested).not.toHaveLength(0));
+    expect(requested[0]).toContain("opened_from=2026-07-20");
+    expect(requested[0]).toContain("opened_to=2026-07-21");
   });
 
   it("names the shortfall instead of listing nothing when the picked range touches no week", () => {

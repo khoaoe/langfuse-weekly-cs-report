@@ -133,6 +133,8 @@ _MULTI_SELECT_QUERY_NAMES = frozenset(
 _ENTRY_QUERY_NAMES = (
     "week_definition",
     "cohort_weeks",
+    "opened_from",
+    "opened_to",
     "status",
     "page",
     "page_size",

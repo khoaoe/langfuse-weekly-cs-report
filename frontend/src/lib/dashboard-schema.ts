@@ -966,6 +966,12 @@ export const CsatSchema = z
     source: z.literal("freshdesk"),
     fetched_at: UtcDateTimeSchema,
     by_week: z.record(WeekStringSchema, CsatWeekSchema),
+    /**
+     * Same buckets keyed by the ticket's Vietnam-local opening day. Optional
+     * only for snapshots written before day-grain CSAT existed; readers must
+     * fall back to `by_week` when it is absent.
+     */
+    by_day: z.record(IsoDateSchema, CsatWeekSchema).optional(),
   })
   .strict();
 export type Csat = z.infer<typeof CsatSchema>;
@@ -1072,12 +1078,20 @@ const EntryCoverageWeekSchema = z
     }
   });
 
+export type EntryCoverageWeek = z.infer<typeof EntryCoverageWeekSchema>;
+
 export const EntryCoverageSchema = z
   .object({
     source: z.literal("freshdesk"),
     source_start_week: z.literal("2026-07-06"),
     fetched_at: UtcDateTimeSchema,
     by_week: z.record(WeekStringSchema, EntryCoverageWeekSchema),
+    /**
+     * Same buckets keyed by the ticket's Vietnam-local opening day. Optional
+     * only for snapshots written before day-grain coverage existed; readers
+     * must fall back to `by_week` when it is absent.
+     */
+    by_day: z.record(IsoDateSchema, EntryCoverageWeekSchema).optional(),
   })
   .strict();
 export type EntryCoverage = z.infer<typeof EntryCoverageSchema>;

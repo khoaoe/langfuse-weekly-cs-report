@@ -9,6 +9,8 @@ import type {
 } from "../lib/dashboard-schema";
 import { parseEntryCoverageTicketPage } from "../lib/dashboard-schema";
 import { formatCount, formatRate, formatUpdatedAt } from "../lib/format";
+import { selectScopeDays } from "../lib/report-scope";
+import type { DayRangeScope } from "../lib/report-scope";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
 import styles from "./dashboard.module.css";
 import entryStyles from "./entry-coverage.module.css";
@@ -26,11 +28,17 @@ interface EntryCoverageSectionProps {
   readonly entryCoverage: EntryCoverage | null;
   readonly weekDefinition: WeekDefinition;
   /**
-   * Day-range mode: a note naming the full weeks the picked range touches —
-   * entry coverage is week-grain-only Freshdesk data, so a day-range reader
-   * needs to know it is not cut to the exact days selected (§5.15).
+   * Day-range mode: a sentence naming the scope actually being counted —
+   * the exact days when the snapshot carries day grain, or the full weeks it
+   * had to widen to when it does not (§5.15).
    */
   readonly scopeNote?: string;
+  /**
+   * Day-range mode: the inclusive range the reader picked. Coverage is cut to
+   * exactly these days whenever the snapshot carries `by_day`, matching every
+   * other metric on the page.
+   */
+  readonly dayRange?: DayRangeScope;
 }
 
 function percentage(count: number, total: number): string {
@@ -41,6 +49,7 @@ export function EntryCoverageSection({
   entryCoverage,
   weekDefinition,
   scopeNote,
+  dayRange,
 }: EntryCoverageSectionProps) {
   const [selectedStatus, setSelectedStatus] =
     useState<EntryCoverageStatus | null>(null);
@@ -53,9 +62,20 @@ export function EntryCoverageSection({
     () => (entryCoverage === null ? [] : Object.keys(entryCoverage.by_week).sort()),
     [entryCoverage],
   );
+  // `null` means this snapshot carries no day grain at all, which is the only
+  // case that still has to widen to whole weeks. An empty array is a real
+  // answer: no ticket opened in the picked range.
+  const scopeDays = useMemo(
+    () =>
+      entryCoverage === null || dayRange === undefined
+        ? null
+        : selectScopeDays(entryCoverage.by_day, dayRange),
+    [entryCoverage, dayRange],
+  );
+  const bucketKeys = scopeDays ?? weeks;
   useEffect(() => {
     setPage(1);
-  }, [selectedStatus, sortDir, weeks.join(",")]);
+  }, [selectedStatus, sortDir, bucketKeys.join(",")]);
 
   useEffect(() => {
     if (entryCoverage === null || selectedStatus === null) {
@@ -73,6 +93,12 @@ export function EntryCoverageSection({
       {
         week_definition: weekDefinition,
         cohort_weeks: weeks.join(","),
+        // The drill-down has to answer for the same population as the counts
+        // above it. In day grain the weeks are only a superset, so the exact
+        // window goes down with the request.
+        ...(scopeDays === null || dayRange === undefined
+          ? {}
+          : { opened_from: dayRange.from, opened_to: dayRange.to }),
         status: selectedStatus,
         page,
         page_size: 10,
@@ -106,9 +132,18 @@ export function EntryCoverageSection({
       current = false;
       controller.abort();
     };
-  }, [entryCoverage, page, selectedStatus, sortDir, weekDefinition, weeks]);
+  }, [
+    dayRange,
+    entryCoverage,
+    page,
+    scopeDays,
+    selectedStatus,
+    sortDir,
+    weekDefinition,
+    weeks,
+  ]);
 
-  if (entryCoverage === null || Object.keys(entryCoverage.by_week).length === 0) {
+  if (entryCoverage === null || bucketKeys.length === 0) {
     return (
       <section
         id="entry-coverage"
@@ -132,9 +167,13 @@ export function EntryCoverageSection({
     );
   }
 
-  const rows = weeks.flatMap((week) => {
-    const value = entryCoverage.by_week[week];
-    return value === undefined ? [] : [{ week, value }];
+  // One shape, two grains: the totals below never learn which key selected a
+  // bucket, so a day view and a week view can only ever differ in membership.
+  const source =
+    scopeDays === null ? entryCoverage.by_week : (entryCoverage.by_day ?? {});
+  const rows = bucketKeys.flatMap((key) => {
+    const value = source[key];
+    return value === undefined ? [] : [{ week: key, value }];
   });
   const total = rows.reduce(
     (sum, row) => sum + row.value.freshdesk_ticket_count,
