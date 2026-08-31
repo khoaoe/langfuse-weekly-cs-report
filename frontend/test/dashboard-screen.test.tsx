@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   divergentCohortEnvelope,
@@ -890,6 +890,18 @@ describe("DashboardScreen", () => {
   });
 
   describe("day range mode", () => {
+    // The picker reaches July by stepping back one month from today, so this
+    // suite only describes July while the wall clock says August. Pin the date
+    // and the fixtures below stay the range the test actually picks.
+    // Only Date is faked -- userEvent and waitFor need the real timer queue.
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-15T09:00:00+07:00"));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     function dayAggregateFixture(day: string, totalTickets: number) {
       return {
         day,
