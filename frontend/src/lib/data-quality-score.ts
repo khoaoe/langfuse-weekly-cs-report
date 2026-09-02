@@ -26,11 +26,12 @@ function qualityTone(score: number): DataQualityTone {
 }
 
 /**
- * Implements SPEC-v2 §5.13 at the presentation boundary.
+ * Snapshot freshness, plus a blended score kept only for internal callers.
  *
- * The structural gate remains a separate backend safety decision. This score
- * combines structural validity, enrichment coverage and snapshot freshness so
- * the header cannot imply that structurally valid but incomplete data is good.
+ * SPEC-v2 §5.13 rules the blended `score` out of the UI: it mixes freshness
+ * with five coverage dimensions measured over a different scope than the page
+ * shows, so no reader can act on it. `DataTrustSection` states the underlying
+ * facts instead. Only `ageMs` and `freshnessOk` are safe to render.
  */
 export function calculateDataQualityScore(
   snapshot: DashboardSnapshot,

@@ -83,9 +83,12 @@ describe("selected-week decision scope", () => {
       screen.getByRole("heading", { level: 1, name: /13\/07–19\/07.*4 ticket/ }),
     ).toBeVisible();
     expect(screen.getByRole("group", { name: "Tóm tắt quyết định" })).toBeVisible();
+    // The denominator is stated once on the group caption, not repeated in
+    // each of the three cells that divide by it.
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
-      "250,0% trong 4 ticket tuần này",
+      "250,0%",
     );
+    expect(screen.getByText("4 ticket tuần này")).toBeVisible();
     expect(
       screen.queryByText(/ticket có hơn 3 lượt xử lý nhưng chưa chuyển CS/),
     ).toBeNull();
@@ -241,21 +244,15 @@ describe("selected-week decision scope", () => {
     const ticketGroup = groups.find(
       (group) => group.id === "ledger-group-ticket",
     );
+    expect(ticketGroup?.denominator).toBe("935 ticket tuần này");
     expect(ticketGroup?.cells).toMatchObject([
+      { id: "ledger-ai-first", value: "727", support: "77,8%" },
+      { id: "ledger-transfer", value: "208", support: "22,2%" },
+      { id: "ledger-direct-cs", value: "28", support: "3,0%" },
       {
-        id: "ledger-ai-first",
-        value: "727",
-        support: "77,8% trong 935 ticket tuần này",
-      },
-      {
-        id: "ledger-transfer",
-        value: "208",
-        support: "22,2% trong 935 ticket tuần này",
-      },
-      {
-        id: "ledger-direct-cs",
-        value: "28",
-        support: "3,0% trong 935 ticket tuần này",
+        id: "ledger-reopen",
+        value: "152 lần",
+        support: "0,21 lần/ticket · 727 ticket AI First",
       },
     ]);
 
@@ -272,11 +269,6 @@ describe("selected-week decision scope", () => {
         id: "ledger-replies-per-ticket",
         value: "1,27 lượt",
         support: "trên 727 ticket AI First",
-      },
-      {
-        id: "ledger-reopen",
-        value: "152 lần",
-        support: "0,21 lần/ticket · 727 ticket AI First",
       },
     ]);
   });

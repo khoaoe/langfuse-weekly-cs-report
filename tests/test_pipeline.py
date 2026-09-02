@@ -937,3 +937,52 @@ def test_invariants_reject_duplicate_tuple_ids(window, taxonomy):
     )
     with pytest.raises(InvariantError):
         validate_invariants(duplicate_invalid_result)
+
+
+def _followup(week: date, suffix: str, local_day: int, turn: int = 1) -> TraceRecord:
+    """A customer come-back on `local_day` of `week`, in the same ticket."""
+    local_timestamp = datetime.combine(
+        week + timedelta(days=local_day),
+        datetime.min.time().replace(hour=9),
+        tzinfo=TZ,
+    )
+    return record(
+        f"{week.isoformat()}-{suffix}-followup",
+        f"{week.isoformat()}-{suffix}",
+        turn,
+        local_timestamp.astimezone(ZoneInfo("UTC")).isoformat(),
+        "AI reply",
+    )
+
+
+def test_same_period_reopen_ignores_come_backs_after_the_cutoff_weekday(taxonomy):
+    """A reopen the current week could not yet have observed must not count.
+
+    Cutoff is Wednesday, so every ticket is compared over the days it had been
+    open by the end of its own week's Wednesday. The 20/07 ticket's customer
+    came back on Friday -- three weeks ago in wall-clock terms, but past the
+    horizon the 27/07 cohort has reached, so counting it would report an
+    improvement that is only the baseline being older.
+    """
+    weeks = [date(2026, 6, 29), date(2026, 7, 6), date(2026, 7, 13), date(2026, 7, 20)]
+    records: list[TraceRecord] = [
+        _ai_session(week, "mon", 0, taxonomy) for week in weeks
+    ]
+    records.append(_followup(date(2026, 7, 6), "mon", 1))
+    records.append(_followup(date(2026, 7, 20), "mon", 4))
+    records.append(_ai_session(date(2026, 7, 27), "mon", 0, taxonomy))
+
+    same_period = summarize_same_period(
+        _same_period_result(taxonomy, records=records), "mon_sun"
+    )
+
+    assert same_period is not None
+    assert same_period.cutoff_weekday == 3
+    within = same_period.by_week[date(2026, 7, 6)]
+    assert within.reopen_lifetime_numerator == 1
+    assert within.reopen_lifetime_rate == pytest.approx(1.0)
+    beyond = same_period.by_week[date(2026, 7, 20)]
+    assert beyond.reopen_lifetime_numerator == 0
+    assert beyond.reopen_lifetime_rate == pytest.approx(0.0)
+    assert same_period.baseline.reopen_lifetime_rate == pytest.approx(0.25)
+    assert same_period.current.reopen_lifetime_rate == pytest.approx(0.0)

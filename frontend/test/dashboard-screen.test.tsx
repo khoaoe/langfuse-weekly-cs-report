@@ -258,8 +258,9 @@ describe("DashboardScreen", () => {
       /50,0% \(10 ticket\)|Reopen sau AI First 40,0%/,
     );
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
-      "1050,0% trong 20 ticket tuần này",
+      "1050,0%",
     );
+    expect(screen.getByText("20 ticket tuần này")).toBeVisible();
     expect(document.getElementById("ledger-transfer")).toHaveTextContent(
       "Tổng chuyển CS7",
     );
@@ -267,7 +268,7 @@ describe("DashboardScreen", () => {
       "Reopen sau AI First4",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
-      "Chuyển CS ngay từ đầu210,0% trong 20 ticket tuần này",
+      "Chuyển CS ngay từ đầu210,0%",
     );
 
     await user.click(screen.getByRole("button", { name: "T2–CN" }));
@@ -276,7 +277,7 @@ describe("DashboardScreen", () => {
       /80,0% \(8 ticket\)|Reopen sau AI First 25,0%/,
     );
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
-      "880,0% trong 10 ticket tuần này",
+      "880,0%",
     );
     expect(document.getElementById("ledger-transfer")).toHaveTextContent(
       "Tổng chuyển CS3",
@@ -285,7 +286,7 @@ describe("DashboardScreen", () => {
       "Reopen sau AI First2",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
-      "Chuyển CS ngay từ đầu110,0% trong 10 ticket tuần này",
+      "Chuyển CS ngay từ đầu110,0%",
     );
     // The title already names the selected week; repeating it above the KPI
     // cells adds no information.

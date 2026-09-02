@@ -18,6 +18,7 @@ import {
   rollingRate,
 } from "../lib/report-scope";
 import {
+  PERCENTAGE_SAMPLE_MINIMUM,
   formatCount,
   formatDateRangeLabel,
   formatRate,
@@ -45,6 +46,7 @@ import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
 import { CsatSection } from "./CsatSection";
 import type { CsatGrouping } from "./CsatBreakdownTable";
+import { DataTrustSection } from "./DataTrustSection";
 import { EntryCoverageSection } from "./EntryCoverageSection";
 import { TransferDiagnostics } from "./TransferDiagnostics";
 import belowFoldStyles from "./below-fold.module.css";
@@ -290,10 +292,22 @@ const SEGMENT_SORT_COLUMNS: readonly SegmentSortColumn[] = [
   },
 ];
 
+/**
+ * Default ranking is absolute CS handoffs caused, not ticket volume.
+ *
+ * The PO reads this table to pick next week's work (SPEC-v2 §5.1). Volume
+ * order puts the biggest bucket first even when it is the one AI handles
+ * cleanly, and a rate order puts a 2-ticket bucket at 100% above a 349-ticket
+ * bucket. `transferred` is volume times transfer rate, so the top row is the
+ * segment actually generating the most CS work.
+ */
 const DEFAULT_SEGMENT_SORT: TableSort<SegmentSortKey> = {
-  key: "total",
+  key: "transferred",
   direction: "desc",
 };
+
+/** SPEC-v2 §5.10: a ranked list shows its head, not its whole tail. */
+const SEGMENT_HEAD_ROWS = 12;
 
 function tooltipAnchor(clientX: number, bounds: DOMRect): number {
   if (bounds.width <= 0) {
@@ -703,6 +717,10 @@ function SegmentTable({
     useState<SegmentDimension>("issue_category");
   const [sort, setSort] =
     useState<TableSort<SegmentSortKey>>(DEFAULT_SEGMENT_SORT);
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    setExpanded(false);
+  }, [dimension]);
   const buckets = segments[dimension];
   const total = useMemo(
     () => Object.values(buckets).reduce((sum, counts) => sum + counts.total, 0),
@@ -726,6 +744,19 @@ function SegmentTable({
       sort.direction,
     );
   }, [buckets, sort]);
+  const hiddenRows = expanded ? [] : rows.slice(SEGMENT_HEAD_ROWS);
+  const visibleRows = expanded ? rows : rows.slice(0, SEGMENT_HEAD_ROWS);
+  // The tail is summed rather than dropped: every ticket stays in the table,
+  // so the column totals a reader adds up still reconcile with the ledger.
+  const restCounts = hiddenRows.reduce(
+    (sum, row) => ({
+      total: sum.total + row.counts.total,
+      ai_first: sum.ai_first + row.counts.ai_first,
+      transferred: sum.transferred + row.counts.transferred,
+      reopen: sum.reopen + row.counts.reopen,
+    }),
+    { total: 0, ai_first: 0, transferred: 0, reopen: 0 },
+  );
   const activeTabId = `segment-tab-${dimension}`;
 
   return (
@@ -781,8 +812,7 @@ function SegmentTable({
         className={styles.tableCaption}
         aria-live="polite"
       >
-        Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong
-        chính nhóm đó.
+        {`Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó. Nhóm dưới ${PERCENTAGE_SAMPLE_MINIMUM} ticket chỉ hiện số ca, không hiện tỷ lệ.`}
       </p>
 
       <div
@@ -838,7 +868,7 @@ function SegmentTable({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ label, counts }) => (
+            {visibleRows.map(({ label, counts }) => (
               <tr key={label}>
                 <th scope="row" className={styles.stickyColumn}>
                   <FilterValueButton
@@ -864,6 +894,45 @@ function SegmentTable({
                 </td>
               </tr>
             ))}
+            {hiddenRows.length === 0 ? null : (
+              <tr>
+                <th scope="row" className={styles.stickyColumn}>
+                  <button
+                    type="button"
+                    className={belowFoldStyles.inlineAction}
+                    onClick={() => setExpanded(true)}
+                  >
+                    {`${hiddenRows.length} nhóm còn lại — xem hết`}
+                  </button>
+                </th>
+                <td className={styles.numeric}>
+                  {formatMetric(restCounts.total, total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatMetric(restCounts.ai_first, restCounts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatMetric(restCounts.transferred, restCounts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatMetric(restCounts.reopen, restCounts.total)}
+                </td>
+              </tr>
+            )}
+            {expanded && rows.length > SEGMENT_HEAD_ROWS ? (
+              <tr>
+                <th scope="row" className={styles.stickyColumn}>
+                  <button
+                    type="button"
+                    className={belowFoldStyles.inlineAction}
+                    onClick={() => setExpanded(false)}
+                  >
+                    {`Thu gọn về ${SEGMENT_HEAD_ROWS} nhóm đầu`}
+                  </button>
+                </th>
+                <td className={styles.numeric} colSpan={4} />
+              </tr>
+            ) : null}
           </tbody>
           </table>
         )}
@@ -1169,6 +1238,8 @@ export function BelowFold({
         onShowStuckTickets={() => onShowStuckTickets(effectiveWeek)}
         onTicketFilterSelect={onTicketFilterSelect}
       />
+
+      <DataTrustSection snapshot={snapshot} />
     </>
   );
 }

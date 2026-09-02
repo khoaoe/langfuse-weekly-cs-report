@@ -401,18 +401,19 @@ describe("sorting bảng dữ liệu", () => {
     renderWithQuery(belowFold(analysisSnapshot()));
 
     const table = screen.getByRole("table", {
-      name: /Ticket: tỷ trọng trong tuần/,
+      name: /Xếp theo số ca chuyển CS nhiều nhất/,
     });
     expect(document.getElementById("segmentCaption")).toHaveTextContent(
-      "Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó.",
+      "Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó. Nhóm dưới 20 ticket chỉ hiện số ca, không hiện tỷ lệ.",
     );
     expect(document.getElementById("segmentCaption")).not.toHaveTextContent(
       /tăng dần|giảm dần|Đang sắp xếp/,
     );
+    // Default rank is CS handoffs caused, so the segment to fix comes first.
     expect(
-      within(table).getByRole("columnheader", { name: /Ticket/ }),
+      within(table).getByRole("columnheader", { name: /Chuyển CS/ }),
     ).toHaveAttribute("aria-sort", "descending");
-    expect(rowHeaders(table)).toEqual(["Nhóm 2", "Nhóm 10", "Áp dụng"]);
+    expect(rowHeaders(table)).toEqual(["Nhóm 10", "Nhóm 2", "Áp dụng"]);
 
     await user.click(
       within(table).getByRole("button", { name: /Sắp xếp theo Giá trị/ }),

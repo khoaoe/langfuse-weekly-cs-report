@@ -626,7 +626,9 @@ export function TransferDiagnostics({
                 selectedWeek.cohort_week,
                 weekDefinition,
               )}`
-        }.`}
+        }. Dòng có dưới ${formatCount(
+          PERCENTAGE_SAMPLE_MINIMUM,
+        )} ticket để trống cột tỷ lệ (“—”) vì mẫu quá nhỏ để đọc thành tỷ lệ.`}
       </p>
       {dayModeNote === null ? null : (
         <p id="diagnosticsDayModeNote" className={styles.sectionNote}>

@@ -1615,7 +1615,7 @@ describe("Below-fold analysis", () => {
     // (nothing explicitly picked) now resolves to that week's own caption
     // rather than a whole-range one — the same default the KPI ledger uses.
     expect(tpeTable).toHaveAccessibleDescription(
-      "3 ticket đã chuyển CS trong tuần 20/07–26/07.",
+      /^3 ticket đã chuyển CS trong tuần 20\/07–26\/07\./,
     );
     expect(
       within(tpeTable)

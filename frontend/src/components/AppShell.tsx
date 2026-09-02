@@ -56,6 +56,7 @@ const SECTIONS = [
   { id: "segments", label: "So sánh segment" },
   { id: "csat", label: "Mức hài lòng" },
   { id: "diagnostics", label: "Chẩn đoán" },
+  { id: "data-trust", label: "Độ tin cậy" },
   { id: "tickets", label: "Ticket Explorer" },
   { id: "ab-test", label: "A/B Test" },
 ] as const;

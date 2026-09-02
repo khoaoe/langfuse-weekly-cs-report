@@ -312,6 +312,15 @@ export function selectScope(
 export interface LedgerGroup {
   readonly id: "ledger-group-ticket" | "ledger-group-response";
   readonly label: string;
+  /**
+   * Whether the group starts folded away. SPEC-v2 §5.5 asks for exactly 4 KPI
+   * above the fold at 1440x900 and says to cut ① rather than ② when there is
+   * not enough room. Measured on production data, both groups expanded pushed
+   * the first row of ② to y=862 -- no rows visible at all. Folding the
+   * per-response group keeps every number one click away instead of dropping
+   * it, and hands the ~150px back to the table.
+   */
+  readonly collapsed: boolean;
   readonly denominator: string;
   readonly cells: readonly LedgerCell[];
 }
@@ -329,6 +338,9 @@ export function selectLedger(
   range?: ReportRangeScope | null,
 ): LedgerGroup[] {
   const scope = selectScope(snapshot, weekDefinition, activeWeek, range);
+  // Named once, on the group heading. Every cell in the ticket group divides
+  // by the same number, so repeating "trong N ticket tuần này" under all three
+  // spends three lines saying what the caption above them already said.
   const populationLabel =
     scope.kind === "all"
       ? "ticket trong toàn kỳ"
@@ -344,11 +356,7 @@ export function selectLedger(
       label: "AI First",
       value: formatCount(scope.aiFirstCount),
       support:
-        scope.eligible === 0
-          ? null
-          : `${share(scope.aiFirstCount, scope.eligible)} trong ${formatCount(
-              scope.eligible,
-            )} ${populationLabel}`,
+        scope.eligible === 0 ? null : share(scope.aiFirstCount, scope.eligible),
       tone: "brand",
       filterPatch: null,
     },
@@ -357,11 +365,7 @@ export function selectLedger(
       label: "Tổng chuyển CS",
       value: formatCount(scope.transferTotal),
       support:
-        scope.eligible === 0
-          ? null
-          : `${share(scope.transferTotal, scope.eligible)} trong ${formatCount(
-              scope.eligible,
-            )} ${populationLabel}`,
+        scope.eligible === 0 ? null : share(scope.transferTotal, scope.eligible),
       tone: "neutral",
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
     },
@@ -370,14 +374,25 @@ export function selectLedger(
       label: "Chuyển CS ngay từ đầu",
       value: formatCount(scope.directCsCount),
       support:
-        scope.eligible === 0
-          ? null
-          : `${share(scope.directCsCount, scope.eligible)} trong ${formatCount(
-              scope.eligible,
-            )} ${populationLabel}`,
+        scope.eligible === 0 ? null : share(scope.directCsCount, scope.eligible),
       tone: "neutral",
       filterPatch:
         scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
+    },
+    {
+      id: "ledger-reopen",
+      label: "Reopen sau AI First",
+      value: `${formatCount(scope.reopenNumerator)} lần`,
+      support:
+        scope.reopenDenominator === 0
+          ? null
+          : `${formatAverage(
+              scope.reopenNumerator / scope.reopenDenominator,
+            )} lần/ticket · ${formatCount(
+              scope.reopenDenominator,
+            )} ticket AI First`,
+      tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
+      filterPatch: null,
     },
   ];
 
@@ -409,37 +424,79 @@ export function selectLedger(
       tone: "neutral",
       filterPatch: null,
     },
-    {
-      id: "ledger-reopen",
-      label: "Reopen sau AI First",
-      value: `${formatCount(scope.reopenNumerator)} lần`,
-      support:
-        scope.reopenDenominator === 0
-          ? null
-          : `${formatAverage(
-              scope.reopenNumerator / scope.reopenDenominator,
-            )} lần/ticket · ${formatCount(
-              scope.reopenDenominator,
-            )} ticket AI First`,
-      tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
-      filterPatch: null,
-    },
   ];
 
   return [
     {
       id: "ledger-group-ticket",
       label: "Theo ticket",
-      denominator: `${formatCount(scope.eligible)} ticket`,
+      denominator: `${formatCount(scope.eligible)} ${populationLabel}`,
+      collapsed: false,
       cells: ticketCells,
     },
     {
       id: "ledger-group-response",
       label: "Theo lượt CS-agent trả lời",
       denominator: `${formatCount(scope.aiEndToEndCount)} ticket AI xử lý trọn`,
+      collapsed: true,
       cells: responseCells,
     },
   ];
+}
+
+/**
+ * The P0 coverage floors from SPEC-v2 §5.3, which gate whether a dimension is
+ * safe to slice by. Coverage below a floor does not make a number wrong; it
+ * makes the *segment* view incomplete, because the missing share cannot be
+ * attributed to any bucket.
+ */
+export const COVERAGE_FLOORS = {
+  issue_category: 0.9,
+  tpe: 0.85,
+} as const;
+
+export const COVERAGE_LABELS: Readonly<Record<string, string>> = {
+  issue_category: "Category",
+  app: "App",
+  tpe: "TPE",
+  intent: "Intent",
+  skill: "Skill",
+};
+
+export interface CoverageDimension {
+  readonly key: string;
+  readonly label: string;
+  readonly value: number;
+  readonly floor: number | null;
+  /** True only when a P0 floor exists and the measured value is under it. */
+  readonly belowFloor: boolean;
+}
+
+/** Every coverage dimension, weakest first. */
+export function selectCoverage(
+  snapshot: DashboardSnapshot,
+): CoverageDimension[] {
+  return Object.entries(snapshot.coverage)
+    .map(([key, value]) => {
+      const floor =
+        key in COVERAGE_FLOORS
+          ? COVERAGE_FLOORS[key as keyof typeof COVERAGE_FLOORS]
+          : null;
+      return {
+        key,
+        label: COVERAGE_LABELS[key] ?? key,
+        value,
+        floor,
+        belowFloor: floor !== null && value < floor,
+      };
+    })
+    .sort((left, right) => left.value - right.value);
+}
+
+export function selectCoverageBelowFloor(
+  snapshot: DashboardSnapshot,
+): CoverageDimension[] {
+  return selectCoverage(snapshot).filter((item) => item.belowFloor);
 }
 
 export interface AttentionItem {
@@ -484,6 +541,12 @@ export function selectAttentionItems(
       filterPatch: null,
     });
   }
+
+  // Coverage floors deliberately do NOT raise a rail item. They are measured
+  // over every ticket in the whole period, so putting one beside a single
+  // week's numbers compares two different denominators and reads as "this
+  // week is broken" when nothing about this week changed (SPEC-v2 §5.13).
+  // `DataTrustSection` reports them where the denominator can be stated.
 
   return items.slice(0, 3);
 }

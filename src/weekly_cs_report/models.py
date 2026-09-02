@@ -165,6 +165,14 @@ class SessionMetrics:
     # Internal-only direct-CS comparison cohort.  It must not enter the
     # published AI-first reopen metrics.
     control_reopen_within_7d: int | None = None
+    # Hours from the first classifiable handling trace to each counted reopen,
+    # in the same order and with the same burst grouping as `reopen_lifetime`
+    # (so `len(...) == reopen_lifetime` whenever that is not None). Kept so a
+    # consumer can re-cut the reopen window to a shorter maturity horizon --
+    # `summarize_same_period` needs that to compare a week-to-date cohort
+    # against older weeks without crediting the older weeks' extra weeks of
+    # elapsed time. Empty when the ticket is not AI-first.
+    reopen_offsets_hours: tuple[float, ...] = ()
 
     def __post_init__(self) -> None:
         _require_aware(self.turn0_timestamp, "turn0_timestamp")

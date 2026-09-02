@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from dataclasses import dataclass, replace
-from datetime import date, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from types import MappingProxyType
 from typing import Mapping, Sequence
 
@@ -455,7 +455,10 @@ def summarize_same_period(
         for session in result.sessions
         if _is_in_same_period_slice(session, cutoff_weekday)
     )
-    summaries = _summarize_sessions(filtered, window, week_definition)
+    summaries = tuple(
+        _rebound_reopen_to_same_period(summary, filtered, cutoff_weekday)
+        for summary in _summarize_sessions(filtered, window, week_definition)
+    )
     current = next(
         summary
         for summary in summaries
@@ -497,6 +500,57 @@ def summarize_same_period(
             ),
         ),
         by_week=by_week,
+    )
+
+
+
+def _same_period_maturity_hours(session: SessionMetrics, cutoff_weekday: int) -> float:
+    """Hours a ticket had been open by the same point of its own cohort week.
+
+    `_is_in_same_period_slice` already truncates *which* tickets are compared;
+    without this, the reopen numerator would still be compared unequally,
+    because `reopen_lifetime` counts over a ticket's whole observed life. A
+    ticket opened last Monday has had weeks to come back, one opened this
+    Monday has had a day, and the difference reads as an improvement that did
+    not happen. The horizon here is the end of the cutoff weekday in the
+    ticket's own week -- the same boundary the cohort slice uses.
+    """
+    horizon = datetime.combine(
+        session.cohort_week + timedelta(days=cutoff_weekday),
+        time.min,
+        tzinfo=VIETNAM_TIMEZONE,
+    )
+    opened = session.turn0_timestamp.astimezone(VIETNAM_TIMEZONE)
+    return max((horizon - opened).total_seconds() / 3600.0, 0.0)
+
+
+def _rebound_reopen_to_same_period(
+    summary: WeeklySummary,
+    sessions: Sequence[SessionMetrics],
+    cutoff_weekday: int,
+) -> WeeklySummary:
+    """Recount a week's reopen rate over an equal maturity horizon."""
+    ai_first = [
+        session
+        for session in sessions
+        if session.cohort_week == summary.cohort_week
+        and session.ai_first
+        and session.reopen_lifetime is not None
+    ]
+    numerator = sum(
+        sum(
+            1
+            for offset in session.reopen_offsets_hours
+            if offset <= _same_period_maturity_hours(session, cutoff_weekday)
+        )
+        for session in ai_first
+    )
+    denominator = len(ai_first)
+    return replace(
+        summary,
+        reopen_lifetime_numerator=numerator,
+        reopen_lifetime_denominator=denominator,
+        reopen_lifetime_rate=(numerator / denominator if denominator else None),
     )
 
 

@@ -125,14 +125,17 @@ export function DecisionLedger({
             </p>
           ) : null}
 
-          {groups.map((group) => (
-            <div key={group.id} className={styles.ledgerGroupBlock}>
-              <h3 id={group.id} className={styles.ledgerGroupHeading}>
+          {groups.map((group) => {
+            const Block = group.collapsed ? "details" : "div";
+            const Heading = group.collapsed ? "summary" : "h3";
+            return (
+            <Block key={group.id} className={styles.ledgerGroupBlock}>
+              <Heading id={group.id} className={styles.ledgerGroupHeading}>
                 <span className={styles.ledgerGroupLabel}>{group.label}</span>
                 <span className={styles.ledgerGroupDenominator}>
                   {group.denominator}
                 </span>
-              </h3>
+              </Heading>
               <div
                 id={group.id === "ledger-group-ticket" ? "kpiGrid" : undefined}
                 className={styles.ledger}
@@ -173,8 +176,9 @@ export function DecisionLedger({
                   ),
                 )}
               </div>
-            </div>
-          ))}
+            </Block>
+            );
+          })}
         </div>
       </div>
 

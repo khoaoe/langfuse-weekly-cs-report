@@ -202,25 +202,29 @@ def _is_malformed_output(output: object) -> bool:
     return not isinstance(output, Mapping) or not isinstance(output.get("response"), str)
 
 
-def _count_reopens(
-    followups: Sequence[TraceRecord], canonical_text: str | Sequence[str]
-) -> int:
-    """Count distinct times the customer came back after an AI response.
+def _reopen_offsets_hours(
+    followups: Sequence[TraceRecord],
+    canonical_text: str | Sequence[str],
+    origin: datetime,
+) -> tuple[float, ...]:
+    """Return the hours from `origin` to each distinct customer come-back.
 
     A burst of consecutive follow-up traces that all land before the next
     substantive AI response is one reopen, however many messages it took --
     matching how a human reading the ticket would count "the customer wrote
-    back again", not "we handled N more inbound messages".
+    back again", not "we handled N more inbound messages". The offset recorded
+    for a burst is the first trace in it, so re-cutting the series to a shorter
+    horizon counts a reopen from the moment the customer actually came back.
     """
-    count = 0
+    offsets: list[float] = []
     awaiting_new_reopen = True
     for item in followups:
         if awaiting_new_reopen:
-            count += 1
+            offsets.append((item.timestamp - origin).total_seconds() / 3600.0)
             awaiting_new_reopen = False
         if is_substantive_ai_response(item.output_data, canonical_text):
             awaiting_new_reopen = True
-    return count
+    return tuple(offsets)
 
 
 def _first_classifiable_trace(
@@ -316,7 +320,10 @@ def classify_session(
         else ordered[1:]
     )
     if ai_first:
-        reopen_lifetime = _count_reopens(followups, canonical_text)
+        reopen_offsets_hours = _reopen_offsets_hours(
+            followups, canonical_text, first.timestamp
+        )
+        reopen_lifetime = len(reopen_offsets_hours)
         reopen_within_7d = int(
             any(
                 timedelta() < item.timestamp - first.timestamp <= timedelta(hours=168)
@@ -324,6 +331,7 @@ def classify_session(
             )
         )
     else:
+        reopen_offsets_hours = ()
         reopen_lifetime = None
         reopen_within_7d = None
 
@@ -350,6 +358,7 @@ def classify_session(
         outcome=outcome,
         reopen_lifetime=reopen_lifetime,
         reopen_within_7d=reopen_within_7d,
+        reopen_offsets_hours=reopen_offsets_hours,
         ai_reply_count=ai_reply_count,
         first_transfer_trace_id=first_transfer.id if first_transfer is not None else None,
         data_quality=(

@@ -22,10 +22,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3) var(--space-5);
+  gap: var(--space-2) var(--space-5);
   max-width: var(--content-max);
   margin: 0 auto;
-  padding: var(--space-3) var(--gutter);
+  padding: var(--space-2) var(--gutter);
 }
 
 .shellEdgeMark {
@@ -518,7 +518,7 @@
 
 .ledgerGroup {
   display: grid;
-  gap: var(--space-6);
+  gap: var(--space-4);
 }
 
 .ledgerGroupBlock {
@@ -527,7 +527,7 @@
 }
 
 .ledgerGroupBlock + .ledgerGroupBlock {
-  padding-top: var(--space-5);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--rule);
 }
 
@@ -564,6 +564,34 @@
   color: var(--muted);
 }
 
+/* Nhóm gập lại (② theo lượt trả lời): giữ đúng dáng caption bar của nhóm mở,
+   chỉ thêm mũi chỉ hướng và vùng bấm. Marker mặc định của <summary> bị bỏ vì
+   nó chen vào bên trái và phá cột chữ đang thẳng hàng với nhãn ô KPI. */
+summary.ledgerGroupHeading {
+  cursor: pointer;
+  list-style: none;
+}
+
+summary.ledgerGroupHeading::-webkit-details-marker {
+  display: none;
+}
+
+summary.ledgerGroupHeading::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+details[open] > summary.ledgerGroupHeading::after {
+  content: "▾";
+}
+
+summary.ledgerGroupHeading:focus-visible {
+  outline: 2px solid var(--focus, currentColor);
+  outline-offset: 2px;
+}
+
 .ledgerScope {
   margin-top: 0;
 }
@@ -591,9 +619,14 @@
   font-weight: 500;
 }
 
+/* Một hàng duy nhất, cột chia đều theo số ô thực có: nhóm ① có 4 KPI, nhóm ②
+   có 2. Khoá cứng 3 cột khiến ô thứ 4 rơi xuống hàng riêng và ăn thêm ~90px
+   chiều cao — đúng phần chiều cao đang đẩy bảng ② xuống dưới nếp gấp
+   1440x900 (SPEC-v2 §5.5). */
 .ledger {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface);
@@ -604,7 +637,7 @@
   display: grid;
   gap: var(--space-1);
   align-content: start;
-  padding: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border-left: 1px solid var(--rule);
 }
 
@@ -947,6 +980,7 @@
   }
 
   .ledger {
+    grid-auto-flow: row;
     grid-template-columns: 1fr;
   }
 
