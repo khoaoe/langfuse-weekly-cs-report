@@ -1180,3 +1180,28 @@ summary.ledgerGroupHeading:focus-visible {
     display: none;
   }
 }
+
+/* Day-range failure. Same frame grammar as the ledger — one panel, one plain
+   sentence, actions on their own row — because this replaces the report body,
+   not a cell inside it. Severity is carried by the sentence, never by colour
+   alone. */
+.dayRangeError {
+  display: grid;
+  gap: var(--space-3);
+  justify-items: start;
+  padding: var(--space-4);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.dayRangeErrorDetail {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.dayRangeErrorActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}

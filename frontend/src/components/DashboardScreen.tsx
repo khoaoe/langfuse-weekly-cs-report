@@ -128,6 +128,15 @@ function DashboardBody() {
       ? SELECTED_WEEKS_SCOPE
       : reportWeek;
   const dayRangeData = isDayRangeMode ? dayRangeQuery.data : undefined;
+  // The day-range aggregate is the one request on this screen whose failure is
+  // otherwise indistinguishable from "still loading": the query runs with
+  // `retry: false`, so an error is terminal, and every consumer below keys off
+  // `dayRangeData === undefined`, which both states share. Without this the
+  // whole report stayed an `aria-hidden` skeleton forever.
+  const dayRangeFailureLabel =
+    isDayRangeMode && reportScope.mode === "range" && dayRangeQuery.isError
+      ? formatDateRangeLabel(reportScope.from, reportScope.to)
+      : null;
   const reportSnapshot = useMemo(() => {
     if (snapshot === null) {
       return snapshot;
@@ -346,6 +355,36 @@ function DashboardBody() {
             {Array.from({ length: 4 }, (_, index) => (
               <span key={index} />
             ))}
+          </div>
+        </div>
+      ) : dayRangeFailureLabel !== null ? (
+        <div
+          className={styles.dayRangeError}
+          role="alert"
+          data-testid="day-range-error"
+        >
+          <p>{`Không đọc được dữ liệu theo ngày cho ${dayRangeFailureLabel}.`}</p>
+          <p className={styles.dayRangeErrorDetail}>
+            Báo cáo theo tuần vẫn đọc được — chỉ phần theo ngày cần máy chủ trả
+            lời.
+          </p>
+          <div className={styles.dayRangeErrorActions}>
+            <button
+              type="button"
+              className={styles.action}
+              onClick={() => {
+                void dayRangeQuery.refetch();
+              }}
+            >
+              Thử lại
+            </button>
+            <button
+              type="button"
+              className={styles.action}
+              onClick={() => changeReportWeeks("all")}
+            >
+              Toàn bộ kỳ báo cáo
+            </button>
           </div>
         </div>
       ) : reportSnapshot === null ? (

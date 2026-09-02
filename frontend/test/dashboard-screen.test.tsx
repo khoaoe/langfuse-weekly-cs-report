@@ -982,6 +982,54 @@ describe("DashboardScreen", () => {
         ),
       );
     });
+
+    // A failed day-range fetch used to leave the whole report as an
+    // `aria-hidden` skeleton forever: `retry: false` makes the error terminal,
+    // and every consumer keys off `data === undefined`, which an error and a
+    // still-running request look identical from. Nothing on screen said the
+    // range had failed, and nothing offered a way out of it.
+    it("surfaces a retryable failure instead of an endless skeleton when the day-range fetch fails", async () => {
+      const user = userEvent.setup();
+      let aggregateFails = true;
+      server.use(
+        http.get("/api/tickets", ({ request }) => {
+          const url = new URL(request.url);
+          if (url.searchParams.get("aggregate") !== "1") {
+            return HttpResponse.json({ items: [], page: 1, page_size: 50, total: 0 });
+          }
+          if (aggregateFails) {
+            return new HttpResponse(null, { status: 500 });
+          }
+          return HttpResponse.json({
+            days: [
+              dayAggregateFixture("2026-07-20", 3),
+              dayAggregateFixture("2026-07-21", 5),
+            ],
+          });
+        }),
+      );
+      render(<DashboardScreen />);
+      await screen.findByRole("heading", { name: /T2–T6.*7 ticket/i });
+
+      const banner = await screen.findByRole("banner");
+      await user.click(within(banner).getByLabelText(/Phạm vi báo cáo:/));
+      await pickJulyRange(user);
+
+      const failure = await screen.findByTestId("day-range-error");
+      expect(failure).toHaveAttribute("role", "alert");
+      expect(failure).toHaveTextContent("20/07–21/07");
+      expect(screen.queryByTestId("day-range-skeleton")).toBeNull();
+
+      aggregateFails = false;
+      await user.click(within(failure).getByRole("button", { name: "Thử lại" }));
+
+      await waitFor(() =>
+        expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
+          "8",
+        ),
+      );
+      expect(screen.queryByTestId("day-range-error")).toBeNull();
+    });
   });
 
   it("o dan ticket trong Vi sao agent lam vay co id on dinh", async () => {
