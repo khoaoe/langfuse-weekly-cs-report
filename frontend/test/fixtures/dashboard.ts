@@ -140,6 +140,7 @@ export const dashboardEnvelopeFixture = {
     views: { mon_sun: view("mon_sun", 10), mon_fri: view("mon_fri", 7) },
     coverage: { issue_category: 0.9, app: 0.8, tpe: 0.8, intent: 0.7, skill: 0.6 },
     unmapped_tpe_codes: [],
+    tool_error_codes: [],
     gate_status: { allowed: true, structural_invalid_rate: 0, reasons: [] },
     data_quality: { counts: {}, weekend_start_count: 3, left_censored_count: 0, pre_window_start_count: 0, invalid_keyed_session_count: 0, unkeyed_trace_count: 0 },
   },

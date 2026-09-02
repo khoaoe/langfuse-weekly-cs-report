@@ -94,6 +94,30 @@ class TicketDimensions:
     # combination through instead of discarding them.
     skill_count: int = 0
     skill_set: tuple[str, ...] = ()
+    # Allowlisted `<tool>:<code>` pairs for every tool call in the session that
+    # returned an `error` envelope. Sorted, de-duplicated; empty means no tool
+    # reported a failure.
+    #
+    # Deliberately not collapsed into a cause label: the code does not
+    # determine the cause. A separate investigation of the 230 `NOT_FOUND`
+    # results from `get_zalopay_id_by_phone` (2026-09-02, written up in
+    # `docs/cs-agent-skills/bank-unlink/references/context-noi-bo.md`) split
+    # them across a handler bug that strips a leading `0` via `int(digits)`
+    # with the arguments correct, phone numbers the LLM fabricated, and a
+    # real-miss remainder -- three different owners behind one code. The
+    # figures are that investigation's, not measured here; the design
+    # conclusion is what this comment carries. A cause label also erases the
+    # tool identity, which is the half that surfaces a failure rate like
+    # `get_zalopay_id_by_phone`'s 217/233 = 93.1% (Langfuse, seven days to
+    # 2026-09-02).
+    #
+    # Not reduced with `_only_value` either. Over the 13-week snapshot as of
+    # 2026-09-02 (16,413 tickets, 3,076 with an error) the distinct-pair count
+    # per ticket ran 1: 80.9%, 2: 17.2%, 3: 1.7%, 4: 0.2% -- so **19.1% of
+    # error tickets carry more than one pair** and collapsing on conflict
+    # would discard every one of them. Same reasoning as
+    # `skill_set`/`skill_count` above.
+    tool_error_codes: tuple[str, ...] = ()
     # The A/B arm this ticket ran on (`input.model_info.model_core`). Older
     # tickets predate the field and are null, not a data-quality problem.
     model_core: str | None = None

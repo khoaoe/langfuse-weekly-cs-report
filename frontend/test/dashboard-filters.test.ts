@@ -37,6 +37,22 @@ describe("dashboard filter state", () => {
     expect(current.product_code).toBe("IBFT");
   });
 
+  it("chips a tool-error pair filter under its own Vietnamese label", () => {
+    const current = {
+      ...EMPTY_TICKET_FILTERS,
+      tool_error_codes:
+        "get_bank_name:UNKNOWN_BANK_CODE,get_zalopay_id_by_phone:NOT_FOUND",
+    } as const;
+
+    expect(activeTicketFilterChips(current, "mon_sun")).toEqual([
+      {
+        key: "tool_error_codes",
+        label:
+          "Lỗi gọi tool: get_bank_name:UNKNOWN_BANK_CODE, get_zalopay_id_by_phone:NOT_FOUND",
+      },
+    ]);
+  });
+
   it("selecting an opened-date range clears the week filter, and vice versa", () => {
     const withWeek = updateTicketFilters(EMPTY_TICKET_FILTERS, {
       cohort_week: "2026-07-20",

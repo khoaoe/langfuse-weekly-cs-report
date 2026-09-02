@@ -396,3 +396,149 @@ def test_tpe_observations_accept_only_safe_ascii_integer_scalars():
         for index in range(len(invalid_steps))
     )
     assert "tool:get_transaction_processing_engine_data" in ENRICHMENT_NAMES
+
+
+def _tool_enrichment(observations_by_name):
+    return build_trace_enrichment(
+        observations_by_name, load_taxonomy(TAXONOMY_V2_PATH)
+    )
+
+
+def test_tool_error_envelope_becomes_a_tool_code_pair_but_info_never_does():
+    """`info` is a business answer, not a failure -- see `tool_error_token`."""
+    enrichment = _tool_enrichment(
+        {
+            "tool:get_zalopay_id_by_phone": [
+                {
+                    "traceId": "trace-1",
+                    "output": {
+                        "result": {
+                            "error": "NOT_FOUND",
+                            "message": "không tìm thấy 0912345678",
+                        }
+                    },
+                },
+            ],
+            "tool:lookup_refund_details_by_transaction_id": [
+                {
+                    "traceId": "trace-1",
+                    "output": {
+                        "result": {"info": "NO_DATA", "message": "chưa có refund"}
+                    },
+                },
+            ],
+            "tool:get_bank_name": [
+                {"traceId": "trace-1", "output": {"result": {"bank_name": "VCB"}}},
+            ],
+        }
+    )
+
+    assert enrichment["trace-1"].tool_error_codes == (
+        "get_zalopay_id_by_phone:NOT_FOUND",
+    )
+
+
+def test_tool_error_code_off_the_allowlist_collapses_to_the_unknown_bucket():
+    """`error` is not always an enum, so free text must never pass through."""
+    enrichment = _tool_enrichment(
+        {
+            "tool:cal_official_working_date": [
+                {
+                    "traceId": "trace-1",
+                    "output": {
+                        "result": {
+                            "error": "Định dạng thời gian không hợp lệ, cần dạng YYYY-MM"
+                        }
+                    },
+                },
+            ],
+        }
+    )
+
+    assert enrichment["trace-1"].tool_error_codes == (
+        "cal_official_working_date:khac",
+    )
+
+
+def test_tool_error_parsing_survives_non_mapping_results_and_missing_result_key():
+    enrichment = _tool_enrichment(
+        {
+            # `calculate_user_age` returns a bare number under `result`.
+            "tool:calculate_user_age": [
+                {"traceId": "trace-1", "output": {"result": 31.4}},
+            ],
+            "tool:get_bank_info": [
+                {"traceId": "trace-2", "output": {"error": "NO_DATA"}},
+                {"traceId": "trace-3", "output": None},
+                {"traceId": "trace-4"},
+            ],
+        }
+    )
+
+    assert "trace-1" not in enrichment
+    assert enrichment["trace-2"].tool_error_codes == ("get_bank_info:NO_DATA",)
+    assert "trace-3" not in enrichment
+    assert "trace-4" not in enrichment
+
+
+def test_tool_errors_union_across_traces_sorted_and_de_duplicated():
+    """15.2% of error sessions carry 2..3 pairs; none may be discarded."""
+    dimensions = _empty_dimensions()
+    traces = (
+        TraceRecord("first", "ticket-1", datetime(2026, 7, 1, tzinfo=timezone.utc), 0, {}, {}, "default"),
+        TraceRecord("second", "ticket-1", datetime(2026, 7, 1, 1, tzinfo=timezone.utc), 1, {}, {}, "default"),
+    )
+
+    enriched, _rules = apply_trace_enrichment(
+        dimensions,
+        traces,
+        {
+            "first": TraceEnrichment(
+                tool_error_codes=("get_zalopay_id_by_phone:NOT_FOUND",)
+            ),
+            "second": TraceEnrichment(
+                tool_error_codes=(
+                    "get_bank_name:UNKNOWN_BANK_CODE",
+                    "get_zalopay_id_by_phone:NOT_FOUND",
+                )
+            ),
+        },
+    )
+
+    assert enriched.tool_error_codes == (
+        "get_bank_name:UNKNOWN_BANK_CODE",
+        "get_zalopay_id_by_phone:NOT_FOUND",
+    )
+
+
+def test_a_session_without_tool_errors_reduces_to_an_empty_tuple_not_none():
+    enriched, _rules = apply_trace_enrichment(_empty_dimensions(), (), {})
+
+    assert enriched.tool_error_codes == ()
+
+
+def test_every_tool_lane_is_fetched_and_no_dead_lane_is_declared():
+    assert "tool:get_transaction_processing_engine_data" in ENRICHMENT_NAMES
+    assert len(set(ENRICHMENT_NAMES)) == len(ENRICHMENT_NAMES)
+    # Zero observations in the seven days to 2026-09-02; a lane for them costs
+    # wall time inside the shared enrichment deadline and returns nothing.
+    assert not {
+        name
+        for name in ENRICHMENT_NAMES
+        if name.startswith("tool:get_billing_")
+        or name
+        in {
+            "tool:lookup_billing_refund_details_by_transaction_id",
+            "tool:calculate_time_difference",
+        }
+    }
+
+
+def _empty_dimensions() -> TicketDimensions:
+    return TicketDimensions(
+        issue_category="Không xác định", app="Không xác định", app_code=None,
+        product_code="Không xác định", entry_point="Không xác định",
+        payment_channel="Không xác định", tpe_code=None, tpe_status_raw=None,
+        tpe_status_canonical=None, tpe_step=None, tpe_case=None, skill=None,
+        intent=None, guardrail_rule=None, escalation_guard_blocked=False,
+    )

@@ -11,6 +11,8 @@
 export const LEGACY_TICKET_COLUMN_STORAGE_KEY = "weekly-cs-ticket-columns-v1";
 const V2_TICKET_COLUMN_STORAGE_KEY = "weekly-cs-ticket-columns-v2";
 export const PREVIOUS_TICKET_COLUMN_STORAGE_KEY = "weekly-cs-ticket-columns-v3";
+// Not bumped for `tool_error_codes`: the column is off by default, so every
+// stored v4 selection stays valid and only gains a newly allowlisted key.
 export const TICKET_COLUMN_STORAGE_KEY = "weekly-cs-ticket-columns-v4";
 
 export const TICKET_COLUMNS = [
@@ -40,6 +42,7 @@ export const TICKET_COLUMNS = [
   { key: "intent", label: "Intent", core: false },
   { key: "tpe_code", label: "Transstatus", core: false },
   { key: "model_core", label: "Model", core: false },
+  { key: "tool_error_codes", label: "Lỗi gọi tool", core: false },
   {
     key: "escalation_guard_blocked",
     label: "Chặn chuyển CS trùng",

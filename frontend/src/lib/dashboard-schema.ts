@@ -9,6 +9,12 @@ const nonNegativeRatio = z.number().finite().min(0);
 const safeLabel = z.string().min(1).max(256);
 const nullableSafeLabel = safeLabel.nullable();
 const TicketIdSchema = z.string().regex(/^[1-9]\d{0,19}$/);
+/** `<tool>:<CODE>` from a failed tool call. The code half is an allowlisted
+ * enum or the `khac` bucket, so no free text or PII can arrive here; the tool
+ * half must start with a letter, which every real tool name does. */
+const toolErrorToken = z
+  .string()
+  .regex(/^[a-z][a-z0-9_]{0,63}:(?:[A-Z_]{1,40}|khac)$/);
 const tpeToken = z.string().refine(
   (value) => {
     const digits = value.startsWith("-") ? value.slice(1) : value;
@@ -1298,6 +1304,18 @@ export const DashboardSnapshotSchema = z
         })
         .strict(),
     ).max(0),
+    /** Ticket counts per `<tool>:<code>` pair, most frequent first. Top level
+     * rather than a view segment because a ticket can carry up to four
+     * pairs, so the dimension does not partition the population. Doubles as
+     * the Ticket Explorer's option list for the tool-error filter. */
+    tool_error_codes: z.array(
+      z
+        .object({
+          code: toolErrorToken,
+          total: positiveInteger,
+        })
+        .strict(),
+    ),
     gate_status: z
       .object({
         allowed: z.boolean(),
@@ -1360,6 +1378,17 @@ export const TicketRowSchema = z
       .nullable(),
     data_quality: QualityLabelSchema,
     model_core: nullableSafeLabel,
+    /** Every tool call in the ticket that returned an `error` envelope, as
+     * `<tool>:<code>`. Empty means no tool reported a failure.
+     *
+     * An array, not one label: over the 13-week snapshot as of 2026-09-02,
+     * 19.1% of tickets with an error carried more than one distinct pair
+     * (1: 80.9%, 2: 17.2%, 3: 1.7%, 4: 0.2%), and filtering by a single pair
+     * has to keep matching them. Grouping the pairs into a cause label was
+     * rejected -- the code does not determine the cause, and the label erased
+     * the tool identity that surfaces a rate like `get_zalopay_id_by_phone`'s
+     * 93.1%. */
+    tool_error_codes: z.array(toolErrorToken),
   })
   .strict()
   .superRefine((row, context) => {

@@ -197,6 +197,13 @@ function cellText(row: TicketRow, key: TicketColumnKey): string {
   if (key === "data_quality") {
     return dataQualityLabel(row.data_quality);
   }
+  if (key === "tool_error_codes") {
+    // Same string in the cell and the CSV, so a filter chip, a cell and an
+    // exported row all name the failing pair identically.
+    return row.tool_error_codes.length === 0
+      ? "—"
+      : row.tool_error_codes.join("; ");
+  }
   if (typeof value === "number") {
     return formatCount(value);
   }
@@ -264,6 +271,7 @@ export function TicketExplorer({
       intent: filters.intent,
       tpe_code: filters.tpe_code,
       model_core: filters.model_core,
+      tool_error_codes: filters.tool_error_codes,
       transfer_reason: filters.transfer_reason,
       is_weekend_start: filters.is_weekend_start,
     }),
@@ -390,6 +398,10 @@ export function TicketExplorer({
       ]),
     ),
     model_core: Object.keys(view.segments.model_core),
+    // No view segment for this one -- a ticket can carry up to four pairs,
+    // so the dimension does not partition the population. The counts come
+    // from the snapshot's top-level list instead, ordered most-frequent first.
+    tool_error_codes: snapshot.tool_error_codes,
     transfer_reason: Array.from(
       new Set(view.transfer_reasons.triggers.map((item) => item.reason)),
     ).sort((left, right) =>
@@ -411,6 +423,10 @@ export function TicketExplorer({
     skill: filterOptions.skill.map((value) => ({ value, label: value })),
     tpe_code: filterOptions.tpe_code.map((value) => ({ value, label: value })),
     model_core: filterOptions.model_core.map((value) => ({ value, label: value })),
+    tool_error_codes: filterOptions.tool_error_codes.map((item) => ({
+      value: item.code,
+      label: `${item.code} (${formatCount(item.total)})`,
+    })),
     transfer_reason: filterOptions.transfer_reason.map((value) => ({
       value,
       label: transferReasonLabel(value),
@@ -635,6 +651,13 @@ export function TicketExplorer({
           options={multiSelectOptions.model_core}
           value={filters.model_core}
           onChange={(value) => update({ model_core: value })}
+        />
+        <MultiSelectField
+          id="toolErrorCodesInput"
+          label="Lỗi gọi tool"
+          options={multiSelectOptions.tool_error_codes}
+          value={filters.tool_error_codes}
+          onChange={(value) => update({ tool_error_codes: value })}
         />
         <label className={ticketStyles.field}>
           Hơn 3 lượt xử lý

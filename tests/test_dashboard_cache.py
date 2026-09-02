@@ -98,6 +98,7 @@ def _snapshot(generated_at: datetime) -> DashboardSnapshot:
             },
             "coverage": {"issue_category": 0.0, "app": 0.0, "tpe": 0.0, "intent": 0.0, "skill": 0.0},
             "unmapped_tpe_codes": [],
+            "tool_error_codes": [],
             "gate_status": {"allowed": True, "structural_invalid_rate": 0.0, "reasons": []},
             "data_quality": {"counts": {}, "weekend_start_count": 0, "left_censored_count": 0, "pre_window_start_count": 0, "invalid_keyed_session_count": 0, "unkeyed_trace_count": 0},
         },
@@ -823,7 +824,7 @@ def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path
     success = next(event for event in events if event["event"] == "refresh_success")
     assert success.items() >= {
         "event": "refresh_success",
-        "schema_version": 24,
+        "schema_version": 25,
         "ticket_count": 0,
         "trace_count": 0,
         "observation_count": 0,

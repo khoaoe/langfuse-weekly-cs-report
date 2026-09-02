@@ -1070,6 +1070,7 @@ describe("dashboard API envelope", () => {
       snapshot: {
         ...dashboardEnvelopeFixture.snapshot,
         unmapped_tpe_codes: [{ code: "-999", status: "Chờ map", count: 1 }],
+        tool_error_codes: [],
       },
     };
 
@@ -1104,6 +1105,7 @@ describe("dashboard API envelope", () => {
       csat_satisfaction: null,
       data_quality: "valid",
       model_core: null,
+      tool_error_codes: [],
     };
 
     expect(TicketRowSchema.safeParse(row).success).toBe(false);

@@ -104,6 +104,7 @@ _QUERY_NAMES = (
     "intent",
     "tpe_code",
     "model_core",
+    "tool_error_codes",
     "transfer_reason",
     "csat_satisfaction",
     "gt4_turn",
@@ -126,6 +127,7 @@ _MULTI_SELECT_QUERY_NAMES = frozenset(
         "skill",
         "tpe_code",
         "model_core",
+        "tool_error_codes",
         "transfer_reason",
         "csat_satisfaction",
     }

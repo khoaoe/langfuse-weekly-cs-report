@@ -164,6 +164,7 @@ describe("selectors under degraded data", () => {
         },
       },
       unmapped_tpe_codes: [{ code: "-999", status: "", count: 4 }],
+      tool_error_codes: [],
     };
 
     const items = selectAttentionItems(degraded, "mon_sun");
@@ -353,6 +354,7 @@ describe("bulk export", () => {
         csat_satisfaction: null,
         data_quality: "valid",
         model_core: null,
+        tool_error_codes: [],
       }));
 
     const seen: string[] = [];

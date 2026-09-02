@@ -21,6 +21,9 @@ export interface TicketFilters {
   readonly intent: string;
   readonly tpe_code: string;
   readonly model_core: string;
+  /** Comma-separated `<tool>:<code>` pairs; a ticket matches if it carries
+   * any of them, so filtering one pair still finds the multi-pair tickets. */
+  readonly tool_error_codes: string;
   readonly transfer_reason: string;
   readonly gt4_turn: string;
   readonly transferred: string;
@@ -44,6 +47,7 @@ export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   intent: "",
   tpe_code: "",
   model_core: "",
+  tool_error_codes: "",
   transfer_reason: "",
   gt4_turn: "",
   transferred: "",
@@ -75,6 +79,7 @@ const FILTER_LABELS: Readonly<
   intent: "Intent",
   tpe_code: "Transstatus",
   model_core: "Model",
+  tool_error_codes: "Lỗi gọi tool",
   transfer_reason: "Lý do chuyển CS",
   gt4_turn: ">3 lượt xử lý",
   transferred: "Đã chuyển CS",
@@ -95,6 +100,7 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
   "intent",
   "tpe_code",
   "model_core",
+  "tool_error_codes",
   "transfer_reason",
   "gt4_turn",
   "transferred",
@@ -200,6 +206,7 @@ const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
   "skill",
   "tpe_code",
   "model_core",
+  "tool_error_codes",
   "transfer_reason",
 ]);
 

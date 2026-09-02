@@ -61,6 +61,7 @@
 .dateRangeSummary {
   display: flex;
   align-items: center;
+  min-width: 0;
   min-height: 44px;
   padding: 0 var(--space-3);
   border: 1px solid var(--rule-strong);
@@ -70,6 +71,16 @@
   font: inherit;
   cursor: pointer;
   list-style: none;
+}
+
+/* Without this a long selected value widens the flex line and spills past the
+   control's border. Applies to every multi-select, not just the long ones:
+   an unusually long App or Skill name overflowed the same way. */
+.summaryText {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .dateRangeSummary::-webkit-details-marker {
@@ -144,6 +155,14 @@
   box-shadow: var(--shell-shadow);
 }
 
+/* An option label is the identifier the reader picks by, so it wraps in full
+   inside the panel rather than being clipped like the summary. `anywhere`
+   because `<tool>:<CODE>` has no spaces to break on. */
+.multiSelectOption > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .multiSelectOptions {
   display: grid;
   gap: var(--space-1);
@@ -155,6 +174,7 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
   min-height: 24px;
   font-size: 12px;
   line-height: 1.3;

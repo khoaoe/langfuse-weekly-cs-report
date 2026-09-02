@@ -136,10 +136,11 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 24
+    assert snapshot.storage_dict()["schema_version"] == 25
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
+        "tool_error_codes",
     }
     assert dashboard["source"]["observations_fetched"] == 0
     assert dashboard["enrichment_status"] == "partial"
@@ -153,6 +154,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
         # Day-grain diagnostic fields (§4.1) -- server-only.
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
         "guardrail_rules", "tpe_signals",
+        "tool_error_codes",
     }
     assert {
         ticket.ticket_id: getattr(ticket, "opened_at", None)
@@ -184,7 +186,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 24
+    value["schema_version"] = 25
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -2108,7 +2110,7 @@ def test_ticket_page_sort_contract_rejects_unknown_field_direction_and_orphan_di
     snapshot = _snapshot()
     projected_fields = set(asdict(snapshot.tickets[0]))
 
-    assert len(projected_fields) == 32
+    assert len(projected_fields) == 33
     assert projected_fields - _TICKET_EXPLORER_PUBLIC_KEYS == {
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
         "guardrail_rules", "tpe_signals",
@@ -2363,3 +2365,111 @@ def test_later_transfer_without_prior_ai_is_direct_cs_and_counts_as_transfer():
         assert view["totals"]["transfer_total"] == 1
         assert view["outcomes"]["direct_cs"] == 1
     assert DashboardSnapshot.from_storage_dict(snapshot.storage_dict()) == snapshot
+
+
+def _snapshot_with_tool_errors() -> DashboardSnapshot:
+    """One error-free ticket, one with a single pair, one with two."""
+    monday = _meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))
+    weekend = _meta(trace("weekend", "145666", 3, "2026-07-24T18:00:00Z", "AI reply"))
+    transfer = _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML))
+    run = _run([monday, weekend, transfer])
+    by_session = {
+        "145665": (),
+        "145666": ("get_zalopay_id_by_phone:NOT_FOUND",),
+        "145667": (
+            "get_bank_name:UNKNOWN_BANK_CODE",
+            "get_zalopay_id_by_phone:NOT_FOUND",
+        ),
+    }
+    sessions = tuple(
+        replace(
+            session,
+            dimensions=replace(
+                session.dimensions,
+                tpe_signals=(("-365", "-1013"),),
+                tool_error_codes=by_session[session.session_id],
+            ),
+        )
+        for session in run.result.sessions
+    )
+    return project_dashboard(
+        replace(run, result=replace(run.result, sessions=sessions))
+    )
+
+
+def test_tool_error_codes_reach_the_public_projection_as_allowlisted_pairs():
+    snapshot = _snapshot_with_tool_errors()
+    rows = {row.ticket_id: row for row in snapshot.tickets}
+
+    assert rows["145665"].tool_error_codes == ()
+    assert rows["145667"].tool_error_codes == (
+        "get_bank_name:UNKNOWN_BANK_CODE",
+        "get_zalopay_id_by_phone:NOT_FOUND",
+    )
+    assert "tool_error_codes" in _TICKET_EXPLORER_PUBLIC_KEYS
+    assert "tool_error_codes" in ticket_page(snapshot)["items"][0]
+
+
+def test_ticket_page_filters_one_tool_error_pair_across_multi_pair_tickets():
+    """A single-pair filter must still match the 15.2% carrying two or three."""
+    snapshot = _snapshot_with_tool_errors()
+
+    only_phone = ticket_page(
+        snapshot, tool_error_codes="get_zalopay_id_by_phone:NOT_FOUND"
+    )
+    assert {item["ticket_id"] for item in only_phone["items"]} == {
+        "145666",
+        "145667",
+    }
+    only_bank = ticket_page(
+        snapshot, tool_error_codes="get_bank_name:UNKNOWN_BANK_CODE"
+    )
+    assert {item["ticket_id"] for item in only_bank["items"]} == {"145667"}
+    either = ticket_page(
+        snapshot,
+        tool_error_codes=(
+            "get_bank_name:UNKNOWN_BANK_CODE,get_zalopay_id_by_phone:NOT_FOUND"
+        ),
+    )
+    assert either["total"] == 2
+    with pytest.raises(ValueError, match="tool_error_codes is invalid"):
+        ticket_page(snapshot, tool_error_codes="get_telco_order_status:NOT_FOUND")
+
+
+def test_error_free_tickets_sort_last_in_both_directions_on_tool_error_codes():
+    snapshot = _snapshot_with_tool_errors()
+
+    for direction in ("asc", "desc"):
+        page = ticket_page(
+            snapshot, sort_by="tool_error_codes", sort_direction=direction
+        )
+        assert [item["ticket_id"] for item in page["items"]][-1] == "145665"
+
+
+def test_ticket_row_rejects_unsorted_duplicated_or_unshaped_tool_error_pairs():
+    base = _snapshot_with_tool_errors().tickets[0]
+    for invalid in (
+        ("get_zalopay_id_by_phone:NOT_FOUND", "get_bank_name:UNKNOWN_BANK_CODE"),
+        ("get_bank_name:NO_DATA", "get_bank_name:NO_DATA"),
+    ):
+        with pytest.raises(ValueError, match="tool_error_codes must be sorted"):
+            replace(base, tool_error_codes=invalid)
+    for invalid in (
+        ("Định dạng thời gian không hợp lệ",),
+        ("get_bank_name",),
+        ("get_bank_name:no_data",),
+        ("get_bank_name:NO_DATA:extra",),
+        ("0912345678:NO_DATA",),
+        ["get_bank_name:NO_DATA"],
+    ):
+        with pytest.raises(ValueError, match="tool_error_codes is invalid"):
+            replace(base, tool_error_codes=invalid)
+
+
+def test_no_tool_error_message_text_can_reach_a_serialized_snapshot():
+    """`message` embeds transaction ids and `str(e)`; only codes may ship."""
+    snapshot = _snapshot_with_tool_errors()
+    serialized = json.dumps(snapshot.storage_dict(), ensure_ascii=False)
+
+    assert "0912345678" not in serialized
+    assert "message" not in serialized

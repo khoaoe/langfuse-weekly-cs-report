@@ -31,7 +31,7 @@ from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
 
-_STORAGE_VERSION = 24
+_STORAGE_VERSION = 25
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -40,6 +40,14 @@ _UUID = re.compile(
 )
 _INTENT_PATTERN = re.compile(r"^[a-z0-9_-]{1,64}$")
 _TPE_CODE_PATTERN = re.compile(r"-?[0-9]{1,6}\Z")
+# `<tool>:<CODE>` as produced by `enrichment.tool_error_token`. The code half
+# is either an allowlisted upper-case enum or the `khac` bucket that absorbs
+# anything off the allowlist -- neither can carry free text or PII.
+# The tool half must start with a letter: every real tool name does, and the
+# stricter form also rules out a digit run that could carry a phone number.
+_TOOL_ERROR_CODE_PATTERN = re.compile(
+    r"[a-z][a-z0-9_]{0,63}:(?:[A-Z_]{1,40}|khac)"
+)
 _NATURAL_SORT_PART = re.compile(r"([0-9]+)")
 _TICKET_SORT_DIRECTIONS = frozenset({"asc", "desc"})
 _GUARDRAIL_RULES = frozenset(
@@ -145,6 +153,7 @@ _DASHBOARD_KEYS = frozenset(
     {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
+        "tool_error_codes",
     }
 )
 _TICKET_KEYS = frozenset(
@@ -154,7 +163,7 @@ _TICKET_KEYS = frozenset(
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
-        "data_quality", "model_core",
+        "data_quality", "model_core", "tool_error_codes",
         # Day-grain diagnostic fields (§4.1) -- server-only, never part of the
         # Ticket Explorer's public projection (`_TICKET_EXPLORER_PUBLIC_KEYS`).
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
@@ -222,6 +231,10 @@ class TicketRow:
     transfer_skill: str | None = None
     guardrail_rules: tuple[str, ...] = ()
     tpe_signals: tuple[tuple[str, str | None, str | None], ...] = ()
+    # Public, unlike the diagnostic fields above: allowlisted `<tool>:<code>`
+    # pairs, no free text and no PII. See `TicketDimensions.tool_error_codes`
+    # for why this is a tuple rather than one label.
+    tool_error_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         _validate_ticket_values(self)
@@ -363,6 +376,7 @@ def ticket_page(
     intent: str | None = None,
     tpe_code: str | None = None,
     model_core: str | None = None,
+    tool_error_codes: str | None = None,
     transfer_reason: str | None = None,
     csat_satisfaction: str | None = None,
     gt4_turn: bool | None = None,
@@ -422,6 +436,11 @@ def ticket_page(
         or intent not in _ticket_filter_allowlist(snapshot, "intent")
     ):
         raise ValueError("intent is invalid")
+    selected_tool_error_codes = _parse_multi_ticket_filter(
+        tool_error_codes,
+        _tool_error_code_allowlist(snapshot),
+        "tool_error_codes",
+    )
     selected_transfer_reasons = _parse_multi_ticket_filter(
         transfer_reason, _TRANSFER_TRIGGER_REASONS, "transfer_reason"
     )
@@ -462,6 +481,10 @@ def ticket_page(
         and (intent is None or _ticket_filter_value(row, "intent") == intent)
         and (multi_strings["tpe_code"] is None or _ticket_filter_value(row, "tpe_code") in multi_strings["tpe_code"])
         and (multi_strings["model_core"] is None or _ticket_filter_value(row, "model_core") in multi_strings["model_core"])
+        and (
+            selected_tool_error_codes is None
+            or not selected_tool_error_codes.isdisjoint(row.tool_error_codes)
+        )
         and (selected_transfer_reasons is None or row.transfer_reason in selected_transfer_reasons)
         and (
             selected_csat_states is None
@@ -770,8 +793,8 @@ def _sort_ticket_rows(
     # Ticket IDs are unique in the safe projection. Pre-sorting them makes the
     # secondary order explicit and stable for every low-cardinality column.
     by_ticket_id = sorted(rows, key=lambda row: int(row.ticket_id))
-    populated = [row for row in by_ticket_id if getattr(row, sort_by) is not None]
-    missing = [row for row in by_ticket_id if getattr(row, sort_by) is None]
+    populated = [row for row in by_ticket_id if not _ticket_sort_absent(row, sort_by)]
+    missing = [row for row in by_ticket_id if _ticket_sort_absent(row, sort_by)]
     return [
         *sorted(
             populated,
@@ -784,11 +807,27 @@ def _sort_ticket_rows(
     ]
 
 
+def _ticket_sort_absent(ticket: TicketRow, name: str) -> bool:
+    """Whether this ticket has no value to sort on for `name`.
+
+    An empty `tool_error_codes` tuple means "no tool reported a failure",
+    which is an absent value rather than a low one -- otherwise sorting the
+    column descending would surface the error-free tickets first in one
+    direction and bury them in the other.
+    """
+    value = getattr(ticket, name)
+    return value is None or value == ()
+
+
 def _ticket_sort_value(
     ticket: TicketRow,
     name: str,
 ) -> tuple[tuple[int, int | str], ...]:
     value = getattr(ticket, name)
+    if isinstance(value, tuple):
+        # Sort on the tokens themselves, not `str(tuple)`, so the order the
+        # user sees matches the order the column renders.
+        return tuple((1, token) for token in value)
     if name == "ticket_id":
         return ((0, int(value)),)
     if name == "opened_at" and isinstance(value, str):
@@ -819,6 +858,19 @@ def _ticket_filter_value(ticket: TicketRow, name: str) -> str:
     # often zero. The Explorer's skill filter options come from the segment
     # bucket labels, so this fallback must match the label those options use.
     return _NO_SKILL if name == "skill" else _MISSING
+
+
+def _tool_error_code_allowlist(snapshot: DashboardSnapshot) -> frozenset[str]:
+    """Every `<tool>:<code>` pair present in this snapshot.
+
+    Unlike the scalar dimensions there is no segment bucket to union in: the
+    field is not aggregated anywhere, so the tickets are the only source. A
+    requested pair absent from the snapshot is rejected rather than returning
+    an empty page, matching how every other dimension filter behaves.
+    """
+    return frozenset(
+        token for ticket in snapshot.tickets for token in ticket.tool_error_codes
+    )
 
 
 def _ticket_filter_allowlist(
@@ -916,6 +968,7 @@ def _dashboard_payload(
         "views": views,
         "coverage": _coverage(result.sessions, safe_intents),
         "unmapped_tpe_codes": _unmapped_tpe_codes(result.sessions),
+        "tool_error_codes": _tool_error_code_counts(result.sessions),
         "gate_status": {
             "allowed": result.gate_status.core_allowed,
             "structural_invalid_rate": result.gate_status.structural_invalid_rate,
@@ -1828,6 +1881,32 @@ def _unmapped_tpe_codes(sessions: tuple[SessionMetrics, ...]) -> list[dict[str, 
     return []
 
 
+def _tool_error_code_counts(
+    sessions: tuple[SessionMetrics, ...],
+) -> list[dict[str, object]]:
+    """Ticket counts per `<tool>:<code>` pair, most frequent first.
+
+    Top level rather than a `views[*].segments` entry on purpose: a segment
+    must partition the sessions exactly once (`_validate_view` reconciles each
+    dimension's `transferred` total against the transfer denominator) and this
+    dimension cannot -- a ticket carrying two pairs would be counted twice.
+    Same shape of exception as `unmapped_tpe_codes`.
+
+    A ticket is counted once per distinct pair it carries, so the totals sum
+    above the number of tickets with an error. That is the intended reading:
+    the question is "how many tickets did this tool fail on", per tool.
+    """
+    counts: Counter[str] = Counter()
+    for session in sessions:
+        counts.update(set(session.dimensions.tool_error_codes))
+    return [
+        {"code": code, "total": total}
+        for code, total in sorted(
+            counts.items(), key=lambda item: (-item[1], item[0])
+        )
+    ]
+
+
 def _data_range(weekly: tuple[WeeklySummary, ...]) -> dict[str, object]:
     with_data = [summary.cohort_week.isoformat() for summary in weekly if summary.has_data]
     return {
@@ -1881,6 +1960,7 @@ def _ticket_row(
             (transstatus, step_result, tpe_status_index.get((transstatus, step_result)))
             for transstatus, step_result in _valid_tpe_signals(dims.tpe_signals)
         ),
+        tool_error_codes=tuple(dims.tool_error_codes),
     )
 
 
@@ -2156,6 +2236,9 @@ def _ticket_from_storage(value: object) -> TicketRow:
     guardrail_rules = fields.get("guardrail_rules")
     if isinstance(guardrail_rules, list):
         fields["guardrail_rules"] = tuple(guardrail_rules)
+    tool_error_codes = fields.get("tool_error_codes")
+    if isinstance(tool_error_codes, list):
+        fields["tool_error_codes"] = tuple(tool_error_codes)
     tpe_signals = fields.get("tpe_signals")
     if isinstance(tpe_signals, list):
         fields["tpe_signals"] = tuple(
@@ -2302,6 +2385,16 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
             raise ValueError("tpe_signals is invalid")
         if status is not None:
             _safe_string(status, "tpe_signals status")
+    if not isinstance(ticket.tool_error_codes, tuple) or not all(
+        isinstance(token, str)
+        and _TOOL_ERROR_CODE_PATTERN.fullmatch(token) is not None
+        for token in ticket.tool_error_codes
+    ):
+        raise ValueError("tool_error_codes is invalid")
+    if len(set(ticket.tool_error_codes)) != len(ticket.tool_error_codes) or list(
+        ticket.tool_error_codes
+    ) != sorted(ticket.tool_error_codes):
+        raise ValueError("tool_error_codes must be sorted, de-duplicated")
 
 
 def _validate_dashboard(value: Mapping[str, object], *, generated_at: datetime) -> None:
@@ -2316,6 +2409,7 @@ def _validate_dashboard(value: Mapping[str, object], *, generated_at: datetime) 
     _require_exact_keys(coverage, {"issue_category", "app", "tpe", "intent", "skill"}, "coverage")
     for key, rate in coverage.items(): _rate(rate, f"coverage.{key}")
     _validate_unmapped(value["unmapped_tpe_codes"])
+    _validate_tool_error_code_counts(value["tool_error_codes"])
     _validate_gate(value["gate_status"])
     _validate_quality(value["data_quality"])
     views = _require_mapping(value["views"], "views")
@@ -2344,6 +2438,29 @@ def _validate_unmapped(value: object) -> None:
         raise ValueError("unmapped_tpe_codes must be a list")
     if value:
         raise ValueError("unmapped_tpe_codes must be empty")
+
+
+def _validate_tool_error_code_counts(value: object) -> None:
+    if not isinstance(value, list):
+        raise ValueError("tool_error_codes must be a list")
+    seen: set[str] = set()
+    previous: tuple[int, str] | None = None
+    for item in value:
+        mapping = _require_mapping(item, "tool_error_codes entry")
+        _require_exact_keys(mapping, {"code", "total"}, "tool_error_codes entry")
+        code = mapping["code"]
+        if (
+            not isinstance(code, str)
+            or _TOOL_ERROR_CODE_PATTERN.fullmatch(code) is None
+            or code in seen
+        ):
+            raise ValueError("tool_error_codes code is invalid")
+        seen.add(code)
+        total = _positive_int(mapping["total"], "tool_error_codes total")
+        current = (-total, code)
+        if previous is not None and current < previous:
+            raise ValueError("tool_error_codes must be ordered by count")
+        previous = current
 
 
 def _validate_gate(value: object) -> None:

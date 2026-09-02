@@ -30,6 +30,7 @@ from weekly_cs_report.dashboard_schema import (
 from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
 from weekly_cs_report.report import compute_report
 from weekly_cs_report.web import (
+    _MAX_QUERY_PAIRS,
     WebSettings,
     _parse_ticket_query,
     _validated_runtime_directory,
@@ -84,6 +85,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
         },
         "coverage": {"issue_category": 0.0, "app": 0.0, "tpe": 0.0, "intent": 0.0, "skill": 0.0},
         "unmapped_tpe_codes": [],
+        "tool_error_codes": [],
         "gate_status": {"allowed": True, "structural_invalid_rate": 0.0, "reasons": []},
         "data_quality": {"counts": {}, "weekend_start_count": 0, "left_censored_count": 0, "pre_window_start_count": 0, "invalid_keyed_session_count": 0, "unkeyed_trace_count": 0},
     }
@@ -454,16 +456,24 @@ def test_ticket_endpoint_uses_last_good_snapshot_and_paginates(manager_factory):
         response = client.get("/api/tickets?page=2&page_size=2")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "items": [
-            _ticket_public_dict(
-                next(row for row in snapshot.tickets if row.ticket_id == "300")
-            )
-        ],
-        "page": 2,
-        "page_size": 2,
-        "total": 3,
-    }
+    assert response.json() == json.loads(
+        json.dumps(
+            {
+                "items": [
+                    _ticket_public_dict(
+                        next(
+                            row
+                            for row in snapshot.tickets
+                            if row.ticket_id == "300"
+                        )
+                    )
+                ],
+                "page": 2,
+                "page_size": 2,
+                "total": 3,
+            }
+        )
+    )
 
 
 def test_ticket_endpoint_applies_allowlisted_sort_before_pagination(manager_factory):
@@ -1047,7 +1057,7 @@ def test_ticket_endpoint_accepts_the_full_18_unique_query_pair_contract(manager_
     [
         ("page=" + ("9" * 5000), "page"),
         ("page=1234567890", "page"),
-        ("&".join(["page=1"] * 25), "unknown"),
+        ("&".join(["page=1"] * (_MAX_QUERY_PAIRS + 1)), "unknown"),
     ],
     ids=("five-thousand-digit-value", "ten-digit-number", "more-pairs-than-allowlisted-names"),
 )

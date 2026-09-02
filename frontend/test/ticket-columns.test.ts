@@ -114,6 +114,22 @@ describe("Ticket Explorer column persistence", () => {
     expect(readVisibleTicketColumns()).toEqual(["ticket_id", "cohort_week"]);
   });
 
+  it("offers the tool-error column off by default so v4 selections survive", () => {
+    expect(TICKET_COLUMNS.map((column) => column.key)).toContain(
+      "tool_error_codes",
+    );
+    expect(DEFAULT_TICKET_COLUMNS).not.toContain("tool_error_codes");
+
+    localStorage.setItem(
+      TICKET_COLUMN_STORAGE_KEY,
+      JSON.stringify(["ticket_id", "tool_error_codes"]),
+    );
+    expect(readVisibleTicketColumns()).toEqual([
+      "ticket_id",
+      "tool_error_codes",
+    ]);
+  });
+
   it("falls back safely for tampered v1 or v2 without copying private keys", () => {
     localStorage.setItem(
       LEGACY_TICKET_COLUMN_STORAGE_KEY,

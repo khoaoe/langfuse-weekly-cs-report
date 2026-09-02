@@ -287,6 +287,7 @@ function belowFoldSnapshot(
       { code: "-999", status: "", count: 1 },
       { code: "-998", status: "Chờ map", count: 2 },
     ],
+    tool_error_codes: [],
     views: {
       ...baseSnapshot.views,
       mon_sun: {
@@ -478,6 +479,7 @@ function ticketRow(overrides: Partial<TicketRow>): TicketRow {
     csat_satisfaction: null,
     data_quality: "valid",
     model_core: null,
+    tool_error_codes: [],
     ...overrides,
     transferred,
     transfer_reason: overrides.transfer_reason ?? (transferred ? "unknown" : null),
@@ -809,6 +811,109 @@ describe("data-quality boundary formatting", () => {
     expect(formatDataAge(12 * 60_000)).toBe("12 phút");
     expect(formatDataAge(2 * 60 * 60_000 + 5 * 60_000)).toBe(
       "2 giờ 5 phút",
+    );
+  });
+});
+
+const TOOL_ERROR_SNAPSHOT: DashboardSnapshot = {
+  ...baseSnapshot,
+  tool_error_codes: [
+    { code: "get_zalopay_id_by_phone:NOT_FOUND", total: 246 },
+    { code: "get_bank_name:UNKNOWN_BANK_CODE", total: 33 },
+  ],
+};
+
+function ToolErrorExplorerHarness() {
+  const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
+  return (
+    <TicketExplorer
+      snapshot={TOOL_ERROR_SNAPSHOT}
+      weekDefinition="mon_sun"
+      enabled
+      filters={filters}
+      onFiltersChange={setFilters}
+    />
+  );
+}
+
+describe("Ticket Explorer tool-error column", () => {
+  it("renders no pair, one pair and two pairs, and offers pairs with counts", async () => {
+    localStorage.setItem(
+      TICKET_COLUMN_STORAGE_KEY,
+      JSON.stringify(["ticket_id", "tool_error_codes"]),
+    );
+    const items = [
+      ticketRow({ ticket_id: "1", tool_error_codes: [] }),
+      ticketRow({
+        ticket_id: "2",
+        tool_error_codes: ["get_zalopay_id_by_phone:NOT_FOUND"],
+      }),
+      ticketRow({
+        ticket_id: "3",
+        tool_error_codes: [
+          "get_bank_name:UNKNOWN_BANK_CODE",
+          "get_zalopay_id_by_phone:NOT_FOUND",
+        ],
+      }),
+    ];
+    server.use(
+      http.get("/api/tickets", () =>
+        HttpResponse.json({ items, page: 1, page_size: 50, total: 3 }),
+      ),
+    );
+
+    renderWithQuery(<ToolErrorExplorerHarness />);
+    await screen.findByRole("rowheader", { name: "1" });
+
+    const cells = screen.getAllByRole("cell");
+    expect(cells.map((cell) => cell.textContent)).toEqual([
+      "—",
+      "get_zalopay_id_by_phone:NOT_FOUND",
+      "get_bank_name:UNKNOWN_BANK_CODE; get_zalopay_id_by_phone:NOT_FOUND",
+    ]);
+    // The count comes from the snapshot's own list, not from the loaded page,
+    // so the option label is the whole-population figure.
+    expect(
+      screen.getByRole("checkbox", {
+        name: "get_zalopay_id_by_phone:NOT_FOUND (246)",
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("clips the selected pair in the summary and keeps it whole in a tooltip", async () => {
+    // A `<tool>:<CODE>` pair plus its count runs to ~38 characters, which
+    // overflowed the filter control's border before the summary text got its
+    // own clipping element. jsdom has no layout, so this pins the structure
+    // that makes the CSS work rather than the rendered width -- the width
+    // itself is measured in the browser.
+    localStorage.setItem(
+      TICKET_COLUMN_STORAGE_KEY,
+      JSON.stringify(["ticket_id", "tool_error_codes"]),
+    );
+    server.use(
+      http.get("/api/tickets", () =>
+        HttpResponse.json({ items: [], page: 1, page_size: 50, total: 0 }),
+      ),
+    );
+    const user = userEvent.setup();
+    renderWithQuery(<ToolErrorExplorerHarness />);
+    const panelId = "toolErrorCodesInput";
+    await user.click(
+      screen.getByRole("button", { name: /^Lỗi gọi tool:/ }),
+    );
+    await user.click(
+      within(document.getElementById(panelId) as HTMLElement).getByRole(
+        "checkbox",
+        { name: "get_zalopay_id_by_phone:NOT_FOUND (246)" },
+      ),
+    );
+
+    const summary = screen.getByRole("button", { name: /^Lỗi gọi tool:/ });
+    const text = summary.querySelector("span");
+    expect(text?.textContent).toBe("get_zalopay_id_by_phone:NOT_FOUND (246)");
+    expect(text).toHaveAttribute(
+      "title",
+      "get_zalopay_id_by_phone:NOT_FOUND (246)",
     );
   });
 });

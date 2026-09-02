@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from tests.fixtures.traces import TRANSFER_HTML, trace
 from weekly_cs_report.dashboard_schema import project_dashboard
+from weekly_cs_report.enrichment import ENRICHMENT_NAMES
 from weekly_cs_report.langfuse_client import (
     LangfuseDeadlineExceeded,
     LangfuseRequestCancelled,
@@ -103,15 +104,7 @@ def test_compute_report_reads_and_analyzes_without_writing_artifacts(tmp_path):
         "ticket-weekend",
     ]
     assert client.observation_trace_ids == []
-    assert set(client.enrichment_calls) == {
-        "route",
-        "execute",
-        "input_guardrail",
-        "skill_guardrail_checked",
-        "output_guardrail",
-        "escalation_history_guard",
-        "tool:get_transaction_processing_engine_data",
-    }
+    assert set(client.enrichment_calls) == set(ENRICHMENT_NAMES)
     assert run.enrichment_status == "complete"
     assert run.observations_fetched == 0
     assert not (tmp_path / "artifacts").exists()

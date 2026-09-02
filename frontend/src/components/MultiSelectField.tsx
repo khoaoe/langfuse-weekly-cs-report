@@ -75,7 +75,13 @@ export function MultiSelectField({
           className={styles.dateRangeSummary}
           aria-label={`${label}: ${summary}`}
         >
-          {summary}
+          {/* A selected value can be far longer than the control (a
+              `<tool>:<CODE>` pair runs to 64 characters), so the text is
+              clipped to one line and the full value stays reachable via the
+              tooltip and the active-filter chip below the form. */}
+          <span className={styles.summaryText} title={summary}>
+            {summary}
+          </span>
         </summary>
         <div
           id={id}

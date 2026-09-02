@@ -217,6 +217,7 @@ describe("sorting bảng dữ liệu", () => {
               csat_satisfaction: "positive",
               data_quality: "valid",
               model_core: null,
+              tool_error_codes: [],
             },
           ],
           page: 1,

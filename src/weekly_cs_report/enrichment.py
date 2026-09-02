@@ -16,8 +16,47 @@ from .models import SessionMetrics, TicketDimensions, TraceRecord, TransferTrigg
 from .tpe_status import resolve_tpe_status
 
 
-ENRICHMENT_NAMES = (
+# Every tool whose observations are fetched so its error envelopes can be
+# read. Names must match the Langfuse observation name exactly.
+#
+# The list is derived from Langfuse's own metrics API, not from the tools that
+# happened to fail in an earlier measurement -- that was a closed loop which
+# could never surface a tool nobody had looked at yet, and it did miss three
+# (`check_lfvn_onboarding_status` at a 96% failure rate among them). Rebuild it
+# with `scripts/audit_tool_lanes.py`, which fails when Langfuse is running a
+# tool this list does not cover.
+#
+# Deliberately excluded, measured over the seven days to 2026-09-02:
+#   - `get_billing_*`, `lookup_billing_refund_details_by_transaction_id`:
+#     0 observations.
+#   - `load_skill_reference__*` (3,394 calls), `list_skill_references__*`
+#     (382), `calculate_time_difference__*` (30): 0 errors in 3,806 calls.
+#     These load skill files from disk rather than calling a backend. The
+#     audit script lists them as knowingly skipped, not as a gap.
+TOOL_ENRICHMENT_NAMES = (
+    "tool:cal_official_working_date",
+    "tool:calculate_user_age",
+    "tool:check_cimb_onboarding_status",
+    "tool:check_lfvn_onboarding_status",
+    "tool:check_paylater_account_status",
+    "tool:get_authorization_code_by_transaction_id",
+    "tool:get_bank_code_by_bank_name",
+    "tool:get_bank_connector_transaction",
+    "tool:get_bank_info",
+    "tool:get_bank_linking_history",
+    "tool:get_bank_linking_status",
+    "tool:get_bank_name",
+    "tool:get_bank_unlink_history",
+    "tool:get_fixed_deposit_list",
+    "tool:get_fixed_deposit_maintenance_status",
+    "tool:get_fixed_deposit_onboarding_status",
+    "tool:get_telco_order_status",
     "tool:get_transaction_processing_engine_data",
+    "tool:get_user_kyc_profile",
+    "tool:get_zalopay_id_by_phone",
+    "tool:lookup_refund_details_by_transaction_id",
+)
+ENRICHMENT_NAMES = TOOL_ENRICHMENT_NAMES + (
     "route",
     "execute",
     "input_guardrail",
@@ -25,6 +64,34 @@ ENRICHMENT_NAMES = (
     "output_guardrail",
     "escalation_history_guard",
 )
+_TOOL_NAMES = frozenset(
+    name.removeprefix("tool:") for name in TOOL_ENRICHMENT_NAMES
+)
+# Error codes allowed through to the ticket projection. `error` is not always
+# an enum -- `cal_official_working_date` has returned free Vietnamese text --
+# so anything off this list becomes `_TOOL_ERROR_UNKNOWN` rather than being
+# passed through, which would leak arbitrary strings onto the browser.
+#
+# The last four have not fired in any measured window; they are kept because
+# they exist in `cs-agent` and may fire later.
+_TOOL_ERROR_CODES = frozenset(
+    {
+        "NO_DATA",
+        "NOT_FOUND",
+        "EXCEPTION",
+        "MISSING_INPUT",
+        "UNKNOWN_BANK_CODE",
+        "UNKNOWN_BANK_NAME",
+        "AMBIGUOUS_BANK_NAME",
+        "UNKNOWN_TOOL",
+        "ID_MISMATCH",
+        "INVALID_INPUT",
+        "INTEGRATION_ERROR",
+        "TOOL_EXECUTION_ERROR",
+        "INVALID_PHONE_NUMBER",
+    }
+)
+_TOOL_ERROR_UNKNOWN = "khac"
 _SAFE_SKILL = re.compile(r"^[a-z0-9_-]{1,64}$")
 _PHONE_LIKE_SKILL = re.compile(r"(?:0|84)[0-9]{8,10}$")
 _UUID_LIKE_SKILL = re.compile(
@@ -52,6 +119,7 @@ class TraceEnrichment:
     guardrail_events: tuple[GuardrailEvent, ...] = ()
     escalation_guard_blocked: bool = False
     tpe_signals: tuple[tuple[str, str | None], ...] = ()
+    tool_error_codes: tuple[str, ...] = ()
 
 
 def build_trace_enrichment(
@@ -68,6 +136,7 @@ def build_trace_enrichment(
     ] = defaultdict(list)
     blocked: set[str] = set()
     tpe_signals: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
+    tool_errors: dict[str, set[str]] = defaultdict(set)
 
     for observation in _ordered(observations_by_name.get("route", ())):
         trace_id = _trace_id(observation)
@@ -125,6 +194,13 @@ def build_trace_enrichment(
         signal = _tpe_signal(observation)
         if trace_id is not None and signal is not None:
             tpe_signals[trace_id].add(signal)
+    for name in TOOL_ENRICHMENT_NAMES:
+        tool = name.removeprefix("tool:")
+        for observation in _ordered(observations_by_name.get(name, ())):
+            trace_id = _trace_id(observation)
+            token = tool_error_token(tool, observation)
+            if trace_id is not None and token is not None:
+                tool_errors[trace_id].add(token)
 
     trace_ids = (
         set(intents)
@@ -133,6 +209,7 @@ def build_trace_enrichment(
         | set(guardrail_events)
         | blocked
         | set(tpe_signals)
+        | set(tool_errors)
     )
     result: dict[str, TraceEnrichment] = {}
     for trace_id in trace_ids:
@@ -150,6 +227,7 @@ def build_trace_enrichment(
                     key=_tpe_signal_sort_key,
                 )
             ),
+            tool_error_codes=tuple(sorted(tool_errors.get(trace_id, ()))),
         )
         if item != TraceEnrichment():
             result[trace_id] = item
@@ -166,6 +244,7 @@ def apply_trace_enrichment(
     skills: set[str] = set()
     guardrail_rules: set[str] = set()
     tpe_signals: set[tuple[str, str | None]] = set()
+    tool_error_codes: set[str] = set()
     blocked = False
     for trace in traces:
         enrichment = enrichment_by_trace_id.get(trace.id)
@@ -175,6 +254,7 @@ def apply_trace_enrichment(
         skills.update(enrichment.skills)
         guardrail_rules.update(enrichment.guardrail_rules)
         tpe_signals.update(enrichment.tpe_signals)
+        tool_error_codes.update(enrichment.tool_error_codes)
         blocked = blocked or enrichment.escalation_guard_blocked
     sorted_skills = tuple(sorted(skills))
     return (
@@ -187,6 +267,7 @@ def apply_trace_enrichment(
             tpe_signals=tuple(sorted(tpe_signals, key=_tpe_signal_sort_key)),
             skill_count=len(sorted_skills),
             skill_set=sorted_skills,
+            tool_error_codes=tuple(sorted(tool_error_codes)),
         ),
         tuple(sorted(guardrail_rules)),
     )
@@ -324,6 +405,42 @@ def _ordered_guardrail_events(
         seen.add(event)
         result.append(event)
     return tuple(result)
+
+
+def tool_error_token(
+    tool: str,
+    observation: Mapping[str, object],
+) -> str | None:
+    """Return `<tool>:<code>` when a tool call failed, else None.
+
+    Only `error` counts. `info` does not. Langfuse, seven days to 2026-09-02:
+    9,777 tool calls, of which 654 carried `error` and 393 carried `info` --
+    and all 393 came from `lookup_refund_details_by_transaction_id`, where
+    `info: NO_DATA` means "no refund record exists", a correct business
+    answer. Counting `info` as failure would inflate the non-OK population by
+    60% with calls where the agent did nothing wrong.
+
+    `explain_context._is_error_envelope` is deliberately not reused: it treats
+    `info` as a failure because it serves the escalation dossier's evidence
+    section, where "the tool returned nothing" is the point. Leave it alone.
+
+    The envelope's `message` is never read. It embeds a transaction id at
+    `cs-agent/core/tools/bank/handlers.py:112` and `str(e)` in the integration
+    clients, so it must not reach a ticket row.
+    """
+    if tool not in _TOOL_NAMES:
+        return None
+    output = observation.get("output")
+    if not isinstance(output, Mapping):
+        return None
+    result = output.get("result")
+    envelope = result if isinstance(result, Mapping) else output
+    code = envelope.get("error")
+    if code is None:
+        return None
+    if not isinstance(code, str) or code not in _TOOL_ERROR_CODES:
+        return f"{tool}:{_TOOL_ERROR_UNKNOWN}"
+    return f"{tool}:{code}"
 
 
 def _tpe_signal(

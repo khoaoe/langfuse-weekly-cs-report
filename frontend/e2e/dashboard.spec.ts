@@ -93,6 +93,7 @@ function healthyEnvelopeWithoutWarnings() {
         skill: 0.88,
       },
       unmapped_tpe_codes: [],
+      tool_error_codes: [],
       enrichment_status: "complete",
       gate_status: {
         allowed: true,
@@ -294,6 +295,7 @@ function csatTicketRows(): readonly TicketRow[] {
     csat_satisfaction: ticket.satisfaction,
     data_quality: "valid",
     model_core: null,
+    tool_error_codes: [],
   }));
 }
 
