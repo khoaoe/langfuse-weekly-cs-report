@@ -204,9 +204,25 @@ export interface LedgerScope {
   readonly reopenNumerator: number;
   readonly reopenDenominator: number;
   readonly gt4WithoutCs: number;
+  /**
+   * Counted with `gt4WithoutCs` so the ledger can show the whole tail. On its
+   * own `gt4WithoutCs` is 0 in 2 of 10 observed weeks and <= 3 in 7 of them --
+   * a number that would sit at zero most weeks -- while the two together run
+   * 6..142 and move every week.
+   */
+  readonly gt4WithCs: number;
   readonly directCsCount: number;
   readonly resolvedFirstReply: number;
   readonly aiEndToEndCount: number;
+  /**
+   * Total AI reply turns across AI First tickets: the numerator of
+   * `aiReplyMeanAiFirst`. The weekly row stores only the mean, so this is
+   * `mean * ai_first_count` rounded -- exact for every observed week, but the
+   * reason it needs rounding at all is that `ai_reply_sum_ai_first` exists on
+   * `DayAggregate` and not on the weekly row. Adding it there would let this
+   * read a stored integer instead of reconstructing one.
+   */
+  readonly aiReplySumAiFirst: number;
   readonly aiReplyMeanAiFirst: number | null;
   readonly week: WeeklyReportRow | null;
   readonly kind: "week" | "all" | "selection" | "empty" | "range";
@@ -215,12 +231,18 @@ export interface LedgerScope {
 }
 
 /**
- * Weighted mean of a per-week average across weeks with different ai_first
- * populations. Averaging the per-week means directly would be the same
- * averaging-of-rates mistake as the rolling-rate trap: a week with 5
- * ai_first tickets and a week with 500 must not count equally.
+ * Total AI reply turns and their weighted mean across weeks with different
+ * ai_first populations. Averaging the per-week means directly would be the
+ * same averaging-of-rates mistake as the rolling-rate trap: a week with 5
+ * ai_first tickets and a week with 500 must not count equally. Computing the
+ * sum here rather than beside each caller keeps the two numbers derived from
+ * one pass, so a cell showing the total can never disagree with the cell
+ * showing the total divided by its base.
  */
-function weightedReplyMean(weeks: readonly WeeklyReportRow[]): number | null {
+function weightedReplyTotals(weeks: readonly WeeklyReportRow[]): {
+  readonly sum: number;
+  readonly mean: number | null;
+} {
   let weightedSum = 0;
   let totalWeight = 0;
   for (const week of weeks) {
@@ -230,7 +252,10 @@ function weightedReplyMean(weeks: readonly WeeklyReportRow[]): number | null {
     weightedSum += week.ai_reply_mean_ai_first * week.ai_first_count;
     totalWeight += week.ai_first_count;
   }
-  return totalWeight === 0 ? null : weightedSum / totalWeight;
+  return {
+    sum: Math.round(weightedSum),
+    mean: totalWeight === 0 ? null : weightedSum / totalWeight,
+  };
 }
 
 /**
@@ -251,6 +276,7 @@ export function selectScope(
   const view = selectView(snapshot, weekDefinition);
   if (range != null) {
     const observedWeeks = view.weekly.filter((row) => row.has_data);
+    const replies = weightedReplyTotals(observedWeeks);
     return {
       eligible: view.totals.eligible_ticket_count,
       aiFirstCount: view.ai_first.count,
@@ -259,13 +285,15 @@ export function selectScope(
       reopenNumerator: view.reopen.lifetime.numerator,
       reopenDenominator: view.reopen.lifetime.denominator,
       gt4WithoutCs: view.rule_gt4.gt4_turn_without_cs,
+      gt4WithCs: view.rule_gt4.gt4_turn_with_cs,
       directCsCount: view.outcomes.direct_cs,
       resolvedFirstReply: observedWeeks.reduce(
         (total, row) => total + row.resolved_first_reply,
         0,
       ),
       aiEndToEndCount: view.outcomes.ai_end_to_end,
-      aiReplyMeanAiFirst: weightedReplyMean(observedWeeks),
+      aiReplySumAiFirst: replies.sum,
+      aiReplyMeanAiFirst: replies.mean,
       week: null,
       kind: "range",
       rangeFrom: range.from,
@@ -275,6 +303,7 @@ export function selectScope(
   const week = selectReportWeek(view, activeWeek);
   if (week === null) {
     const observedWeeks = view.weekly.filter((row) => row.has_data);
+    const replies = weightedReplyTotals(observedWeeks);
     return {
       eligible: view.totals.eligible_ticket_count,
       aiFirstCount: view.ai_first.count,
@@ -283,13 +312,15 @@ export function selectScope(
       reopenNumerator: view.reopen.lifetime.numerator,
       reopenDenominator: view.reopen.lifetime.denominator,
       gt4WithoutCs: view.rule_gt4.gt4_turn_without_cs,
+      gt4WithCs: view.rule_gt4.gt4_turn_with_cs,
       directCsCount: view.outcomes.direct_cs,
       resolvedFirstReply: observedWeeks.reduce(
         (total, row) => total + row.resolved_first_reply,
         0,
       ),
       aiEndToEndCount: view.outcomes.ai_end_to_end,
-      aiReplyMeanAiFirst: weightedReplyMean(observedWeeks),
+      aiReplySumAiFirst: replies.sum,
+      aiReplyMeanAiFirst: replies.mean,
       week: null,
       kind:
         activeWeek === ALL_WEEKS_SCOPE
@@ -308,9 +339,14 @@ export function selectScope(
     reopenNumerator: week.reopen_lifetime_numerator,
     reopenDenominator: week.reopen_lifetime_denominator,
     gt4WithoutCs: week.gt4_turn_without_cs,
+    gt4WithCs: week.gt4_turn_with_cs,
     directCsCount: week.direct_cs_count,
     resolvedFirstReply: week.resolved_first_reply,
     aiEndToEndCount: week.ai_end_to_end_count,
+    aiReplySumAiFirst:
+      week.ai_reply_mean_ai_first === null
+        ? 0
+        : Math.round(week.ai_reply_mean_ai_first * week.ai_first_count),
     aiReplyMeanAiFirst: week.ai_reply_mean_ai_first,
     week,
     kind: "week",
@@ -331,21 +367,27 @@ export interface LedgerGroup {
   readonly collapsed: boolean;
   /**
    * The one base every cell in the group divides by, or null when the group
-   * has no single base. Group ② has none: "Xong hẳn trong 1 lượt" divides by
-   * ai_end_to_end while "TB lượt/ticket AI First" divides by ai_first, so any
-   * number printed here is wrong for one of the two. It used to print the
-   * ai_end_to_end ticket count, which was both wrong for half the group and a
-   * ticket count captioning a per-response heading.
+   * has no single base. Group ② has none: its four cells divide by three
+   * different things -- ai_first, ai_end_to_end and the whole eligible
+   * population -- so any number printed here is wrong for most of them. It
+   * used to print the ai_end_to_end ticket count, which was both wrong for
+   * half the group and a ticket count captioning a per-response heading. Each
+   * cell states its own base in its support line instead.
    */
   readonly denominator: string | null;
   readonly cells: readonly LedgerCell[];
 }
 
 /**
- * Two ledger groups with two different denominators, kept apart on purpose:
- * "Theo ticket" (mẫu số là ticket) and "Theo lượt CS-agent trả lời" (mẫu số
- * là lượt AI trả lời). Mixing the two under one flat list lets a reader add a
- * ticket-count cell to a per-response-count cell, which is not a real number.
+ * Two ledger groups kept apart on purpose. "Theo ticket" answers how the
+ * ticket population split; "Theo lượt CS-agent trả lời" answers how deep the
+ * conversations went. Mixing the two under one flat list lets a reader add a
+ * ticket-count cell to a turn-count cell, which is not a real number.
+ *
+ * The split is by subject, not by denominator: group ② holds a turn total, a
+ * mean, a share of ai_end_to_end and a ticket count, because all four describe
+ * turn depth. Its heading therefore prints no shared base -- see
+ * `LedgerGroup.denominator`.
  */
 export function selectLedger(
   snapshot: DashboardSnapshot,
@@ -442,7 +484,40 @@ export function selectLedger(
     },
   ];
 
+  const gt4Total = scope.gt4WithCs + scope.gt4WithoutCs;
   const responseCells: LedgerCell[] = [
+    {
+      // The group's own volume, and the only absolute number in it. Every
+      // other cell here is a ratio, so before this existed "TB 1,27
+      // lượt/ticket" hung off a numerator the reader could not see -- and the
+      // count of AI reply turns, the work the agent actually did, appeared
+      // nowhere on the dashboard at all.
+      id: "ledger-ai-reply-total",
+      label: "Tổng lượt AI trả lời",
+      value: formatCount(scope.aiReplySumAiFirst),
+      unit: "lượt",
+      support:
+        scope.aiFirstCount === 0
+          ? null
+          : `trên ${formatCount(scope.aiFirstCount)} ticket AI First`,
+      tone: "brand",
+      filterPatch: null,
+    },
+    {
+      id: "ledger-replies-per-ticket",
+      label: "TB lượt/ticket AI First",
+      value:
+        scope.aiReplyMeanAiFirst === null
+          ? "—"
+          : formatAverage(scope.aiReplyMeanAiFirst),
+      unit: scope.aiReplyMeanAiFirst === null ? null : "lượt",
+      // The base is in the label, and the cell to the left states it in full
+      // with the numerator beside it. Repeating "trên N ticket AI First" here
+      // would put the same line under two adjacent cells.
+      support: null,
+      tone: "neutral",
+      filterPatch: null,
+    },
     {
       id: "ledger-first-reply-resolved",
       label: "Xong hẳn trong 1 lượt",
@@ -458,19 +533,24 @@ export function selectLedger(
       filterPatch: null,
     },
     {
-      id: "ledger-replies-per-ticket",
-      label: "TB lượt/ticket AI First",
-      value:
-        scope.aiReplyMeanAiFirst === null
-          ? "—"
-          : formatAverage(scope.aiReplyMeanAiFirst),
-      unit: scope.aiReplyMeanAiFirst === null ? null : "lượt",
+      // The tail the mean hides. p50 is 1 reply in all ten observed weeks and
+      // p90 is 2 in nine of them, so "TB 1,27" describes almost every ticket
+      // and says nothing about the few that dragged on; this cell is the only
+      // place that group is visible outside the week it trips the rail alert.
+      //
+      // "lượt xử lý" is deliberate and matches the Explorer filter's own
+      // label: this counts `turn_count` -- every turn in the conversation --
+      // while the three cells above it count `ai_reply_count`. Calling both
+      // "lượt" unqualified would read as one scale running 1 -> >3, which it
+      // is not.
+      id: "ledger-gt4-turn",
+      label: "Ticket >3 lượt xử lý",
+      value: formatCount(gt4Total),
+      unit: null,
       support:
-        scope.aiFirstCount === 0
-          ? null
-          : `trên ${formatCount(scope.aiFirstCount)} ticket AI First`,
+        scope.eligible === 0 ? null : `${share(gt4Total, scope.eligible)} tổng ticket`,
       tone: "neutral",
-      filterPatch: null,
+      filterPatch: gt4Total === 0 ? null : { gt4_turn: "true" },
     },
   ];
 

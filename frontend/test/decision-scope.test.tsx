@@ -276,13 +276,28 @@ describe("selected-week decision scope", () => {
     const responseGroup = groups.find(
       (group) => group.id === "ledger-group-response",
     );
-    // No group-level denominator: the two cells below do not share one.
-    // "Xong hẳn trong 1 lượt" divides by ai_end_to_end (406) while
-    // "TB lượt/ticket AI First" divides by ai_first (727), so any single
-    // number in the heading is wrong for one of them. Each cell states its
-    // own base in its support line instead.
+    // No group-level denominator: these four cells divide by three different
+    // things -- ai_first (727), ai_end_to_end (406) and the eligible
+    // population (935) -- so any single number in the heading is wrong for
+    // most of them. Each cell states its own base in its support line.
     expect(responseGroup?.denominator).toBeNull();
     expect(responseGroup?.cells).toMatchObject([
+      {
+        // The group's volume, and the numerator the mean below divides.
+        // 923 / 727 = 1,27, so the two cells must be readable as one
+        // division; that is why they sit adjacent and why only the first
+        // spells out the base.
+        id: "ledger-ai-reply-total",
+        value: "923",
+        unit: "lượt",
+        support: "trên 727 ticket AI First",
+      },
+      {
+        id: "ledger-replies-per-ticket",
+        value: "1,27",
+        unit: "lượt",
+        support: null,
+      },
       {
         id: "ledger-first-reply-resolved",
         value: "79,3%",
@@ -290,10 +305,14 @@ describe("selected-week decision scope", () => {
         support: "322 trong 406 ticket AI xử lý trọn",
       },
       {
-        id: "ledger-replies-per-ticket",
-        value: "1,27",
-        unit: "lượt",
-        support: "trên 727 ticket AI First",
+        // Counts turn_count, not ai_reply_count -- hence "lượt xử lý",
+        // matching the Explorer filter's own label rather than the "lượt"
+        // the three cells above it use.
+        id: "ledger-gt4-turn",
+        value: "1",
+        unit: null,
+        support: "0,1% tổng ticket",
+        filterPatch: { gt4_turn: "true" },
       },
     ]);
   });
