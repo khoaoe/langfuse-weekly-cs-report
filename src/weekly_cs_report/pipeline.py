@@ -286,6 +286,7 @@ def _summarize_sessions(
                 has_data=bool(weekly_sessions),
                 reopen_lifetime_numerator=reopen_lifetime_numerator,
                 reopen_lifetime_denominator=reopen_lifetime_denominator,
+                ai_reply_sum_ai_first=sum(ai_reply_counts),
                 ai_reply_mean_ai_first=(
                     sum(ai_reply_counts) / len(ai_reply_counts)
                     if ai_reply_counts
@@ -662,6 +663,19 @@ def validate_invariants(result: AnalysisResult) -> None:
                 raise InvariantError("ticket weekly reconciliation failed")
             if (summary.gt4_turn_with_cs + summary.gt4_turn_without_cs) > summary.total_tickets:
                 raise InvariantError("gt4 weekly reconciliation failed")
+            # The dashboard prints the sum and the mean as adjacent cells and
+            # the reader divides one by the other. Nothing stops the two from
+            # being computed off different populations by a later edit, so
+            # assert the division here rather than discovering it as a ledger
+            # that does not add up.
+            if summary.ai_first_count == 0:
+                if summary.ai_reply_sum_ai_first != 0:
+                    raise InvariantError("ai_reply weekly reconciliation failed")
+            elif summary.ai_reply_mean_ai_first is None or abs(
+                summary.ai_reply_sum_ai_first
+                - summary.ai_reply_mean_ai_first * summary.ai_first_count
+            ) > 1e-6:
+                raise InvariantError("ai_reply weekly reconciliation failed")
             if summary.has_data != bool(summary.total_tickets):
                 raise InvariantError("weekly has_data must match ticket total")
         expected = _summarize_sessions(

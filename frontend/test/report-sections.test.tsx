@@ -415,6 +415,7 @@ describe("Weekly Report", () => {
         ai_then_cs_count: 99,
         reopen_lifetime_numerator: 33,
         reopen_lifetime_rate: 0.047,
+        ai_reply_sum_ai_first: 861,
         ai_reply_mean_ai_first: 1.23,
         gt4_turn_with_cs: 17,
         gt4_turn_without_cs: 19,

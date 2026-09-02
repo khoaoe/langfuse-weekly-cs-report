@@ -749,6 +749,7 @@ export function scopeSnapshotToDayRange(
           : merged.reopen_lifetime_numerator / merged.reopen_lifetime_denominator,
       reopen_lifetime_numerator: merged.reopen_lifetime_numerator,
       reopen_lifetime_denominator: merged.reopen_lifetime_denominator,
+      ai_reply_sum_ai_first: merged.ai_reply_sum_ai_first,
       ai_reply_mean_ai_first:
         merged.ai_first_count === 0
           ? null

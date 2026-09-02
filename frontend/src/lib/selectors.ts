@@ -215,12 +215,10 @@ export interface LedgerScope {
   readonly resolvedFirstReply: number;
   readonly aiEndToEndCount: number;
   /**
-   * Total AI reply turns across AI First tickets: the numerator of
-   * `aiReplyMeanAiFirst`. The weekly row stores only the mean, so this is
-   * `mean * ai_first_count` rounded -- exact for every observed week, but the
-   * reason it needs rounding at all is that `ai_reply_sum_ai_first` exists on
-   * `DayAggregate` and not on the weekly row. Adding it there would let this
-   * read a stored integer instead of reconstructing one.
+   * Total AI reply turns across AI First tickets: the stored numerator of
+   * `aiReplyMeanAiFirst`. Both come from the same field on the weekly row, and
+   * the pipeline asserts `sum == mean * ai_first_count` before serialising, so
+   * the two ledger cells that print them cannot disagree.
    */
   readonly aiReplySumAiFirst: number;
   readonly aiReplyMeanAiFirst: number | null;
@@ -231,31 +229,28 @@ export interface LedgerScope {
 }
 
 /**
- * Total AI reply turns and their weighted mean across weeks with different
- * ai_first populations. Averaging the per-week means directly would be the
- * same averaging-of-rates mistake as the rolling-rate trap: a week with 5
- * ai_first tickets and a week with 500 must not count equally. Computing the
- * sum here rather than beside each caller keeps the two numbers derived from
- * one pass, so a cell showing the total can never disagree with the cell
- * showing the total divided by its base.
+ * Total AI reply turns and their mean across weeks with different ai_first
+ * populations. The mean is the summed numerator over the summed denominator,
+ * never the average of the per-week means: that would be the same
+ * averaging-of-rates mistake as the rolling-rate trap, letting a week with 5
+ * ai_first tickets count as much as a week with 500. Returning both from one
+ * pass is what keeps the ledger cell showing the total and the cell showing
+ * the total divided by its base in agreement.
  */
-function weightedReplyTotals(weeks: readonly WeeklyReportRow[]): {
+function replyTotals(weeks: readonly WeeklyReportRow[]): {
   readonly sum: number;
   readonly mean: number | null;
 } {
-  let weightedSum = 0;
+  let sum = 0;
   let totalWeight = 0;
   for (const week of weeks) {
-    if (week.ai_reply_mean_ai_first === null || week.ai_first_count === 0) {
+    if (week.ai_first_count === 0) {
       continue;
     }
-    weightedSum += week.ai_reply_mean_ai_first * week.ai_first_count;
+    sum += week.ai_reply_sum_ai_first;
     totalWeight += week.ai_first_count;
   }
-  return {
-    sum: Math.round(weightedSum),
-    mean: totalWeight === 0 ? null : weightedSum / totalWeight,
-  };
+  return { sum, mean: totalWeight === 0 ? null : sum / totalWeight };
 }
 
 /**
@@ -276,7 +271,7 @@ export function selectScope(
   const view = selectView(snapshot, weekDefinition);
   if (range != null) {
     const observedWeeks = view.weekly.filter((row) => row.has_data);
-    const replies = weightedReplyTotals(observedWeeks);
+    const replies = replyTotals(observedWeeks);
     return {
       eligible: view.totals.eligible_ticket_count,
       aiFirstCount: view.ai_first.count,
@@ -303,7 +298,7 @@ export function selectScope(
   const week = selectReportWeek(view, activeWeek);
   if (week === null) {
     const observedWeeks = view.weekly.filter((row) => row.has_data);
-    const replies = weightedReplyTotals(observedWeeks);
+    const replies = replyTotals(observedWeeks);
     return {
       eligible: view.totals.eligible_ticket_count,
       aiFirstCount: view.ai_first.count,
@@ -343,10 +338,7 @@ export function selectScope(
     directCsCount: week.direct_cs_count,
     resolvedFirstReply: week.resolved_first_reply,
     aiEndToEndCount: week.ai_end_to_end_count,
-    aiReplySumAiFirst:
-      week.ai_reply_mean_ai_first === null
-        ? 0
-        : Math.round(week.ai_reply_mean_ai_first * week.ai_first_count),
+    aiReplySumAiFirst: week.ai_reply_sum_ai_first,
     aiReplyMeanAiFirst: week.ai_reply_mean_ai_first,
     week,
     kind: "week",

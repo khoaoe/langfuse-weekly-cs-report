@@ -175,7 +175,8 @@ _WEEKLY_KEYS = frozenset(
         "total_tickets", "ai_first_count", "ai_first_rate", "ai_end_to_end_count",
         "ai_then_cs_count", "direct_cs_count", "unclassified_count", "reopen_7d_rate",
         "reopen_7d_denominator", "reopen_lifetime_rate", "reopen_lifetime_numerator",
-        "reopen_lifetime_denominator", "ai_reply_mean_ai_first", "ai_reply_p50",
+        "reopen_lifetime_denominator", "ai_reply_sum_ai_first",
+        "ai_reply_mean_ai_first", "ai_reply_p50",
         "ai_reply_p90", "ai_reply_max", "gt4_turn_with_cs", "gt4_turn_without_cs",
         "max_replies_rule_fired", "resolved_first_reply", "as_of", "reopen_reason",
     }
@@ -1928,6 +1929,7 @@ def _weekly_payload(
         "reopen_lifetime_rate": summary.reopen_lifetime_rate,
         "reopen_lifetime_numerator": summary.reopen_lifetime_numerator,
         "reopen_lifetime_denominator": summary.reopen_lifetime_denominator,
+        "ai_reply_sum_ai_first": summary.ai_reply_sum_ai_first,
         "ai_reply_mean_ai_first": summary.ai_reply_mean_ai_first,
         "ai_reply_p50": summary.ai_reply_p50, "ai_reply_p90": summary.ai_reply_p90,
         "ai_reply_max": summary.ai_reply_max, "gt4_turn_with_cs": summary.gt4_turn_with_cs,
@@ -3601,7 +3603,23 @@ def _validate_weekly(value: object, expected_definition: str) -> None:
             raise ValueError(
                 "weekly reopen_lifetime_rate does not match division"
             )
+        _nonnegative_int(item["ai_reply_sum_ai_first"], "weekly ai_reply_sum_ai_first")
         _nullable_nonnegative_number(item["ai_reply_mean_ai_first"], "weekly ai_reply_mean_ai_first")
+        # The dashboard shows both and the reader divides one by the other, so
+        # a payload where they disagree is not merely odd -- it renders a ledger
+        # that does not add up.
+        if item["ai_first_count"] == 0:
+            if item["ai_reply_sum_ai_first"] != 0:
+                raise ValueError("weekly ai_reply_sum_ai_first must be 0 without ai_first tickets")
+        elif (
+            item["ai_reply_mean_ai_first"] is None
+            or abs(
+                item["ai_reply_sum_ai_first"]
+                - item["ai_reply_mean_ai_first"] * item["ai_first_count"]
+            )
+            > 1e-6
+        ):
+            raise ValueError("weekly ai_reply_sum_ai_first does not match the mean")
         for field in ("ai_reply_p50", "ai_reply_p90", "ai_reply_max"): _nullable_nonnegative_int(item[field], f"weekly {field}")
         _parse_utc_iso(item["as_of"], "weekly as_of")
         _validate_reopen_reason(

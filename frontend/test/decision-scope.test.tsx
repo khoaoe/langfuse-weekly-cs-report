@@ -222,7 +222,11 @@ describe("selected-week decision scope", () => {
       reopen_lifetime_rate: 152 / 727,
       gt4_turn_without_cs: 0,
       resolved_first_reply: 322,
-      ai_reply_mean_ai_first: 1.27,
+      // Exact, not rounded: the pipeline asserts sum == mean * ai_first_count
+      // before serialising, so a fixture that violates it would pass here and
+      // never occur in production. 923 / 727 renders as 1,27.
+      ai_reply_sum_ai_first: 923,
+      ai_reply_mean_ai_first: 923 / 727,
     };
     const reportingSnapshot: DashboardSnapshot = {
       ...baseSnapshot,
@@ -347,6 +351,7 @@ describe("selected-week decision scope", () => {
     const noAiFirst: WeeklyReportRow = {
       ...latest,
       ai_first_count: 0,
+      ai_reply_sum_ai_first: 0,
       ai_reply_mean_ai_first: null,
     };
     const noAiFirstSnapshot: DashboardSnapshot = {

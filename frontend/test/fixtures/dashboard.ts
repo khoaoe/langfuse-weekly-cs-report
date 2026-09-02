@@ -25,6 +25,9 @@ const weekly = [
     reopen_lifetime_rate: 0.25,
     reopen_lifetime_numerator: 2,
     reopen_lifetime_denominator: 8,
+    // 10 replies over 8 AI First tickets. Kept exact so the fixture obeys
+    // the pipeline invariant sum == mean * ai_first_count.
+    ai_reply_sum_ai_first: 10,
     ai_reply_mean_ai_first: 1.25,
     ai_reply_p50: 1,
     ai_reply_p90: 2,

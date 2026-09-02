@@ -276,6 +276,7 @@ class WeeklySummary:
     has_data: bool = False
     reopen_lifetime_numerator: int = 0
     reopen_lifetime_denominator: int = 0
+    ai_reply_sum_ai_first: int = 0
     ai_reply_mean_ai_first: float | None = None
     gt4_turn_with_cs: int = 0
     gt4_turn_without_cs: int = 0

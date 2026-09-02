@@ -486,6 +486,7 @@ _WEEKLY_COLUMNS = (
     "has_data",
     "reopen_lifetime_numerator",
     "reopen_lifetime_denominator",
+    "ai_reply_sum_ai_first",
     "ai_reply_mean_ai_first",
     "gt4_turn_with_cs",
     "gt4_turn_without_cs",

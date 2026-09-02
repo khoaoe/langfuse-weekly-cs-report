@@ -205,6 +205,13 @@ export const WeeklyReportRowSchema = z
     reopen_lifetime_rate: nonNegativeRatio.nullable(),
     reopen_lifetime_numerator: nonNegativeInteger,
     reopen_lifetime_denominator: nonNegativeInteger,
+    /**
+     * Numerator of `ai_reply_mean_ai_first`. Not nullable the way the mean is:
+     * a week with no AI First tickets produced no AI replies, which is 0, not
+     * "unknown". Kept as a stored integer rather than derived from the mean so
+     * the two ledger cells that print them cannot disagree.
+     */
+    ai_reply_sum_ai_first: nonNegativeInteger,
     ai_reply_mean_ai_first: nonNegativeNumber.nullable(),
     ai_reply_p50: nonNegativeInteger.nullable(),
     ai_reply_p90: nonNegativeInteger.nullable(),

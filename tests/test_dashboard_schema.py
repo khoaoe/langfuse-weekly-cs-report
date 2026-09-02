@@ -2201,8 +2201,38 @@ def test_weekly_ai_mean_excludes_direct_cs_and_long_turns_use_strictly_more_than
     week = next(row for row in view["weekly"] if row["cohort_week"] == "2026-07-20")
 
     assert week["ai_reply_mean_ai_first"] == pytest.approx((4 + 5) / 2)
+    # The stored numerator, not a rounding of the mean. The direct-CS ticket is
+    # excluded from both, so the sum counts the same population the mean does.
+    assert week["ai_reply_sum_ai_first"] == 4 + 5
     assert week["gt4_turn_with_cs"] == 0
     assert week["gt4_turn_without_cs"] == 2
+
+
+def test_storage_rejects_ai_reply_sum_that_disagrees_with_the_displayed_mean():
+    # The ledger prints the sum and the mean as adjacent cells and the reader
+    # divides one by the other, so drift between them is not a cosmetic bug --
+    # it renders a row that does not add up.
+    value = _snapshot().storage_dict()
+    active_week = value["dashboard"]["views"]["mon_sun"]["weekly"][1]
+    active_week["ai_reply_sum_ai_first"] += 1
+
+    with pytest.raises(ValueError, match="ai_reply_sum_ai_first does not match the mean"):
+        DashboardSnapshot.from_storage_dict(value)
+
+
+def test_storage_rejects_ai_reply_sum_without_any_ai_first_ticket():
+    value = _snapshot().storage_dict()
+    empty_week = next(
+        row
+        for row in value["dashboard"]["views"]["mon_sun"]["weekly"]
+        if row["ai_first_count"] == 0
+    )
+    empty_week["ai_reply_sum_ai_first"] = 1
+
+    with pytest.raises(
+        ValueError, match="ai_reply_sum_ai_first must be 0 without ai_first tickets"
+    ):
+        DashboardSnapshot.from_storage_dict(value)
 
 
 def _snapshot_with_intents(
