@@ -677,6 +677,16 @@ summary.ledgerGroupHeading:focus-visible {
   line-height: 1.1;
 }
 
+/* The unit rides with the number but never competes with it. Set at the
+   display size, "lần/ticket" wrapped onto a second line and doubled the value
+   block's height while the four count cells beside it stayed one line. */
+.ledgerUnit {
+  font-size: 15px;
+  font-weight: 400;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 .ledgerSupport {
   color: var(--muted);
   font-size: 13px;
@@ -918,6 +928,7 @@ summary.ledgerGroupHeading:focus-visible {
   padding: var(--space-3) var(--space-4);
   cursor: pointer;
 }
+
 
 .disclosureHint {
   color: var(--interactive);

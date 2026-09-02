@@ -171,6 +171,14 @@ export interface LedgerCell {
   readonly id: string;
   readonly label: string;
   readonly value: string;
+  /**
+   * The unit that belongs to `value`, rendered subordinate to the number
+   * rather than inside it. A rate cell needs its unit to avoid being misread
+   * as a percentage, but at the 36px display size the unit set as part of the
+   * value wrapped onto a second line and gave "lần/ticket" the same weight as
+   * the number, breaking the one-line rhythm the other cells hold.
+   */
+  readonly unit: string | null;
   /** Null when the cell measured nothing and a share would restate the zero. */
   readonly support: string | null;
   readonly tone: LedgerTone;
@@ -321,7 +329,15 @@ export interface LedgerGroup {
    * it, and hands the ~150px back to the table.
    */
   readonly collapsed: boolean;
-  readonly denominator: string;
+  /**
+   * The one base every cell in the group divides by, or null when the group
+   * has no single base. Group ② has none: "Xong hẳn trong 1 lượt" divides by
+   * ai_end_to_end while "TB lượt/ticket AI First" divides by ai_first, so any
+   * number printed here is wrong for one of the two. It used to print the
+   * ai_end_to_end ticket count, which was both wrong for half the group and a
+   * ticket count captioning a per-response heading.
+   */
+  readonly denominator: string | null;
   readonly cells: readonly LedgerCell[];
 }
 
@@ -355,15 +371,34 @@ export function selectLedger(
       id: "ledger-ai-first",
       label: "AI First",
       value: formatCount(scope.aiFirstCount),
+      unit: null,
       support:
         scope.eligible === 0 ? null : share(scope.aiFirstCount, scope.eligible),
       tone: "brand",
       filterPatch: null,
     },
     {
+      // The outcome the product is judged on: tickets AI closed with no human
+      // in the loop. It is ticket-denominated, so it belongs in this group --
+      // it previously appeared only as the caption of the collapsed group
+      // below, which meant the headline number was folded away by default.
+      id: "ledger-ai-end-to-end",
+      label: "AI xử lý trọn",
+      value: formatCount(scope.aiEndToEndCount),
+      unit: null,
+      support:
+        scope.eligible === 0
+          ? null
+          : share(scope.aiEndToEndCount, scope.eligible),
+      tone: "brand",
+      filterPatch:
+        scope.aiEndToEndCount === 0 ? null : { outcome: "ai_end_to_end" },
+    },
+    {
       id: "ledger-transfer",
       label: "Tổng chuyển CS",
       value: formatCount(scope.transferTotal),
+      unit: null,
       support:
         scope.eligible === 0 ? null : share(scope.transferTotal, scope.eligible),
       tone: "neutral",
@@ -373,6 +408,7 @@ export function selectLedger(
       id: "ledger-direct-cs",
       label: "Chuyển CS ngay từ đầu",
       value: formatCount(scope.directCsCount),
+      unit: null,
       support:
         scope.eligible === 0 ? null : share(scope.directCsCount, scope.eligible),
       tone: "neutral",
@@ -382,13 +418,23 @@ export function selectLedger(
     {
       id: "ledger-reopen",
       label: "Reopen sau AI First",
-      value: `${formatCount(scope.reopenNumerator)} lần`,
+      // Rate leads, count supports. The absolute count rises with volume by
+      // construction -- a week with more AI First tickets reopens more even
+      // when nothing got worse -- so leading with it invited a false "reopen
+      // is climbing" read every time traffic grew. lần/ticket is the number
+      // that compares across weeks and can be held to a target. It also stops
+      // this cell from looking like a fourth member of the count partition
+      // above it, which it never was: those three are composition, this is
+      // quality.
+      value:
+        scope.reopenDenominator === 0
+          ? "—"
+          : formatAverage(scope.reopenNumerator / scope.reopenDenominator),
+      unit: scope.reopenDenominator === 0 ? null : "lần/ticket",
       support:
         scope.reopenDenominator === 0
           ? null
-          : `${formatAverage(
-              scope.reopenNumerator / scope.reopenDenominator,
-            )} lần/ticket · ${formatCount(
+          : `${formatCount(scope.reopenNumerator)} lần trên ${formatCount(
               scope.reopenDenominator,
             )} ticket AI First`,
       tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
@@ -401,6 +447,7 @@ export function selectLedger(
       id: "ledger-first-reply-resolved",
       label: "Xong hẳn trong 1 lượt",
       value: share(scope.resolvedFirstReply, scope.aiEndToEndCount),
+      unit: null,
       support:
         scope.aiEndToEndCount === 0
           ? null
@@ -416,7 +463,8 @@ export function selectLedger(
       value:
         scope.aiReplyMeanAiFirst === null
           ? "—"
-          : `${formatAverage(scope.aiReplyMeanAiFirst)} lượt`,
+          : formatAverage(scope.aiReplyMeanAiFirst),
+      unit: scope.aiReplyMeanAiFirst === null ? null : "lượt",
       support:
         scope.aiFirstCount === 0
           ? null
@@ -437,7 +485,7 @@ export function selectLedger(
     {
       id: "ledger-group-response",
       label: "Theo lượt CS-agent trả lời",
-      denominator: `${formatCount(scope.aiEndToEndCount)} ticket AI xử lý trọn`,
+      denominator: null,
       collapsed: true,
       cells: responseCells,
     },

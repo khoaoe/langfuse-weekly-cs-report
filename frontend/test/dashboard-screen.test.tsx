@@ -265,10 +265,13 @@ describe("DashboardScreen", () => {
       "Tổng chuyển CS7",
     );
     expect(document.getElementById("ledger-reopen")).toHaveTextContent(
-      "Reopen sau AI First4",
+      "Reopen sau AI First0,40 lần/ticket4 lần trên 10 ticket AI First",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
       "Chuyển CS ngay từ đầu210,0%",
+    );
+    expect(document.getElementById("ledger-ai-end-to-end")).toHaveTextContent(
+      "AI xử lý trọn630,0%",
     );
 
     await user.click(screen.getByRole("button", { name: "T2–CN" }));
@@ -283,10 +286,13 @@ describe("DashboardScreen", () => {
       "Tổng chuyển CS3",
     );
     expect(document.getElementById("ledger-reopen")).toHaveTextContent(
-      "Reopen sau AI First2",
+      "Reopen sau AI First0,25 lần/ticket2 lần trên 8 ticket AI First",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
       "Chuyển CS ngay từ đầu110,0%",
+    );
+    expect(document.getElementById("ledger-ai-end-to-end")).toHaveTextContent(
+      "AI xử lý trọn660,0%",
     );
     // The title already names the selected week; repeating it above the KPI
     // cells adds no information.
@@ -626,6 +632,18 @@ describe("DashboardScreen", () => {
     expect(filtersAfterDirectCs).toHaveTextContent(
       "Kết quả: Chuyển CS ngay từ đầu",
     );
+
+    // "AI xử lý trọn" narrows to exactly the tickets it counts, so it opens
+    // the Explorer the same way "Chuyển CS ngay từ đầu" does.
+    await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
+
+    const aiEndToEndCell = document.getElementById("ledger-ai-end-to-end");
+    await user.click(within(aiEndToEndCell as HTMLElement).getByRole("button"));
+    expect(
+      screen.getByRole("region", { name: "Bộ lọc đang áp dụng" }),
+    ).toHaveTextContent("Kết quả: AI xử lý trọn");
+
+    await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
 
     // AI First and reopen have no matching Explorer filter today, so they
     // stay plain text rather than opening a filter narrower than the number.

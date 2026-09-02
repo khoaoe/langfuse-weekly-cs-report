@@ -208,7 +208,7 @@ describe("selected-week decision scope", () => {
     expect(directCs?.support).not.toBeNull();
   });
 
-  it("uses a count as the primary value in every KPI cell, grouped by denominator tier", () => {
+  it("leads each KPI cell with the number that compares across weeks, and only prints a group denominator the whole group shares", () => {
     const reportingWeek: WeeklyReportRow = {
       ...latest,
       total_tickets: 935,
@@ -245,29 +245,54 @@ describe("selected-week decision scope", () => {
       (group) => group.id === "ledger-group-ticket",
     );
     expect(ticketGroup?.denominator).toBe("935 ticket tuần này");
+    // "AI xử lý trọn" is the outcome the whole product is judged on, and it
+    // used to exist only as the caption of the collapsed group below -- a
+    // ticket count worn as a per-response denominator. It belongs here, in the
+    // group whose denominator really is tickets, reading as a funnel:
+    // AI First -> đóng trọn -> chuyển CS -> chuyển ngay từ đầu.
     expect(ticketGroup?.cells).toMatchObject([
-      { id: "ledger-ai-first", value: "727", support: "77,8%" },
-      { id: "ledger-transfer", value: "208", support: "22,2%" },
-      { id: "ledger-direct-cs", value: "28", support: "3,0%" },
+      { id: "ledger-ai-first", value: "727", unit: null, support: "77,8%" },
       {
+        id: "ledger-ai-end-to-end",
+        value: "406",
+        unit: null,
+        support: "43,4%",
+      },
+      { id: "ledger-transfer", value: "208", unit: null, support: "22,2%" },
+      { id: "ledger-direct-cs", value: "28", unit: null, support: "3,0%" },
+      {
+        // Rate leads, count supports. The absolute count rises with volume by
+        // construction, so it cannot be read across weeks; lần/ticket can.
+        // The unit is a separate field, not glued into the value: at the 36px
+        // display size "0,21 lần/ticket" wrapped to two lines and doubled the
+        // cell's value block while its four neighbours stayed on one.
         id: "ledger-reopen",
-        value: "152 lần",
-        support: "0,21 lần/ticket · 727 ticket AI First",
+        value: "0,21",
+        unit: "lần/ticket",
+        support: "152 lần trên 727 ticket AI First",
       },
     ]);
 
     const responseGroup = groups.find(
       (group) => group.id === "ledger-group-response",
     );
+    // No group-level denominator: the two cells below do not share one.
+    // "Xong hẳn trong 1 lượt" divides by ai_end_to_end (406) while
+    // "TB lượt/ticket AI First" divides by ai_first (727), so any single
+    // number in the heading is wrong for one of them. Each cell states its
+    // own base in its support line instead.
+    expect(responseGroup?.denominator).toBeNull();
     expect(responseGroup?.cells).toMatchObject([
       {
         id: "ledger-first-reply-resolved",
         value: "79,3%",
+        unit: null,
         support: "322 trong 406 ticket AI xử lý trọn",
       },
       {
         id: "ledger-replies-per-ticket",
-        value: "1,27 lượt",
+        value: "1,27",
+        unit: "lượt",
         support: "trên 727 ticket AI First",
       },
     ]);

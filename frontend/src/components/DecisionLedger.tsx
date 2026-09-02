@@ -132,9 +132,11 @@ export function DecisionLedger({
             <Block key={group.id} className={styles.ledgerGroupBlock}>
               <Heading id={group.id} className={styles.ledgerGroupHeading}>
                 <span className={styles.ledgerGroupLabel}>{group.label}</span>
-                <span className={styles.ledgerGroupDenominator}>
-                  {group.denominator}
-                </span>
+                {group.denominator === null ? null : (
+                  <span className={styles.ledgerGroupDenominator}>
+                    {group.denominator}
+                  </span>
+                )}
               </Heading>
               <div
                 id={group.id === "ledger-group-ticket" ? "kpiGrid" : undefined}
@@ -150,7 +152,17 @@ export function DecisionLedger({
                       className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
                     >
                       <span className={styles.ledgerLabel}>{cell.label}</span>
-                      <span className={styles.ledgerValue}>{cell.value}</span>
+                      <span className={styles.ledgerValue}>
+                        {cell.value}
+                        {cell.unit === null ? null : (
+                          <>
+                            {" "}
+                            <span className={styles.ledgerUnit}>
+                              {cell.unit}
+                            </span>
+                          </>
+                        )}
+                      </span>
                       {cell.support === null ? null : (
                         <span className={styles.ledgerSupport}>{cell.support}</span>
                       )}
@@ -167,7 +179,17 @@ export function DecisionLedger({
                         onClick={() => onCellSelect(cell.filterPatch as Partial<TicketFilters>)}
                       >
                         <span className={styles.ledgerLabel}>{cell.label}</span>
-                        <span className={styles.ledgerValue}>{cell.value}</span>
+                        <span className={styles.ledgerValue}>
+                        {cell.value}
+                        {cell.unit === null ? null : (
+                          <>
+                            {" "}
+                            <span className={styles.ledgerUnit}>
+                              {cell.unit}
+                            </span>
+                          </>
+                        )}
+                      </span>
                         {cell.support === null ? null : (
                           <span className={styles.ledgerSupport}>{cell.support}</span>
                         )}
