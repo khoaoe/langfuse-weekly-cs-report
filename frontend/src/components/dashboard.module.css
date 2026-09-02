@@ -930,12 +930,6 @@ summary.ledgerGroupHeading:focus-visible {
 }
 
 
-.disclosureHint {
-  color: var(--interactive);
-  font-size: 13px;
-  font-weight: 500;
-}
-
 .qualityContent {
   display: grid;
   gap: var(--space-4);

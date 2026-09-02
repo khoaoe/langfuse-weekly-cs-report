@@ -46,7 +46,6 @@ import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
 import { CsatSection } from "./CsatSection";
 import type { CsatGrouping } from "./CsatBreakdownTable";
-import { DataTrustSection } from "./DataTrustSection";
 import { EntryCoverageSection } from "./EntryCoverageSection";
 import { TransferDiagnostics } from "./TransferDiagnostics";
 import belowFoldStyles from "./below-fold.module.css";
@@ -1238,8 +1237,6 @@ export function BelowFold({
         onShowStuckTickets={() => onShowStuckTickets(effectiveWeek)}
         onTicketFilterSelect={onTicketFilterSelect}
       />
-
-      <DataTrustSection snapshot={snapshot} />
     </>
   );
 }

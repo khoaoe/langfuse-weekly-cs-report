@@ -30,8 +30,10 @@ function qualityTone(score: number): DataQualityTone {
  *
  * SPEC-v2 §5.13 rules the blended `score` out of the UI: it mixes freshness
  * with five coverage dimensions measured over a different scope than the page
- * shows, so no reader can act on it. `DataTrustSection` states the underlying
- * facts instead. Only `ageMs` and `freshnessOk` are safe to render.
+ * shows, so no reader can act on it. `DataTrustSection` used to state the
+ * underlying facts; it was removed on 2026-09-02, so nothing renders the
+ * coverage dimensions now. Only `ageMs` and `freshnessOk` are safe to render,
+ * and the header freshness badge is their one remaining consumer.
  */
 export function calculateDataQualityScore(
   snapshot: DashboardSnapshot,

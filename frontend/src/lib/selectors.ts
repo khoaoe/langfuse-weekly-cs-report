@@ -492,61 +492,6 @@ export function selectLedger(
   ];
 }
 
-/**
- * The P0 coverage floors from SPEC-v2 §5.3, which gate whether a dimension is
- * safe to slice by. Coverage below a floor does not make a number wrong; it
- * makes the *segment* view incomplete, because the missing share cannot be
- * attributed to any bucket.
- */
-export const COVERAGE_FLOORS = {
-  issue_category: 0.9,
-  tpe: 0.85,
-} as const;
-
-export const COVERAGE_LABELS: Readonly<Record<string, string>> = {
-  issue_category: "Category",
-  app: "App",
-  tpe: "TPE",
-  intent: "Intent",
-  skill: "Skill",
-};
-
-export interface CoverageDimension {
-  readonly key: string;
-  readonly label: string;
-  readonly value: number;
-  readonly floor: number | null;
-  /** True only when a P0 floor exists and the measured value is under it. */
-  readonly belowFloor: boolean;
-}
-
-/** Every coverage dimension, weakest first. */
-export function selectCoverage(
-  snapshot: DashboardSnapshot,
-): CoverageDimension[] {
-  return Object.entries(snapshot.coverage)
-    .map(([key, value]) => {
-      const floor =
-        key in COVERAGE_FLOORS
-          ? COVERAGE_FLOORS[key as keyof typeof COVERAGE_FLOORS]
-          : null;
-      return {
-        key,
-        label: COVERAGE_LABELS[key] ?? key,
-        value,
-        floor,
-        belowFloor: floor !== null && value < floor,
-      };
-    })
-    .sort((left, right) => left.value - right.value);
-}
-
-export function selectCoverageBelowFloor(
-  snapshot: DashboardSnapshot,
-): CoverageDimension[] {
-  return selectCoverage(snapshot).filter((item) => item.belowFloor);
-}
-
 export interface AttentionItem {
   readonly id: string;
   readonly severity: "critical" | "warning";
@@ -594,7 +539,9 @@ export function selectAttentionItems(
   // over every ticket in the whole period, so putting one beside a single
   // week's numbers compares two different denominators and reads as "this
   // week is broken" when nothing about this week changed (SPEC-v2 §5.13).
-  // `DataTrustSection` reports them where the denominator can be stated.
+  // The "Dữ liệu này đáng tin tới đâu" panel used to state them with their
+  // own denominator; it was removed on 2026-09-02 and nothing reports them
+  // in the UI now.
 
   return items.slice(0, 3);
 }

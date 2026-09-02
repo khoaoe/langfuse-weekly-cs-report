@@ -132,6 +132,25 @@ describe("App shell operating states", () => {
     expect(screen.queryByTestId("qualityChip")).toBeNull();
   });
 
+  it("never renders the retired data-trust section or its nav entry", () => {
+    // The last surviving surface of the same idea. `#dqBadge` and
+    // `qualityChip` above were retired for mixing scopes; the "Dữ liệu này
+    // đáng tin tới đâu" panel repeated whole-period coverage next to a page
+    // scoped to one week, and its only other line -- when the snapshot was
+    // taken -- is already in the header. Removed on request 2026-09-02.
+    const view = render(shell(baseSnapshot));
+    expect(document.getElementById("data-trust")).toBeNull();
+    expect(screen.queryByText(/Dữ liệu này đáng tin tới đâu/)).toBeNull();
+    expect(screen.queryByText("Chiều phân nhóm")).toBeNull();
+    expect(screen.queryByText("Sàn P0")).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Độ tin cậy" }),
+    ).toBeNull();
+
+    view.rerender(shell(null));
+    expect(document.getElementById("data-trust")).toBeNull();
+  });
+
   it("tracks the section whose top has scrolled under the sticky header, and stops updating after unmount", () => {
     const view = render(shell(baseSnapshot));
     const header = screen.getByRole("banner");
