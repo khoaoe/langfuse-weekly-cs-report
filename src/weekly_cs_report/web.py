@@ -334,7 +334,39 @@ def _explain(dossier: EscalationDossier) -> tuple[Narration | None, str]:
     return raw, "ok"
 
 
-class _AbTestBackgroundCache:
+class _BackgroundLoop:
+    """Thread lifecycle shared by the two background refreshers below.
+
+    Subclasses supply `_refresh_once`; running it on a timer and shutting it
+    down cleanly lives here. Only the lifecycle is shared -- each refresher
+    keeps its own typed `get`, because the two callers read different shapes
+    (the AB-test one reports an error code, the model list hands back a
+    defensive copy).
+    """
+
+    _interval_seconds: float
+
+    def _start_thread(self) -> None:
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def close(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=5.0)
+
+    def _run(self) -> None:
+        while not self._stop_event.is_set():
+            self._refresh_once()
+            self._stop_event.wait(self._interval_seconds)
+
+    def _refresh_once(self) -> None:  # pragma: no cover - subclass duty
+        raise NotImplementedError
+
+
+class _AbTestBackgroundCache(_BackgroundLoop):
     """Refreshes the AB Test default window on its own schedule.
 
     A custom time-range read still goes through the per-request path in
@@ -356,19 +388,15 @@ class _AbTestBackgroundCache:
         loader: Callable[[], dict[str, object]],
         *,
         interval_seconds: float = 300.0,
-        monotonic: Callable[[], float] = time.monotonic,
         cache_path: Path | None = None,
     ) -> None:
         self._loader = loader
         self._interval_seconds = interval_seconds
-        self._monotonic = monotonic
         self._cache_path = cache_path
         self._lock = threading.Lock()
         self._payload: dict[str, object] | None = None
-        self._last_success_at: float | None = None
         self._last_error_code: str | None = None
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._start_thread()
         if cache_path is not None:
             try:
                 cached = load_ab_test_cache(cache_path)
@@ -377,18 +405,6 @@ class _AbTestBackgroundCache:
                 cached = None
             if cached is not None:
                 self._payload = cached.payload
-
-    def start(self) -> None:
-        self._thread.start()
-
-    def close(self) -> None:
-        self._stop_event.set()
-        self._thread.join(timeout=5.0)
-
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            self._refresh_once()
-            self._stop_event.wait(self._interval_seconds)
 
     def _refresh_once(self) -> None:
         try:
@@ -400,7 +416,6 @@ class _AbTestBackgroundCache:
             return
         with self._lock:
             self._payload = payload
-            self._last_success_at = self._monotonic()
             self._last_error_code = None
         emit_event("ab_test_background_refresh_success")
         if self._cache_path is not None:
@@ -421,7 +436,7 @@ class _AbTestBackgroundCache:
             return self._payload, self._last_error_code
 
 
-class _ModelListBackgroundCache:
+class _ModelListBackgroundCache(_BackgroundLoop):
     """Refreshes the AB-test model picker's candidate list on its own schedule.
 
     `list_recent_models` pages every ticket trace in its lookback window (see
@@ -438,18 +453,14 @@ class _ModelListBackgroundCache:
         loader: Callable[[], list[str]],
         *,
         interval_seconds: float = _MODEL_LIST_BACKGROUND_INTERVAL_SECONDS,
-        monotonic: Callable[[], float] = time.monotonic,
         cache_path: Path | None = None,
     ) -> None:
         self._loader = loader
         self._interval_seconds = interval_seconds
-        self._monotonic = monotonic
         self._cache_path = cache_path
         self._lock = threading.Lock()
         self._models: list[str] | None = None
-        self._last_success_at: float | None = None
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._start_thread()
         if cache_path is not None:
             try:
                 cached = load_model_list_cache(cache_path)
@@ -459,18 +470,6 @@ class _ModelListBackgroundCache:
             if cached is not None:
                 self._models = list(cached.models)
 
-    def start(self) -> None:
-        self._thread.start()
-
-    def close(self) -> None:
-        self._stop_event.set()
-        self._thread.join(timeout=5.0)
-
-    def _run(self) -> None:
-        while not self._stop_event.is_set():
-            self._refresh_once()
-            self._stop_event.wait(self._interval_seconds)
-
     def _refresh_once(self) -> None:
         try:
             models = self._loader()
@@ -479,7 +478,6 @@ class _ModelListBackgroundCache:
             return
         with self._lock:
             self._models = models
-            self._last_success_at = self._monotonic()
         emit_event("model_list_background_refresh_success")
         if self._cache_path is not None:
             try:

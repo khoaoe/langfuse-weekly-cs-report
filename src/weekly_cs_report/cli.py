@@ -66,6 +66,18 @@ REOPEN_DISCOVERY_PATH = (
     PROJECT_ROOT / "artifacts" / "reopen_discovery" / "reasons.csv"
 )
 FRESHDESK_AGENT_CONFIG_PATH = PROJECT_ROOT / "config" / "freshdesk_agents.v1.json"
+
+# Seed scale for `discover-agents`, which re-approves it into
+# FRESHDESK_AGENT_CONFIG_PATH. The key is the Freshdesk survey ID; the values
+# are that survey's raw rating codes. Not read at report time -- the approved
+# config file is. A new survey means a new entry here plus a fresh discovery run.
+FRESHDESK_SEED_SURVEY_SCALES = {
+    "43000076179": {
+        "positive": (103,),
+        "neutral": (100,),
+        "negative": (-103,),
+    }
+}
 FRESHDESK_RECONCILIATION_CONFIG_PATH = (
     PROJECT_ROOT / "config" / "freshdesk_reconciliation_agents.v1.json"
 )
@@ -1651,13 +1663,7 @@ def _run_discover_agents_command(args: argparse.Namespace) -> dict[str, object]:
             client.get_ticket_fields(),
             "Admin CS ZaloPay",
         )
-        survey_scales = {
-            "43000076179": {
-                "positive": (103,),
-                "neutral": (100,),
-                "negative": (-103,),
-            }
-        }
+        survey_scales = FRESHDESK_SEED_SURVEY_SCALES
         candidate = FreshdeskAgentConfig(
             bot_agent_ids=frozenset({bot_agent_id}),
             survey_scales=survey_scales,

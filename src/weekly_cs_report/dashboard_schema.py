@@ -260,12 +260,15 @@ class DashboardSnapshot:
 
     def storage_dict(self) -> dict[str, object]:
         tickets = tuple(_validated_ticket_dict(ticket) for ticket in self.tickets)
-        _validate_projected_intent_frequency(self.dashboard_dict(), tickets)
-        _validate_entry_coverage_records(self.entry_coverage_tickets)
+        # One pass, not two: `dashboard_dict` already deep-copies and runs the
+        # full validator (including `_validate_projected_intent_frequency` and
+        # `_validate_entry_coverage_records`), so calling it twice validated
+        # the same payload twice and threw the first copy away.
+        dashboard = self.dashboard_dict()
         return {
             "schema_version": _STORAGE_VERSION,
             "generated_at": _utc_iso(self.generated_at),
-            "dashboard": self.dashboard_dict(),
+            "dashboard": dashboard,
             "tickets": list(tickets),
             "entry_coverage_tickets": [
                 _entry_coverage_record_dict(record)
