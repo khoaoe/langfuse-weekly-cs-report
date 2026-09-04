@@ -351,10 +351,14 @@ export interface LedgerGroup {
   /**
    * Whether the group starts folded away. SPEC-v2 §5.5 asks for exactly 4 KPI
    * above the fold at 1440x900 and says to cut ① rather than ② when there is
-   * not enough room. Measured on production data, both groups expanded pushed
-   * the first row of ② to y=862 -- no rows visible at all. Folding the
-   * per-response group keeps every number one click away instead of dropping
-   * it, and hands the ~150px back to the table.
+   * not enough room. That once forced group ② closed: expanded, it pushed the
+   * first table row to y=862 with no row visible at all.
+   *
+   * Re-measured 2026-09-04 after the ledger was restructured: expanded now
+   * puts the first row at y=849 with 2 rows in view, and folding buys back
+   * 112px -- about two more rows. Two visible rows already say "the table
+   * continues below", which is all the fold has to do; four metrics parked
+   * behind a click cost more than the rows they buy. Both groups now open.
    */
   readonly collapsed: boolean;
   /**
@@ -439,8 +443,18 @@ export function selectLedger(
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
     },
     {
+      // Same tickets as outcome `direct_cs`, read from the other side: CS
+      // answered first because AI never gave a substantive reply. CS asked
+      // for "CS First" in the 2026-08 review; it already existed here under
+      // a routing name, so this is a rename, not a fifth number.
+      // It stays in its original slot: the group reads entry -> win -> handoff
+      // -> part of that handoff -> quality, and reopen is a rate that must
+      // stay last so it is not read as a fourth member of the count partition.
+      // AI First + CS First falls short of `eligible` by `unclassified` --
+      // tickets with no classifiable trace. Those are a data-quality bucket,
+      // never CS work, so `eligible - aiFirst` must not be used here.
       id: "ledger-direct-cs",
-      label: "Chuyển CS ngay từ đầu",
+      label: "CS First",
       value: formatCount(scope.directCsCount),
       unit: null,
       support:
@@ -558,7 +572,7 @@ export function selectLedger(
       id: "ledger-group-response",
       label: "Theo lượt CS-agent trả lời",
       denominator: null,
-      collapsed: true,
+      collapsed: false,
       cells: responseCells,
     },
   ];

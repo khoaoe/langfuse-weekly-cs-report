@@ -454,7 +454,8 @@ export function AppShell({
             <p>
               AI xử lý trọn là ticket kết thúc ở AI. AI trả lời rồi chuyển CS là
               ticket đã có phản hồi AI trước khi bàn giao. Chuyển CS ngay từ đầu
-              là CS nhận ticket mà AI chưa trả lời thực chất. Chưa phân loại là
+              là CS nhận ticket mà AI chưa trả lời thực chất; ledger gọi chính
+              nhóm này là CS First. Chưa phân loại là
               ticket chưa đủ tín hiệu để kết luận.
             </p>
             <p>

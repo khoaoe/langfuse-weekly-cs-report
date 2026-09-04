@@ -268,7 +268,7 @@ describe("DashboardScreen", () => {
       "Reopen sau AI First0,40 lần/ticket4 lần trên 10 ticket AI First",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
-      "Chuyển CS ngay từ đầu210,0%",
+      "CS First210,0%",
     );
     expect(document.getElementById("ledger-ai-end-to-end")).toHaveTextContent(
       "AI xử lý trọn630,0%",
@@ -289,7 +289,7 @@ describe("DashboardScreen", () => {
       "Reopen sau AI First0,25 lần/ticket2 lần trên 8 ticket AI First",
     );
     expect(document.getElementById("ledger-direct-cs")).toHaveTextContent(
-      "Chuyển CS ngay từ đầu110,0%",
+      "CS First110,0%",
     );
     expect(document.getElementById("ledger-ai-end-to-end")).toHaveTextContent(
       "AI xử lý trọn660,0%",

@@ -253,7 +253,10 @@ describe("selected-week decision scope", () => {
     // used to exist only as the caption of the collapsed group below -- a
     // ticket count worn as a per-response denominator. It belongs here, in the
     // group whose denominator really is tickets, reading as a funnel:
-    // AI First -> đóng trọn -> chuyển CS -> chuyển ngay từ đầu.
+    // AI First -> đóng trọn -> chuyển CS -> phần chuyển ngay từ đầu (CS First).
+    // AI First and CS First do not sum to the population: `unclassified`
+    // tickets have no classifiable trace and belong to neither side, which is
+    // why CS First reads `direct_cs` and never `eligible - aiFirst`.
     expect(ticketGroup?.cells).toMatchObject([
       { id: "ledger-ai-first", value: "727", unit: null, support: "77,8%" },
       {
