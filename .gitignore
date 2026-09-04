@@ -31,4 +31,15 @@ playwright-report/
 
 explore/
 .claude/
+docs/
 
+# Working docs stay local: only README.md ships with the repo.
+AGENTS.md
+CLAUDE.md
+CONTEXT.md
+DESIGN.md
+PRODUCT.md
+.impeccable/
+
+.pytest-tmp/
+.e2e-tmp/
