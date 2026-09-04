@@ -19,6 +19,10 @@ from .runtime_logging import emit_event
 
 _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _AUTOMATIC_RETRY_DELAY = timedelta(seconds=60)
+# The heartbeat only *asks*; the TTL still decides. Asking every minute
+# keeps a settled snapshot within a minute of its 300s expiry without
+# adding a single extra upstream read.
+_HEARTBEAT_INTERVAL_SECONDS = 60.0
 _MANUAL_REFRESH_COOLDOWN = timedelta(seconds=60)
 _KEEP_SNAPSHOT = object()
 
@@ -195,6 +199,8 @@ class SnapshotManager:
             self._next_automatic_retry_at: datetime | None = None
             self._next_manual_refresh_at: datetime | None = None
             self._closed = False
+        self._heartbeat_stop = threading.Event()
+        self._heartbeat_thread: threading.Thread | None = None
 
     def get(self) -> CacheView:
         with self._lock:
@@ -234,12 +240,64 @@ class SnapshotManager:
             return True
         return True
 
+    def start_background_refresh(
+        self,
+        *,
+        interval_seconds: float = _HEARTBEAT_INTERVAL_SECONDS,
+    ) -> None:
+        """Keep the snapshot fresh when nobody is looking at it.
+
+        The TTL is only ever consulted from ``get()``, so without this the
+        dashboard is live-on-open and nothing else: leave it unopened
+        overnight and the first reader next morning is served yesterday's
+        numbers, then waits out a full pipeline run. This ticks ``get()`` on
+        the manager's behalf, which means the refresh it triggers is the same
+        one a reader triggers -- same TTL, same single-flight ``_future``,
+        same 60s backoff after a failure. Nothing here decides to refresh;
+        it only makes sure someone asks.
+
+        Opt-in, and started only by the serving process: a test or a CLI that
+        builds a manager must not acquire a thread that calls Langfuse.
+        """
+        with self._lock:
+            if self._closed or self._heartbeat_thread is not None:
+                return
+            thread = threading.Thread(
+                target=self._heartbeat,
+                args=(interval_seconds,),
+                name="dashboard-snapshot-heartbeat",
+                daemon=True,
+            )
+            self._heartbeat_thread = thread
+        thread.start()
+
+    def _heartbeat(self, interval_seconds: float) -> None:
+        # Waiting first, not last: startup already reads the snapshot, and a
+        # tick landing on top of that would only contend for the same lock.
+        while not self._heartbeat_stop.wait(interval_seconds):
+            try:
+                self.get()
+            except Exception:
+                # A refresh failure is already recorded on the view by
+                # _refresh; what reaches here is the read path itself
+                # breaking -- a clock that raises, say. Letting that kill the
+                # loop would silently return the process to live-on-open,
+                # which is the exact failure this method exists to prevent.
+                _emit_event_safely("heartbeat_tick_failed", code="tick_failed")
+
     def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
             self._closed = True
+            thread = self._heartbeat_thread
+            self._heartbeat_thread = None
             self._cancel_event.set()
+        # Join outside the lock: the heartbeat takes it on every tick, so
+        # joining while holding it deadlocks shutdown.
+        self._heartbeat_stop.set()
+        if thread is not None:
+            thread.join(timeout=5.0)
         self._executor.shutdown(wait=True)
 
     @property

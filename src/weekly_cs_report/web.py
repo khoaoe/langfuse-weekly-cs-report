@@ -166,6 +166,7 @@ _ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+\Z")
 _FRONTEND_MODES = frozenset({"spa", "legacy"})
 _REFRESH_DEADLINE_ENV = "DASHBOARD_REFRESH_DEADLINE_SECONDS"
 _TRACE_PAGE_LIMIT_ENV = "DASHBOARD_MAX_TRACE_PAGES"
+_BACKGROUND_REFRESH_ENV = "DASHBOARD_BACKGROUND_REFRESH"
 _REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300"
 _TRACE_PAGE_LIMIT_ERROR = "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500"
 
@@ -1292,6 +1293,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             cancel_event=refresh_cancel_event,
         )
+        if _background_refresh_enabled():
+            # Without this the snapshot is only ever recomputed by a reader,
+            # so an unwatched dashboard ages indefinitely and the next person
+            # to open it pays for a full refresh. manager.close() in the
+            # finally below stops the thread.
+            manager.start_background_refresh()
         app = create_app(
             manager, settings=web_settings, runtime_directory=runtime_directory
         )
@@ -1401,6 +1408,19 @@ def _has_identity(request: Request, header_name: str) -> bool:
             for character in value
         )
     )
+
+
+def _background_refresh_enabled() -> bool:
+    """Whether the serving process keeps the snapshot warm on its own.
+
+    On by default: an operator opening the dashboard expects today's numbers,
+    not a stale page plus a pipeline wait. The switch exists for a machine
+    that must not reach Langfuse on a timer -- a local demo against a
+    persisted snapshot, or a second process brought up beside the real one.
+    """
+
+    value = os.environ.get(_BACKGROUND_REFRESH_ENV, "").strip().lower()
+    return value not in {"0", "off", "false", "no"}
 
 
 def _refresh_timeout_seconds() -> float:

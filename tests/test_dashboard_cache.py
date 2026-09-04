@@ -241,6 +241,84 @@ def test_repeated_get_inside_default_300_second_ttl_does_not_reload(tmp_path: Pa
         assert len(calls) == 1
 
 
+def test_background_refresh_reloads_a_stale_snapshot_with_no_reader(tmp_path: Path):
+    """A snapshot only ever refreshed by readers goes stale whenever nobody looks."""
+    calls: list[datetime] = []
+    reloaded = threading.Event()
+    clock = FakeClock(NOW)
+
+    def loader() -> DashboardSnapshot:
+        calls.append(clock())
+        if len(calls) >= 2:
+            reloaded.set()
+        return _snapshot(clock())
+
+    with _manager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        clock,
+    ) as manager:
+        manager.get()
+        assert manager.wait_for_idle(2) is True
+        assert len(calls) == 1
+
+        clock.advance(timedelta(seconds=300))
+        manager.start_background_refresh(interval_seconds=0.01)
+
+        # Nothing calls get() from here on: the reload has to come from the
+        # manager's own heartbeat or not at all.
+        assert reloaded.wait(5) is True
+        assert manager.wait_for_idle(2) is True
+        assert manager.peek().status == "ready"
+
+
+def test_background_refresh_respects_the_ttl_instead_of_looping_on_langfuse(
+    tmp_path: Path,
+):
+    """A heartbeat that refreshes on its own cadence hammers Langfuse every tick."""
+    calls: list[datetime] = []
+    clock = FakeClock(NOW)
+
+    def loader() -> DashboardSnapshot:
+        calls.append(clock())
+        return _snapshot(clock())
+
+    with _manager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        clock,
+    ) as manager:
+        manager.get()
+        assert manager.wait_for_idle(2) is True
+
+        clock.advance(timedelta(seconds=299))
+        manager.start_background_refresh(interval_seconds=0.01)
+        assert threading.Event().wait(0.3) is False
+
+        assert len(calls) == 1
+
+
+def test_close_stops_the_background_refresh_thread(tmp_path: Path):
+    """A daemon heartbeat outliving close() keeps reading Langfuse after shutdown."""
+    clock = FakeClock(NOW)
+
+    def loader() -> DashboardSnapshot:
+        return _snapshot(clock())
+
+    manager = SnapshotManager(
+        loader,
+        ProtectedSnapshotStore(tmp_path / "cache"),
+        clock=clock,
+    )
+    manager.start_background_refresh(interval_seconds=0.01)
+    thread = manager._heartbeat_thread
+    assert thread is not None and thread.is_alive()
+
+    manager.close()
+
+    assert thread.is_alive() is False
+
+
 def test_long_refresh_ttl_starts_at_successful_commit(tmp_path: Path):
     """Using report generated_at makes a slow refresh stale as soon as it commits."""
     clock = FakeClock(NOW)

@@ -1743,7 +1743,11 @@ def test_main_closes_manager_and_client_when_app_construction_fails(
     class FakeManager:
         def __init__(self, *_args, **_kwargs):
             self.close_calls = 0
+            self.background_refresh_calls = 0
             managers.append(self)
+
+        def start_background_refresh(self):
+            self.background_refresh_calls += 1
 
         def close(self):
             self.close_calls += 1
