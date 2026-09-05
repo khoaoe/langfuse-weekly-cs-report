@@ -10,7 +10,7 @@ import satisfactionStyles from "./satisfaction-badge.module.css";
 
 export type CsatGrouping = "outcome" | "skill" | "issue_category";
 
-const OUTCOME_ORDER: readonly Outcome[] = [
+export const OUTCOME_ORDER: readonly Outcome[] = [
   "ai_end_to_end",
   "ai_then_cs",
   "direct_cs",

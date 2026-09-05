@@ -808,6 +808,7 @@ export function scopeSnapshotToDayRange(
     csat: null,
     outcome_reconciliation: null,
     entry_coverage: null,
+    ai_review: null,
     rule_gt4: {
       gt4_turn_total: totals.gt4TurnWithCs + totals.gt4TurnWithoutCs,
       gt4_turn_with_cs: totals.gt4TurnWithCs,

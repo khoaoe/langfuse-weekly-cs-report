@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import type {
+  AiReview,
+  AiReviewBucket,
   Csat,
   CsatFeedbackEntry,
   CsatWeek,
@@ -19,11 +21,14 @@ import { selectScopeDays } from "../lib/report-scope";
 import type { DayRangeScope } from "../lib/report-scope";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
+import { AiReviewBreakdownTable } from "./AiReviewBreakdownTable";
+import { AiReviewCharts } from "./AiReviewCharts";
 import {
   CsatBreakdownTable,
   csatBreakdownOptions,
   csatGroupingLabel,
   CsatGroupingField,
+  OUTCOME_ORDER,
   type CsatGrouping,
 } from "./CsatBreakdownTable";
 import { CsatCharts } from "./CsatCharts";
@@ -191,6 +196,119 @@ function selectCsatScope(
     return csat.by_week[effectiveWeek] ?? null;
   }
   return aggregateWeeks(Object.values(csat.by_week));
+}
+
+const AI_REVIEW_COUNT_FIELDS = [
+  "reviewed_ticket_count",
+  "rated_ticket_count",
+  "satisfied_count",
+  "satisfied_with_edit_count",
+  "needs_edit_count",
+] as const;
+
+type AiReviewCountFields = Record<(typeof AI_REVIEW_COUNT_FIELDS)[number], number>;
+
+function sumAiReviewCounts(rows: readonly AiReviewCountFields[]): AiReviewCountFields {
+  return rows.reduce(
+    (total, row) => {
+      const next = { ...total };
+      for (const field of AI_REVIEW_COUNT_FIELDS) {
+        next[field] += row[field];
+      }
+      return next;
+    },
+    {
+      reviewed_ticket_count: 0,
+      rated_ticket_count: 0,
+      satisfied_count: 0,
+      satisfied_with_edit_count: 0,
+      needs_edit_count: 0,
+    },
+  );
+}
+
+function aggregateAiReviewDimension(
+  buckets: readonly AiReviewBucket[],
+  dimension: keyof AiReviewBucket["by_dimension"],
+): AiReviewBucket["by_dimension"][typeof dimension] {
+  const byValue = new Map<string, { value: string } & AiReviewCountFields>();
+  for (const bucket of buckets) {
+    for (const row of bucket.by_dimension[dimension]) {
+      const current = byValue.get(row.value);
+      byValue.set(row.value, {
+        value: row.value,
+        ...sumAiReviewCounts(current === undefined ? [row] : [current, row]),
+      });
+    }
+  }
+  return [...byValue.values()].sort(
+    (left, right) =>
+      right.reviewed_ticket_count - left.reviewed_ticket_count ||
+      left.value.localeCompare(right.value, "vi"),
+  );
+}
+
+/**
+ * Weeks/days folded into one bucket, mirroring `aggregateWeeks()` above but for
+ * hậu kiểm's own shape (two denominators, no feedback text, an extra
+ * `by_review_count` rollup the section doesn't render).
+ */
+function aggregateAiReviewBuckets(buckets: readonly AiReviewBucket[]): AiReviewBucket | null {
+  if (buckets.length === 0) {
+    return null;
+  }
+  const byReviewCountValue = new Map<string, { value: string } & AiReviewCountFields>();
+  for (const bucket of buckets) {
+    for (const row of bucket.by_review_count) {
+      const current = byReviewCountValue.get(row.value);
+      byReviewCountValue.set(row.value, {
+        value: row.value,
+        ...sumAiReviewCounts(current === undefined ? [row] : [current, row]),
+      });
+    }
+  }
+  return {
+    ...sumAiReviewCounts(buckets),
+    by_outcome: Object.fromEntries(
+      OUTCOME_ORDER.map((outcome) => [
+        outcome,
+        sumAiReviewCounts(buckets.map((bucket) => bucket.by_outcome[outcome])),
+      ]),
+    ) as AiReviewBucket["by_outcome"],
+    by_dimension: {
+      skill: aggregateAiReviewDimension(buckets, "skill"),
+      issue_category: aggregateAiReviewDimension(buckets, "issue_category"),
+    },
+    by_review_count: [...byReviewCountValue.values()].sort(
+      (left, right) => Number(left.value) - Number(right.value),
+    ),
+  };
+}
+
+function selectAiReviewScope(
+  aiReview: AiReview,
+  effectiveWeek: string,
+  scopeWeeks?: readonly string[],
+  scopeDays?: readonly string[] | null,
+): AiReviewBucket | null {
+  if (scopeDays != null) {
+    return aggregateAiReviewBuckets(
+      scopeDays
+        .map((day) => aiReview.by_day[day])
+        .filter((day): day is AiReviewBucket => day !== undefined),
+    );
+  }
+  if (scopeWeeks !== undefined) {
+    return aggregateAiReviewBuckets(
+      scopeWeeks
+        .map((week) => aiReview.by_week[week])
+        .filter((week): week is AiReviewBucket => week !== undefined),
+    );
+  }
+  if (effectiveWeek !== "") {
+    return aiReview.by_week[effectiveWeek] ?? null;
+  }
+  return aggregateAiReviewBuckets(Object.values(aiReview.by_week));
 }
 
 interface FeedbackWithBucket extends CsatFeedbackEntry {
@@ -440,6 +558,8 @@ function FeedbackDisclosure({
 
 export interface CsatSectionProps {
   readonly csat: Csat | null;
+  /** CS hậu kiểm (AI review), null when the job has never run for this snapshot. */
+  readonly aiReview: AiReview | null;
   readonly effectiveWeek: string;
   readonly weekDefinition: WeekDefinition;
   readonly activeBreakdownFilters: Pick<
@@ -455,6 +575,8 @@ export interface CsatSectionProps {
     value: string,
   ) => void;
   readonly onBreakdownGroupingChange: () => void;
+  /** Langfuse tickets in the same scope, for the participation share. */
+  readonly scopeTickets?: number | null;
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
   /**
@@ -473,8 +595,10 @@ export interface CsatSectionProps {
 /** Bot-only Freshdesk satisfaction, kept separate from Langfuse metrics. */
 export function CsatSection({
   csat,
+  aiReview,
   effectiveWeek,
   weekDefinition,
+  scopeTickets = null,
   activeBreakdownFilters,
   onBreakdownSelect,
   onBreakdownRowSelect,
@@ -546,6 +670,63 @@ export function CsatSection({
           ? "Phạm vi CSAT: Toàn kỳ · cộng các tuần đã có dữ liệu"
           : `Phạm vi CSAT: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
 
+  /** Hậu kiểm ships day-grain unconditionally, so this only needs a `dayRange`. */
+  const aiReviewScopeDays = useMemo(
+    () =>
+      aiReview === null || dayRange === undefined
+        ? null
+        : selectScopeDays(aiReview.by_day, dayRange),
+    [aiReview, dayRange],
+  );
+  const aiReviewData = useMemo(
+    () =>
+      aiReview === null
+        ? null
+        : selectAiReviewScope(aiReview, effectiveWeek, scopeWeeks, aiReviewScopeDays),
+    [aiReview, effectiveWeek, aiReviewScopeDays, scopeWeeks],
+  );
+  const aiReviewScopedBuckets = useMemo<readonly (readonly [string, AiReviewBucket])[]>(() => {
+    if (aiReview === null) {
+      return [];
+    }
+    const pick = (
+      keys: readonly string[],
+      source: Readonly<Record<string, AiReviewBucket>>,
+    ) =>
+      keys.flatMap((key) => {
+        const bucket = source[key];
+        return bucket === undefined ? [] : [[key, bucket] as const];
+      });
+    if (aiReviewScopeDays != null) {
+      return pick(aiReviewScopeDays, aiReview.by_day);
+    }
+    if (scopeWeeks !== undefined) {
+      return pick(scopeWeeks, aiReview.by_week);
+    }
+    if (effectiveWeek !== "") {
+      return pick([effectiveWeek], aiReview.by_week);
+    }
+    return Object.entries(aiReview.by_week);
+  }, [aiReview, effectiveWeek, aiReviewScopeDays, scopeWeeks]);
+  const aiReviewDayGrain = aiReviewScopeDays != null;
+  const aiReviewScopeLabel =
+    aiReviewDayGrain && dayRange !== undefined
+      ? aiReviewScopeDays.length === 0
+        ? "Không có ticket nào vào diện hậu kiểm trong khoảng ngày đã chọn."
+        : `Phạm vi hậu kiểm: ${formatDateRangeLabel(
+            dayRange.from,
+            dayRange.to,
+          )} · đúng khoảng ngày đã chọn`
+      : scopeWeeks !== undefined
+        ? scopeWeeks.length === 0
+          ? "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu hậu kiểm."
+          : `Hậu kiểm theo tuần trọn vẹn chạm khoảng ngày: ${scopeWeeks
+              .map((week) => formatWeekRange(week, weekDefinition))
+              .join(", ")}.`
+        : effectiveWeek === ""
+          ? "Phạm vi hậu kiểm: Toàn kỳ · cộng các tuần đã có dữ liệu"
+          : `Phạm vi hậu kiểm: Tuần ${formatWeekRange(effectiveWeek, weekDefinition)}`;
+
   return (
     <section
       id="csat"
@@ -555,109 +736,184 @@ export function CsatSection({
       <div className={styles.sectionHead}>
         <div>
           <h2 id="csat-title" className={styles.sectionTitle}>
-            Khách hài lòng tới đâu
+            Câu trả lời tốt tới đâu
           </h2>
         </div>
       </div>
-      <p
-        id="csat-scope"
-        className={scopeWeeks !== undefined ? undefined : "visually-hidden"}
-      >
-        {scopeLabel}
-      </p>
 
-      {csat === null ? (
-        <div className={csatStyles.empty}>
-          <p>
-            {freshdeskCookieState === "expired"
-              ? "Cookie Freshdesk đã hết hạn — CSAT đã dừng cập nhật."
-              : freshdeskCookieState === null
-                ? "Chưa đọc được trạng thái cookie Freshdesk."
-                : "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT."}
+      <div className={csatStyles.subsection}>
+        <h3 className={csatStyles.subsectionTitle}>Khách hàng chấm</h3>
+        <p
+          id="csat-scope"
+          className={scopeWeeks !== undefined ? undefined : "visually-hidden"}
+        >
+          {scopeLabel}
+        </p>
+
+        {csat === null ? (
+          <div className={csatStyles.empty}>
+            <p>
+              {freshdeskCookieState === "expired"
+                ? "Cookie Freshdesk đã hết hạn — CSAT đã dừng cập nhật."
+                : freshdeskCookieState === null
+                  ? "Chưa đọc được trạng thái cookie Freshdesk."
+                  : "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu CSAT."}
+            </p>
+            {freshdeskCookieState !== "ok" ? (
+              <div className={csatStyles.emptyActions}>
+                <button
+                  type="button"
+                  className={styles.action}
+                  onClick={onOpenFreshdeskCookieDialog}
+                >
+                  {freshdeskCookieState === "expired"
+                    ? "Cập nhật cookie"
+                    : "Kết nối Freshdesk"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : data === null ? (
+          <p className={csatStyles.empty}>
+            {effectiveWeek === ""
+              ? "Chưa có dữ liệu CSAT Freshdesk trong toàn kỳ."
+              : "Chưa có dữ liệu CSAT Freshdesk cho tuần này."}
           </p>
-          {freshdeskCookieState !== "ok" ? (
-            <div className={csatStyles.emptyActions}>
-              <button
-                type="button"
-                className={styles.action}
-                onClick={onOpenFreshdeskCookieDialog}
-              >
-                {freshdeskCookieState === "expired"
-                  ? "Cập nhật cookie"
-                  : "Kết nối Freshdesk"}
-              </button>
-            </div>
-          ) : null}
-        </div>
-      ) : data === null ? (
-        <p className={csatStyles.empty}>
-          {effectiveWeek === ""
-            ? "Chưa có dữ liệu CSAT Freshdesk trong toàn kỳ."
-            : "Chưa có dữ liệu CSAT Freshdesk cho tuần này."}
-        </p>
-      ) : (
-        <>
-          <CsatGroupingField
-            grouping={grouping}
-            onGroupingChange={(nextGrouping) => {
-              setGrouping(nextGrouping);
-              onBreakdownGroupingChange();
-            }}
-          />
-          <CsatCharts
-            data={data}
-            buckets={scopedBuckets}
-            grouping={grouping}
-            dayGrain={dayGrain}
-            weekDefinition={weekDefinition}
-          />
-          <CsatBreakdownTable
-            data={data}
-            grouping={grouping}
-            scopeKey={effectiveWeek}
-            onValueSelect={onBreakdownRowSelect}
-          />
-          <FeedbackDisclosure
-            key={`${dayGrain ? `${dayRange?.from}:${dayRange?.to}` : effectiveWeek}:${csat.fetched_at}`}
-            buckets={scopedBuckets}
-            defaultBucketFilter={
-              !dayGrain && scopeWeeks === undefined && effectiveWeek !== ""
-                ? effectiveWeek
-                : "all"
-            }
-            bucketFieldLabel={dayGrain ? "Ngày mở ticket" : "Tuần mở ticket"}
-            allBucketsLabel={dayGrain ? "Tất cả ngày" : "Tất cả tuần"}
-            formatBucketOption={(key) =>
-              dayGrain
-                ? `Ngày ${formatWeekStart(key)}`
-                : `Tuần ${formatWeekRange(key, weekDefinition)}`
-            }
-            data={data}
-            grouping={grouping}
-            activeValue={activeValue}
-            onActiveValueChange={(value) => onBreakdownSelect(grouping, value)}
-          />
-        </>
-      )}
+        ) : (
+          <>
+            <CsatGroupingField
+              grouping={grouping}
+              onGroupingChange={(nextGrouping) => {
+                setGrouping(nextGrouping);
+                onBreakdownGroupingChange();
+              }}
+            />
+            <CsatCharts
+              scopeTickets={scopeTickets}
+              data={data}
+              buckets={scopedBuckets}
+              grouping={grouping}
+              dayGrain={dayGrain}
+              weekDefinition={weekDefinition}
+            />
+            <CsatBreakdownTable
+              data={data}
+              grouping={grouping}
+              scopeKey={effectiveWeek}
+              onValueSelect={onBreakdownRowSelect}
+            />
+            <FeedbackDisclosure
+              key={`${dayGrain ? `${dayRange?.from}:${dayRange?.to}` : effectiveWeek}:${csat.fetched_at}`}
+              buckets={scopedBuckets}
+              defaultBucketFilter={
+                !dayGrain && scopeWeeks === undefined && effectiveWeek !== ""
+                  ? effectiveWeek
+                  : "all"
+              }
+              bucketFieldLabel={dayGrain ? "Ngày mở ticket" : "Tuần mở ticket"}
+              allBucketsLabel={dayGrain ? "Tất cả ngày" : "Tất cả tuần"}
+              formatBucketOption={(key) =>
+                dayGrain
+                  ? `Ngày ${formatWeekStart(key)}`
+                  : `Tuần ${formatWeekRange(key, weekDefinition)}`
+              }
+              data={data}
+              grouping={grouping}
+              activeValue={activeValue}
+              onActiveValueChange={(value) => onBreakdownSelect(grouping, value)}
+            />
+          </>
+        )}
 
-      {csat === null ? null : (
-        <p id="csat-source" className={csatStyles.source}>
-          CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật{" "}
-          <time dateTime={csat.fetched_at}>
-            {formatUpdatedAt(csat.fetched_at)}
-          </time>
-          {stale ? (
-            <>
-              {" · "}
-              <strong className={csatStyles.staleInline}>
-                Chưa cập nhật hôm nay.
-              </strong>
-            </>
-          ) : (
-            "."
-          )}
+        {csat === null ? null : (
+          <p id="csat-source" className={csatStyles.source}>
+            CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật{" "}
+            <time dateTime={csat.fetched_at}>
+              {formatUpdatedAt(csat.fetched_at)}
+            </time>
+            {stale ? (
+              <>
+                {" · "}
+                <strong className={csatStyles.staleInline}>
+                  Chưa cập nhật hôm nay.
+                </strong>
+              </>
+            ) : (
+              "."
+            )}
+          </p>
+        )}
+      </div>
+
+      <div className={csatStyles.subsection}>
+        <h3 className={csatStyles.subsectionTitle}>CS hậu kiểm</h3>
+        <p
+          id="ai-review-scope"
+          className={scopeWeeks !== undefined ? undefined : "visually-hidden"}
+        >
+          {aiReviewScopeLabel}
         </p>
-      )}
+
+        {aiReview === null ? (
+          <div className={csatStyles.empty}>
+            <p>
+              {freshdeskCookieState === "expired"
+                ? "Cookie Freshdesk đã hết hạn — hậu kiểm đã dừng cập nhật."
+                : freshdeskCookieState === "missing"
+                  ? "Chưa kết nối Freshdesk. Cần cookie để lấy dữ liệu hậu kiểm."
+                  : freshdeskCookieState === null
+                    ? "Chưa đọc được trạng thái cookie Freshdesk."
+                    : "Chưa chạy job hậu kiểm lần nào — chưa có dữ liệu CS hậu kiểm."}
+            </p>
+            {freshdeskCookieState !== null && freshdeskCookieState !== "ok" ? (
+              <div className={csatStyles.emptyActions}>
+                <button
+                  type="button"
+                  className={styles.action}
+                  onClick={onOpenFreshdeskCookieDialog}
+                >
+                  {freshdeskCookieState === "expired"
+                    ? "Cập nhật cookie"
+                    : "Kết nối Freshdesk"}
+                </button>
+              </div>
+            ) : null}
+          </div>
+        ) : aiReviewData === null || aiReviewData.reviewed_ticket_count === 0 ? (
+          <p className={csatStyles.empty}>
+            {effectiveWeek === ""
+              ? "Không có ticket nào vào diện hậu kiểm trong toàn kỳ."
+              : "Không có ticket nào vào diện hậu kiểm trong tuần này."}
+          </p>
+        ) : (
+          <>
+            <AiReviewCharts
+              data={aiReviewData}
+              buckets={aiReviewScopedBuckets}
+              grouping={grouping}
+              dayGrain={aiReviewDayGrain}
+              weekDefinition={weekDefinition}
+            />
+            <AiReviewBreakdownTable
+              data={aiReviewData}
+              grouping={grouping}
+              scopeKey={effectiveWeek}
+              onValueSelect={onBreakdownRowSelect}
+              groupingLabel={csatGroupingLabel(grouping)}
+            />
+          </>
+        )}
+
+        {aiReview === null ? null : (
+          <p id="ai-review-source" className={csatStyles.source}>
+            Hậu kiểm: Freshdesk · chỉ Admin CS ZaloPay · cập nhật{" "}
+            <time dateTime={aiReview.fetched_at}>
+              {formatUpdatedAt(aiReview.fetched_at)}
+            </time>
+            .
+          </p>
+        )}
+      </div>
     </section>
   );
 }

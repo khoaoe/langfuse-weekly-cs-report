@@ -176,6 +176,11 @@ def test_freshdesk_ticket_metadata_is_strict_and_does_not_keep_extra_fields():
     assert asdict(ticket) == {
         "ticket_id": "123",
         "created_at": "2026-08-03T01:00:00Z",
+        "ai_review_rating_raw": None,
+        "ai_review_count_raw": None,
+        "ai_review_date_raw": None,
+        "ai_reopen_status_raw": None,
+        "ai_user_replied_raw": None,
     }
     with pytest.raises(FreshdeskEntryCoverageError):
         FreshdeskTicketMetadata(ticket_id="01", created_at="2026-08-03T01:00:00Z")

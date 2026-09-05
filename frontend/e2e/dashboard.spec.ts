@@ -456,7 +456,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     });
 
     await page.goto("/");
-    const csat = page.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    const csat = page.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
     const source = csat.locator("#csat-source");
     await expect(source).toHaveText(
       /CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+ · Dữ liệu khác: Langfuse(?: · Chưa cập nhật hôm nay\.)?$/,
@@ -605,7 +605,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     );
 
     await page.goto("/");
-    const csat = page.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    const csat = page.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
     await expect(csat.locator("#csat-source")).toContainText("CSAT: Freshdesk");
 
     const layout = await csat.evaluate((section) => {

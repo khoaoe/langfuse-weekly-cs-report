@@ -47,10 +47,24 @@ class IncrementalEntryCoverageResult:
     complete: bool
 
 
+_RAW_ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
+
+
 @dataclass(frozen=True)
 class FreshdeskTicketMetadata:
     ticket_id: str
     created_at: str
+    # The 5 fields below are the raw, unvalidated-against-any-allowlist AI
+    # post-review custom fields. Kept permissive here (shape only) because
+    # every caller of this struct -- CSAT, entry coverage, reconciliation --
+    # constructs it regardless of whether it cares about AI review, and a new
+    # CS-added dropdown option must not break jobs that never look at these
+    # fields. Allowlist/fail-closed parsing lives in ai_review.py instead.
+    ai_review_rating_raw: str | None = None
+    ai_review_count_raw: str | None = None
+    ai_review_date_raw: str | None = None
+    ai_reopen_status_raw: str | None = None
+    ai_user_replied_raw: str | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -65,6 +79,17 @@ class FreshdeskTicketMetadata:
         except ValueError:
             raise FreshdeskEntryCoverageError("Freshdesk ticket metadata is invalid") from None
         if parsed.tzinfo is None or parsed.utcoffset() != timezone.utc.utcoffset(parsed):
+            raise FreshdeskEntryCoverageError("Freshdesk ticket metadata is invalid")
+        if (
+            (self.ai_review_rating_raw is not None and not self.ai_review_rating_raw)
+            or (self.ai_review_count_raw is not None and not self.ai_review_count_raw)
+            or (self.ai_reopen_status_raw is not None and not self.ai_reopen_status_raw)
+            or (self.ai_user_replied_raw is not None and not self.ai_user_replied_raw)
+            or (
+                self.ai_review_date_raw is not None
+                and _RAW_ISO_DATE.fullmatch(self.ai_review_date_raw) is None
+            )
+        ):
             raise FreshdeskEntryCoverageError("Freshdesk ticket metadata is invalid")
 
 

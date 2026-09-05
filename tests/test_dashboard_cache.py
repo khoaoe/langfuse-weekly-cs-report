@@ -92,6 +92,7 @@ def _snapshot(generated_at: datetime) -> DashboardSnapshot:
                     "csat": None,
                     "outcome_reconciliation": None,
                     "entry_coverage": None,
+                    "ai_review": None,
                     "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
                 }
                 for view in ("mon_sun", "mon_fri")
@@ -902,7 +903,7 @@ def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path
     success = next(event for event in events if event["event"] == "refresh_success")
     assert success.items() >= {
         "event": "refresh_success",
-        "schema_version": 25,
+        "schema_version": 26,
         "ticket_count": 0,
         "trace_count": 0,
         "observation_count": 0,

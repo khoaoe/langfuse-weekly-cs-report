@@ -33,6 +33,7 @@ from .ab_test_cache import (
 )
 from .categories import load_taxonomy
 from .cli import ConfigurationError, PROJECT_ROOT, load_environment
+from .ai_review_cache import AIReviewCacheError, load_ai_review_cache
 from .csat_cache import CSATCacheError, load_csat_cache
 from .dashboard_cache import CacheView, ProtectedSnapshotStore, SnapshotManager
 from .dashboard_schema import (
@@ -167,7 +168,7 @@ _FRONTEND_MODES = frozenset({"spa", "legacy"})
 _REFRESH_DEADLINE_ENV = "DASHBOARD_REFRESH_DEADLINE_SECONDS"
 _TRACE_PAGE_LIMIT_ENV = "DASHBOARD_MAX_TRACE_PAGES"
 _BACKGROUND_REFRESH_ENV = "DASHBOARD_BACKGROUND_REFRESH"
-_REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300"
+_REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400"
 _TRACE_PAGE_LIMIT_ERROR = "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500"
 
 # Hashed build output is immutable for its lifetime, but it is only ever served
@@ -177,6 +178,7 @@ _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _CSAT_CACHE_FILENAME = "csat_cache.json"
 _RECONCILIATION_CACHE_FILENAME = "outcome_reconciliation_cache.json"
 _ENTRY_COVERAGE_CACHE_FILENAME = "entry_coverage_cache.json"
+_AI_REVIEW_CACHE_FILENAME = "ai_review_cache.json"
 _MODEL_SEEN_CACHE_FILENAME = "model_seen_cache.json"
 _AB_TEST_CACHE_FILENAME = "ab_test_snapshot_cache.json"
 _MODEL_LIST_CACHE_FILENAME = "model_list_cache.json"
@@ -1276,11 +1278,22 @@ def main(argv: Sequence[str] | None = None) -> int:
                     code="invalid_cache",
                 )
                 entry_coverage_cache = None
+            try:
+                ai_review_cache = load_ai_review_cache(
+                    runtime_directory / _AI_REVIEW_CACHE_FILENAME
+                )
+            except AIReviewCacheError:
+                emit_event(
+                    "ai_review_cache_load_ignored",
+                    code="invalid_cache",
+                )
+                ai_review_cache = None
             return project_dashboard(
                 report,
                 csat_cache=csat_cache,
                 reconciliation_cache=reconciliation_cache,
                 entry_coverage_cache=entry_coverage_cache,
+                ai_review_cache=ai_review_cache,
             )
 
         manager = SnapshotManager(
@@ -1427,7 +1440,7 @@ def _refresh_timeout_seconds() -> float:
         timeout = float(value)
     except (TypeError, ValueError):
         raise ValueError(_REFRESH_DEADLINE_ERROR) from None
-    if not 30.0 <= timeout <= 300.0:
+    if not 30.0 <= timeout <= 2400.0:
         raise ValueError(_REFRESH_DEADLINE_ERROR)
     return timeout
 
@@ -1887,6 +1900,7 @@ def _validated_runtime_directory(value: Path) -> Path:
             or entry.name == _CSAT_CACHE_FILENAME
             or entry.name == _RECONCILIATION_CACHE_FILENAME
             or entry.name == _ENTRY_COVERAGE_CACHE_FILENAME
+            or entry.name == _AI_REVIEW_CACHE_FILENAME
             or entry.name == _MODEL_SEEN_CACHE_FILENAME
             or entry.name == _AB_TEST_CACHE_FILENAME
             or entry.name == _MODEL_LIST_CACHE_FILENAME

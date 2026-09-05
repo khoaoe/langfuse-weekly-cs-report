@@ -6,6 +6,18 @@
   min-width: 620px;
 }
 
+.subsection {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--rule);
+}
+
+.subsectionTitle {
+  margin: 0 0 var(--space-2);
+  font-size: 15px;
+  font-weight: 600;
+}
+
 .breakdown {
   display: grid;
   justify-items: start;

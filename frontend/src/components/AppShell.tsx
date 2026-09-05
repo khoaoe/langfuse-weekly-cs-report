@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from "react";
 
 import logoColor from "../../../assets/brand/logos/zalopay-logo-color.png";
 import logoWhite from "../../../assets/brand/logos/zalopay-logo-white.png";
@@ -175,6 +181,41 @@ export function AppShell({
       window.removeEventListener("resize", updateActiveSection);
     };
   }, [snapshot]);
+
+  /**
+   * Section nav links jump via native anchor scrolling, which stops each
+   * `.section` at its CSS `scroll-margin-top` -- a fixed `min(30vh, 280px)`,
+   * independent of the sticky header's real height. `updateActiveSection`
+   * above decides the current link from the *actual* header height instead.
+   * The two disagreed whenever the header was shorter than that scroll
+   * margin (the common case), so the native jump landed a section below
+   * where the offset said "current" -- highlighting the previous link.
+   * Clicking again "fixed" it only because the second jump had nothing left
+   * to scroll, so no `scroll` event fired to run the wrong computation over
+   * the direct set below.
+   *
+   * Scrolling here with the same offset `updateActiveSection` reads makes
+   * the two agree by construction, so the fix cannot re-drift as the header
+   * height changes with filters or viewport width. `replaceState` keeps the
+   * URL a deep link without letting a plain `location.hash` assignment
+   * trigger its own scroll-margin-driven jump on top of this one.
+   */
+  const handleSectionNavClick = (
+    id: (typeof SECTIONS)[number]["id"],
+    event: ReactMouseEvent<HTMLAnchorElement>,
+  ) => {
+    const target = document.getElementById(id);
+    if (target === null) {
+      return;
+    }
+    event.preventDefault();
+    const offset = (shellRef.current?.getBoundingClientRect().height ?? 0) + 1;
+    window.scrollTo({
+      top: target.getBoundingClientRect().top + window.scrollY - offset,
+    });
+    window.history.replaceState(null, "", `#${id}`);
+    setActiveSection(id);
+  };
 
   const openFreshdeskCookieDialog = () => {
     const section = document.getElementById("csat");
@@ -378,7 +419,7 @@ export function AppShell({
                 className={styles.navLink}
                 href={`#${section.id}`}
                 aria-current={activeSection === section.id ? "location" : undefined}
-                onClick={() => setActiveSection(section.id)}
+                onClick={(event) => handleSectionNavClick(section.id, event)}
               >
                 {section.label}
               </a>

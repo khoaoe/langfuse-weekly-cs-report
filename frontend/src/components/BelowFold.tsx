@@ -18,7 +18,6 @@ import {
   rollingRate,
 } from "../lib/report-scope";
 import {
-  PERCENTAGE_SAMPLE_MINIMUM,
   formatCount,
   formatDateRangeLabel,
   formatRate,
@@ -811,7 +810,7 @@ function SegmentTable({
         className={styles.tableCaption}
         aria-live="polite"
       >
-        {`Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó. Nhóm dưới ${PERCENTAGE_SAMPLE_MINIMUM} ticket chỉ hiện số ca, không hiện tỷ lệ.`}
+        {`Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó.`}
       </p>
 
       <div
@@ -1050,6 +1049,17 @@ export function BelowFold({
   const trendActiveKey = dayRange === undefined ? effectiveWeek : dayRange.activeDay;
 
   const selectedWeek = weeks.find((week) => week.cohort_week === effectiveWeek);
+
+  // Denominator for the CSAT participation share, read from Langfuse for the
+  // exact scope CSAT is drawing. Null under day grain: the weekly totals
+  // cannot be cut to days, and a share against the whole week would overstate
+  // participation.
+  const csatScopeTickets =
+    dayRange !== undefined
+      ? null
+      : effectiveWeek === ""
+        ? weeks.reduce((total, week) => total + week.total_tickets, 0)
+        : (selectedWeek?.total_tickets ?? null);
   const weeklyDetail =
     effectiveWeek === "" ? undefined : view.by_week[effectiveWeek];
   const segments = weeklyDetail?.segments ?? view.segments;
@@ -1115,6 +1125,8 @@ export function BelowFold({
     [dayRange],
   );
   const csat = dayRange === undefined ? view.csat : (weeklyView.csat ?? null);
+  const aiReview =
+    dayRange === undefined ? view.ai_review : (weeklyView.ai_review ?? null);
   const entryCoverage =
     dayRange === undefined ? view.entry_coverage : weeklyView.entry_coverage;
   const entryCoverageScopeNote =
@@ -1207,6 +1219,8 @@ export function BelowFold({
 
       <CsatSection
         csat={csat}
+        aiReview={aiReview}
+        scopeTickets={csatScopeTickets}
         effectiveWeek={effectiveWeek}
         weekDefinition={weekDefinition}
         activeBreakdownFilters={activeCsatBreakdownFilters}

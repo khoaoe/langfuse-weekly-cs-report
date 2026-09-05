@@ -404,6 +404,8 @@ export function selectLedger(
           ? "ticket trong khoảng ngày"
           : "ticket tuần này";
 
+  const gt4Total = scope.gt4WithCs + scope.gt4WithoutCs;
+
   const ticketCells: LedgerCell[] = [
     {
       id: "ledger-ai-first",
@@ -464,6 +466,26 @@ export function selectLedger(
         scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
     },
     {
+      // The tail the mean hides. p50 is 1 reply in all ten observed weeks and
+      // p90 is 2 in nine of them, so "TB 1,27" describes almost every ticket
+      // and says nothing about the few that dragged on; this cell is the only
+      // place that group is visible outside the week it trips the rail alert.
+      //
+      // It counts tickets, so it belongs in the group whose denominator is
+      // tickets. It sat under "Theo lượt CS-agent trả lời" until 2026-09-04,
+      // where the heading promised a per-response number and the cell gave a
+      // ticket count. "lượt xử lý" stays in the label -- it counts
+      // `turn_count`, every turn in the conversation, not `ai_reply_count`.
+      id: "ledger-gt4-turn",
+      label: "Ticket >3 lượt xử lý",
+      value: formatCount(gt4Total),
+      unit: null,
+      support:
+        scope.eligible === 0 ? null : share(gt4Total, scope.eligible),
+      tone: "neutral",
+      filterPatch: gt4Total === 0 ? null : { gt4_turn: "true" },
+    },
+    {
       id: "ledger-reopen",
       label: "Reopen sau AI First",
       // Rate leads, count supports. The absolute count rises with volume by
@@ -490,7 +512,6 @@ export function selectLedger(
     },
   ];
 
-  const gt4Total = scope.gt4WithCs + scope.gt4WithoutCs;
   const responseCells: LedgerCell[] = [
     {
       // The group's own volume, and the only absolute number in it. Every
@@ -537,26 +558,6 @@ export function selectLedger(
             )} ticket AI xử lý trọn`,
       tone: "brand",
       filterPatch: null,
-    },
-    {
-      // The tail the mean hides. p50 is 1 reply in all ten observed weeks and
-      // p90 is 2 in nine of them, so "TB 1,27" describes almost every ticket
-      // and says nothing about the few that dragged on; this cell is the only
-      // place that group is visible outside the week it trips the rail alert.
-      //
-      // "lượt xử lý" is deliberate and matches the Explorer filter's own
-      // label: this counts `turn_count` -- every turn in the conversation --
-      // while the three cells above it count `ai_reply_count`. Calling both
-      // "lượt" unqualified would read as one scale running 1 -> >3, which it
-      // is not.
-      id: "ledger-gt4-turn",
-      label: "Ticket >3 lượt xử lý",
-      value: formatCount(gt4Total),
-      unit: null,
-      support:
-        scope.eligible === 0 ? null : `${share(gt4Total, scope.eligible)} tổng ticket`,
-      tone: "neutral",
-      filterPatch: gt4Total === 0 ? null : { gt4_turn: "true" },
     },
   ];
 

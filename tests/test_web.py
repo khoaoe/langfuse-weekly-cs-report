@@ -79,6 +79,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
                 "csat": None,
                 "outcome_reconciliation": None,
                 "entry_coverage": None,
+                "ai_review": None,
                 "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
             }
             for view in ("mon_sun", "mon_fri")
@@ -1900,12 +1901,12 @@ def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch)
     monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
     monkeypatch.setenv("DASHBOARD_IDENTITY_HEADER", IDENTITY_HEADER)
     monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("DASHBOARD_REFRESH_DEADLINE_SECONDS", "30")
+    monkeypatch.setenv("DASHBOARD_REFRESH_DEADLINE_SECONDS", "2400")
     monkeypatch.setenv("DASHBOARD_MAX_TRACE_PAGES", "7")
 
     assert main([]) == 0
     assert len(report_calls) == 1
-    assert report_calls[0]["refresh_timeout_seconds"] == 30.0
+    assert report_calls[0]["refresh_timeout_seconds"] == 2400.0
     assert report_calls[0]["max_trace_pages"] == 7
 
 
@@ -1915,12 +1916,12 @@ def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch)
         (
             "DASHBOARD_REFRESH_DEADLINE_SECONDS",
             "29",
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300",
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400",
         ),
         (
             "DASHBOARD_REFRESH_DEADLINE_SECONDS",
-            "301",
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 300",
+            "2401",
+            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400",
         ),
         (
             "DASHBOARD_MAX_TRACE_PAGES",

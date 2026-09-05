@@ -673,7 +673,7 @@ describe("Below-fold analysis", () => {
 
     const segmentSection = document.getElementById("segments");
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(segmentSection?.nextElementSibling).toBe(csatSection);
     // freshdeskCookieState defaults to null (unknown) here — the section must
@@ -717,7 +717,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(csatSection).not.toHaveTextContent("Chưa kết nối Freshdesk");
     expect(
@@ -757,7 +757,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(csatSection).getByText(/Phạm vi CSAT: 20\/07–21\/07/),
@@ -851,7 +851,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(csatSection).toHaveTextContent(
       "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT.",
@@ -863,7 +863,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(baseSnapshot, { freshdeskCookieState: null }));
 
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(csatSection).getByRole("button", { name: "Kết nối Freshdesk" }),
@@ -959,7 +959,7 @@ describe("Below-fold analysis", () => {
     });
 
     renderWithQuery(belowFold(snapshot));
-    const section = screen.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    const section = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
     const grouping = within(section).getByRole("combobox", { name: "Nhóm theo" });
     expect(within(grouping).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Kết quả xử lý",
@@ -1028,7 +1028,7 @@ describe("Below-fold analysis", () => {
       renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-13" }));
 
       const section = screen.getByRole("region", {
-        name: "Khách hài lòng tới đâu",
+        name: "Câu trả lời tốt tới đâu",
       });
       const rows = within(section).getAllByRole("row");
       expect(rows).toHaveLength(3);
@@ -1078,7 +1078,7 @@ describe("Below-fold analysis", () => {
     const latestRender = renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(section).queryByRole("combobox", { name: "Tuần CSAT" }),
@@ -1092,7 +1092,7 @@ describe("Below-fold analysis", () => {
       belowFold(snapshot, { activeWeek: "2026-07-13" }),
     );
     const previousSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(previousSection).getByRole("row", { name: /Tổng/ }),
@@ -1103,7 +1103,7 @@ describe("Below-fold analysis", () => {
     previousRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(allPeriodSection).getByRole("row", { name: /Tổng/ }),
@@ -1169,7 +1169,7 @@ describe("Below-fold analysis", () => {
     const latestRender = renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(section)
@@ -1198,7 +1198,7 @@ describe("Below-fold analysis", () => {
     latestRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
 
     expect(
@@ -1285,7 +1285,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     const disclosure = within(section).getByRole("button", {
       name: "Xem 3 nội dung phản hồi",
@@ -1363,7 +1363,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     await user.click(
       within(section).getByRole("button", {
@@ -1445,7 +1445,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     const disclosure = within(section).getByRole("button", {
       name: "Xem 11 nội dung phản hồi",
@@ -1479,7 +1479,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     await user.click(
       within(section).getByRole("button", {
@@ -1547,7 +1547,7 @@ describe("Below-fold analysis", () => {
 
     const latestRender = renderWithQuery(belowFold(snapshot));
     const section = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(section).queryByRole("button", { name: /nội dung phản hồi/ }),
@@ -1556,7 +1556,7 @@ describe("Below-fold analysis", () => {
     latestRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     expect(
       within(allPeriodSection).getByRole("button", {

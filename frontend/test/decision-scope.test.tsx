@@ -268,6 +268,15 @@ describe("selected-week decision scope", () => {
       { id: "ledger-transfer", value: "208", unit: null, support: "22,2%" },
       { id: "ledger-direct-cs", value: "28", unit: null, support: "3,0%" },
       {
+        // Counts tickets, so it lives in the group whose denominator is
+        // tickets. Its support is a bare share like its neighbours: the group
+        // heading already names the base.
+        id: "ledger-gt4-turn",
+        value: "1",
+        unit: null,
+        support: "0,1%",
+      },
+      {
         // Rate leads, count supports. The absolute count rises with volume by
         // construction, so it cannot be read across weeks; lần/ticket can.
         // The unit is a separate field, not glued into the value: at the 36px
@@ -310,16 +319,6 @@ describe("selected-week decision scope", () => {
         value: "79,3%",
         unit: null,
         support: "322 trong 406 ticket AI xử lý trọn",
-      },
-      {
-        // Counts turn_count, not ai_reply_count -- hence "lượt xử lý",
-        // matching the Explorer filter's own label rather than the "lượt"
-        // the three cells above it use.
-        id: "ledger-gt4-turn",
-        value: "1",
-        unit: null,
-        support: "0,1% tổng ticket",
-        filterPatch: { gt4_turn: "true" },
       },
     ]);
   });

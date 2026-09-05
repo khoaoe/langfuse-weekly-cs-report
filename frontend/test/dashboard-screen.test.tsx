@@ -667,7 +667,7 @@ describe("DashboardScreen", () => {
     render(<DashboardScreen />);
 
     await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
-    const csatSection = screen.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    const csatSection = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
     await user.click(within(csatSection).getByRole("button", { name: "Xem 2 nội dung phản hồi" }));
     expect(
       within(csatSection).queryByRole("button", { name: "AI xử lý trọn" }),
@@ -749,7 +749,7 @@ describe("DashboardScreen", () => {
 
     await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
     const csatSection = screen.getByRole("region", {
-      name: "Khách hài lòng tới đâu",
+      name: "Câu trả lời tốt tới đâu",
     });
     await user.click(
       within(csatSection).getByRole("button", {
@@ -893,7 +893,7 @@ describe("DashboardScreen", () => {
 
     expect(document.getElementById("csatBreakdownGroupingInput")).not.toBeNull();
 
-    const csatSection = screen.getByRole("region", { name: "Khách hài lòng tới đâu" });
+    const csatSection = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
     await user.click(
       within(csatSection).getByRole("button", { name: "Xem 2 nội dung phản hồi" }),
     );

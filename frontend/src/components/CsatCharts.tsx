@@ -15,7 +15,6 @@ import {
   csatResponseTotals,
   rowsFor,
   type CsatGrouping,
-  type CsatTotals,
 } from "./CsatBreakdownTable";
 import chartStyles from "./csat-charts.module.css";
 
@@ -37,27 +36,40 @@ const TIME_CHART_HEIGHT = 208;
 const TIME_CHART_PADDING = { top: 8, right: 4, bottom: 26, left: 44 };
 const GROUP_ROW_LIMIT = 8;
 
-function share(count: number, total: number): number {
+/**
+ * One stacked-bar segment definition, worst-first (see `BUCKETS` above).
+ * Shared shape so a second scope (AI review) can draw the same primitives
+ * with its own keys/labels/colors instead of a copy of the drawing code.
+ */
+export interface BucketDef<K extends string> {
+  readonly key: K;
+  readonly label: string;
+  readonly className: string | undefined;
+}
+
+export function share(count: number, total: number): number {
   return total === 0 ? 0 : count / total;
 }
 
 /** A rate only where the sample supports one, matching the table's own rule. */
-function guardedRate(count: number, total: number): string {
+export function guardedRate(count: number, total: number): string {
   return total >= PERCENTAGE_SAMPLE_MINIMUM ? formatRate(count / total) : "—";
 }
 
-function SplitBar({
+export function SplitBar<K extends string>({
+  buckets,
   counts,
   total,
   label,
 }: {
-  readonly counts: CsatTotals;
+  readonly buckets: readonly BucketDef<K>[];
+  readonly counts: Record<K, number>;
   readonly total: number;
   readonly label: string;
 }) {
   return (
     <div className={chartStyles.bar} role="img" aria-label={label}>
-      {BUCKETS.map((bucket) => {
+      {buckets.map((bucket) => {
         const value = counts[bucket.key];
         return value === 0 ? null : (
           <span
@@ -71,10 +83,18 @@ function SplitBar({
   );
 }
 
-function Legend({ counts, total }: { readonly counts: CsatTotals; readonly total: number }) {
+export function Legend<K extends string>({
+  buckets,
+  counts,
+  total,
+}: {
+  readonly buckets: readonly BucketDef<K>[];
+  readonly counts: Record<K, number>;
+  readonly total: number;
+}) {
   return (
     <div className={chartStyles.legend}>
-      {BUCKETS.map((bucket) => (
+      {buckets.map((bucket) => (
         <p key={bucket.key} className={chartStyles.legendItem}>
           <span className={`${chartStyles.swatch} ${bucket.className}`} aria-hidden="true" />
           <span className={chartStyles.legendLabel}>{bucket.label}</span>
@@ -88,28 +108,43 @@ function Legend({ counts, total }: { readonly counts: CsatTotals; readonly total
 }
 
 /**
- * Response volume over the scope's own buckets, stacked by satisfaction.
+ * Volume over the scope's own buckets, stacked by the worst-first dimension.
  *
  * Counts, not shares: on a thin day a share of three ratings would draw the
  * same width as a share of three hundred, and the reader would have no way to
  * tell them apart. Height carries the sample size, so a noisy bucket looks
  * noisy. One quantity, one y-axis.
+ *
+ * The stack's own total is always the sum of its buckets (CSAT's ticket_count,
+ * AI review's rated_ticket_count) -- both are schema-enforced to reconcile,
+ * so it is derived here rather than threaded in as a separate field.
  */
-function TimeChart({
+export function TimeChart<K extends string>({
+  series,
   buckets,
   dayGrain,
   weekDefinition,
+  regionLabel,
+  svgLabel,
+  tooltipFor,
 }: {
-  readonly buckets: readonly (readonly [string, CsatTotals])[];
+  readonly series: readonly (readonly [string, Record<K, number>])[];
+  readonly buckets: readonly BucketDef<K>[];
   readonly dayGrain: boolean;
   readonly weekDefinition: WeekDefinition;
+  readonly regionLabel: string;
+  readonly svgLabel: (maxTotal: number) => string;
+  /** Renders the volume + worst-bucket half of the tooltip; the period prefix is added here. */
+  readonly tooltipFor: (total: number, counts: Record<K, number>) => string;
 }) {
-  const width = Math.max(560, buckets.length * 34 + TIME_CHART_PADDING.left);
+  const totalOf = (counts: Record<K, number>) =>
+    buckets.reduce((sum, bucket) => sum + counts[bucket.key], 0);
+  const width = Math.max(560, series.length * 34 + TIME_CHART_PADDING.left);
   const innerWidth = width - TIME_CHART_PADDING.left - TIME_CHART_PADDING.right;
   const innerHeight = TIME_CHART_HEIGHT - TIME_CHART_PADDING.top - TIME_CHART_PADDING.bottom;
-  const maxTotal = Math.max(...buckets.map(([, counts]) => counts.ticket_count), 1);
+  const maxTotal = Math.max(...series.map(([, counts]) => totalOf(counts)), 1);
   const x = scaleBand<string>({
-    domain: buckets.map(([key]) => key),
+    domain: series.map(([key]) => key),
     range: [0, innerWidth],
     padding: 0.28,
   });
@@ -118,15 +153,15 @@ function TimeChart({
   const bucketLabel = (key: string) =>
     dayGrain ? formatWeekStart(key) : formatWeekRange(key, weekDefinition);
   // Enough labels to orient, never so many that they collide.
-  const labelStep = Math.ceil(buckets.length / Math.max(1, Math.floor(innerWidth / 68)));
+  const labelStep = Math.ceil(series.length / Math.max(1, Math.floor(innerWidth / 68)));
 
   return (
-    <div className={chartStyles.chartViewport} role="region" aria-label="Phản hồi theo thời gian">
+    <div className={chartStyles.chartViewport} role="region" aria-label={regionLabel}>
       <svg
         className={chartStyles.chartSvg}
         viewBox={`0 0 ${width} ${TIME_CHART_HEIGHT}`}
         role="img"
-        aria-label={`Số phản hồi theo ${dayGrain ? "ngày" : "tuần"}, xếp chồng theo mức hài lòng, cao nhất ${formatCount(maxTotal)} phản hồi.`}
+        aria-label={svgLabel(maxTotal)}
       >
         <g transform={`translate(${TIME_CHART_PADDING.left},${TIME_CHART_PADDING.top})`}>
           {ticks.map((tick) => (
@@ -143,16 +178,17 @@ function TimeChart({
               </text>
             </g>
           ))}
-          {buckets.map(([key, counts], index) => {
+          {series.map(([key, counts], index) => {
             const left = x(key) ?? 0;
             const bandWidth = x.bandwidth();
+            const total = totalOf(counts);
             let cursor = innerHeight;
             return (
               <g key={key}>
                 <title>
-                  {`${dayGrain ? "Ngày" : "Tuần"} ${bucketLabel(key)}: ${formatCount(counts.ticket_count)} phản hồi · Rất tệ ${formatCount(counts.negative)}`}
+                  {`${dayGrain ? "Ngày" : "Tuần"} ${bucketLabel(key)}: ${tooltipFor(total, counts)}`}
                 </title>
-                {BUCKETS.map((bucket) => {
+                {buckets.map((bucket) => {
                   const value = counts[bucket.key];
                   if (value === 0) {
                     return null;
@@ -196,9 +232,17 @@ export interface CsatChartsProps {
   readonly grouping: CsatGrouping;
   readonly dayGrain: boolean;
   readonly weekDefinition: WeekDefinition;
+  /**
+   * Langfuse tickets in the same scope CSAT is showing, or null when no
+   * honest denominator exists (day grain, or a scope with no week match).
+   * It is the only way to see participation: `ticket_count` counts tickets
+   * that answered, so on its own it cannot say how many stayed silent.
+   */
+  readonly scopeTickets?: number | null;
 }
 
 export function CsatCharts({
+  scopeTickets = null,
   data,
   buckets,
   grouping,
@@ -248,11 +292,20 @@ export function CsatCharts({
           <span className={chartStyles.headlineLabel}>phản hồi chấm “Rất tệ”</span>
         </p>
         {/* The legend already states the negative count and share, so this line
-            carries only what nothing else does: the denominator. */}
+            carries only what nothing else does: the denominator, and how much
+            of the scope it covers. A share above 100% would mean the two
+            sources disagree about the population, so it is dropped rather
+            than printed. */}
         <p className={chartStyles.headlineSupport}>
           {`${formatCount(totals.ticket_count)} phản hồi từ ${formatCount(data.ticket_count)} ticket`}
+          {scopeTickets == null ||
+          scopeTickets === 0 ||
+          data.ticket_count > scopeTickets
+            ? null
+            : ` · ${formatRate(data.ticket_count / scopeTickets)} ticket trong phạm vi có đánh giá`}
         </p>
         <SplitBar
+          buckets={BUCKETS}
           counts={totals}
           total={totals.ticket_count}
           label={BUCKETS.map(
@@ -260,7 +313,7 @@ export function CsatCharts({
               `${bucket.label} ${formatCount(totals[bucket.key as BucketKey])}`,
           ).join(", ")}
         />
-        <Legend counts={totals} total={totals.ticket_count} />
+        <Legend buckets={BUCKETS} counts={totals} total={totals.ticket_count} />
       </div>
 
       {timeBuckets.length > 1 ? (
@@ -272,9 +325,17 @@ export function CsatCharts({
             Cột cao là ngày nhiều người chấm. Dải đỏ nằm dưới đáy để so được giữa các cột.
           </p>
           <TimeChart
-            buckets={timeBuckets}
+            series={timeBuckets}
+            buckets={BUCKETS}
             dayGrain={dayGrain}
             weekDefinition={weekDefinition}
+            regionLabel="Phản hồi theo thời gian"
+            svgLabel={(maxTotal) =>
+              `Số phản hồi theo ${dayGrain ? "ngày" : "tuần"}, xếp chồng theo mức hài lòng, cao nhất ${formatCount(maxTotal)} phản hồi.`
+            }
+            tooltipFor={(total, counts) =>
+              `${formatCount(total)} phản hồi · Rất tệ ${formatCount(counts.negative)}`
+            }
           />
         </div>
       ) : null}
@@ -293,6 +354,7 @@ export function CsatCharts({
               <div key={`${grouping}:${row.value}`} className={chartStyles.groupRow}>
                 <span className={chartStyles.groupLabel}>{row.label}</span>
                 <SplitBar
+                  buckets={BUCKETS}
                   counts={row}
                   total={row.ticket_count}
                   label={`${row.label}: ${BUCKETS.map(

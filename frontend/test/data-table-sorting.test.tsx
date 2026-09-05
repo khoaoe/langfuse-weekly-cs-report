@@ -405,7 +405,7 @@ describe("sorting bảng dữ liệu", () => {
       name: /Xếp theo số ca chuyển CS nhiều nhất/,
     });
     expect(document.getElementById("segmentCaption")).toHaveTextContent(
-      "Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó. Nhóm dưới 20 ticket chỉ hiện số ca, không hiện tỷ lệ.",
+      "Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó.",
     );
     expect(document.getElementById("segmentCaption")).not.toHaveTextContent(
       /tăng dần|giảm dần|Đang sắp xếp/,

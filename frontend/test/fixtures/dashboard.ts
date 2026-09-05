@@ -123,6 +123,7 @@ function view(weekDefinition: "mon_sun" | "mon_fri", total: number) {
     csat: null,
     outcome_reconciliation: null,
     entry_coverage: null,
+    ai_review: null,
     rule_gt4: { gt4_turn_total: 3, gt4_turn_with_cs: 1, gt4_turn_without_cs: 2, max_replies_rule_fired: 0 },
   };
 }

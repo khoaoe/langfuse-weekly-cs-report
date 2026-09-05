@@ -80,11 +80,11 @@ export function reduceDashboardRuntime(
       }
 
       const snapshot = parsed.data.snapshot ?? state.snapshot;
-      if (snapshot === null) {
-        return transition("loading", null);
-      }
       if (parsed.data.status === "stale_error") {
         return transition("stale_error", snapshot);
+      }
+      if (snapshot === null) {
+        return transition("loading", null);
       }
       if (parsed.data.status === "refreshing" || parsed.data.refreshing) {
         return transition("refreshing", snapshot);

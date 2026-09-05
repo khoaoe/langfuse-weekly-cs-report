@@ -18,4 +18,14 @@ describe("dashboard runtime state", () => {
     expect(stale.message).toBe("Không thể tải dữ liệu mới. Đang hiển thị dữ liệu gần nhất.");
     expect(stale.message).not.toContain("private_upstream_timeout");
   });
+
+  it("reports stale_error, not loading, when the first snapshot has never arrived", () => {
+    const stale = reduceDashboardRuntime(initialDashboardRuntime(), {
+      type: "envelope",
+      envelope: { status: "stale_error", refreshing: false, last_error_code: "langfuse_unavailable", last_error_at: null, snapshot: null },
+    });
+
+    expect(stale).toMatchObject({ kind: "stale_error", snapshot: null });
+    expect(stale.message).toBe("Chưa tải được dữ liệu dashboard. Hệ thống sẽ thử lại.");
+  });
 });

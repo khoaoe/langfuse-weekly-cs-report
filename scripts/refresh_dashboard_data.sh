@@ -70,6 +70,17 @@ if ! jq -e '.status == "complete"' <<<"$reconciliation_result" >/dev/null; then
   exit 1
 fi
 
+ai_review_result="$(
+  uv run --isolated --locked weekly-cs-report fetch-freshdesk-ai-review \
+    --weeks 13 --max-duration 7200 \
+    --runtime-dir "$project_root/runtime"
+)"
+printf '%s\n' "$ai_review_result"
+if ! jq -e '.status == "complete"' <<<"$ai_review_result" >/dev/null; then
+  echo "Freshdesk AI review refresh did not complete; dashboard refresh cancelled" >&2
+  exit 1
+fi
+
 curl -fsS --max-time 10 -X POST \
   -H 'X-Dashboard-Action: refresh' \
   "${dashboard_url}/api/refresh" >/dev/null

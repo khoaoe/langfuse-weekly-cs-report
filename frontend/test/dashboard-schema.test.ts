@@ -1217,4 +1217,175 @@ describe("dashboard API envelope", () => {
       expect(DashboardEnvelopeSchema.safeParse(malformed).success).toBe(false);
     },
   );
+
+  const aiReviewCounts = {
+    reviewed_ticket_count: 5,
+    rated_ticket_count: 3,
+    satisfied_count: 2,
+    satisfied_with_edit_count: 1,
+    needs_edit_count: 0,
+  };
+  const emptyAiReviewCounts = {
+    reviewed_ticket_count: 0,
+    rated_ticket_count: 0,
+    satisfied_count: 0,
+    satisfied_with_edit_count: 0,
+    needs_edit_count: 0,
+  };
+  const aiReviewBucket = {
+    ...aiReviewCounts,
+    by_outcome: {
+      ai_end_to_end: aiReviewCounts,
+      ai_then_cs: emptyAiReviewCounts,
+      direct_cs: emptyAiReviewCounts,
+      unclassified: emptyAiReviewCounts,
+    },
+    by_dimension: {
+      skill: [{ value: "interbank-fund-transfer", ...aiReviewCounts }],
+      issue_category: [{ value: "Chuyển tiền", ...aiReviewCounts }],
+    },
+    by_review_count: [{ value: "1", ...aiReviewCounts }],
+  };
+  const aiReview = {
+    source: "freshdesk" as const,
+    fetched_at: "2026-08-01T03:00:00Z",
+    by_week: { "2026-07-20": aiReviewBucket },
+    by_day: {},
+  };
+
+  function envelopeWithAiReview(value: unknown = aiReview) {
+    return {
+      ...dashboardEnvelopeFixture,
+      snapshot: {
+        ...dashboardEnvelopeFixture.snapshot,
+        views: {
+          ...dashboardEnvelopeFixture.snapshot.views,
+          mon_sun: {
+            ...dashboardEnvelopeFixture.snapshot.views.mon_sun,
+            ai_review: value,
+          },
+        },
+      },
+    };
+  }
+
+  it("accepts a reconciling AI review (hậu kiểm) payload", () => {
+    const parsed = DashboardEnvelopeSchema.parse(envelopeWithAiReview());
+
+    expect(parsed.snapshot?.views.mon_sun.ai_review).toEqual(aiReview);
+  });
+
+  it("requires the nullable ai_review key on every dashboard view", () => {
+    const view = dashboardEnvelopeFixture.snapshot.views.mon_sun;
+    const { ai_review: removedAiReview, ...withoutAiReview } = view;
+    expect(removedAiReview).toBeNull();
+
+    expect(
+      DashboardEnvelopeSchema.safeParse({
+        ...dashboardEnvelopeFixture,
+        snapshot: {
+          ...dashboardEnvelopeFixture.snapshot,
+          views: {
+            ...dashboardEnvelopeFixture.snapshot.views,
+            mon_sun: withoutAiReview,
+          },
+        },
+      }).success,
+    ).toBe(false);
+  });
+
+  it.each([
+    [
+      "rated count above reviewed count",
+      { ...aiReview, by_week: { "2026-07-20": { ...aiReviewBucket, reviewed_ticket_count: 2 } } },
+    ],
+    [
+      "rating buckets that do not sum to rated_ticket_count",
+      { ...aiReview, by_week: { "2026-07-20": { ...aiReviewBucket, satisfied_count: 99 } } },
+    ],
+    [
+      "an outcome bucket that does not reconcile",
+      {
+        ...aiReview,
+        by_week: {
+          "2026-07-20": {
+            ...aiReviewBucket,
+            by_outcome: {
+              ...aiReviewBucket.by_outcome,
+              ai_end_to_end: { ...aiReviewCounts, satisfied_count: 99 },
+            },
+          },
+        },
+      },
+    ],
+    [
+      "a dimension bucket that does not reconcile",
+      {
+        ...aiReview,
+        by_week: {
+          "2026-07-20": {
+            ...aiReviewBucket,
+            by_dimension: {
+              ...aiReviewBucket.by_dimension,
+              skill: [{ value: "interbank-fund-transfer", ...aiReviewCounts, satisfied_count: 99 }],
+            },
+          },
+        },
+      },
+    ],
+    [
+      "a review-count bucket whose reviewed total does not reconcile",
+      {
+        ...aiReview,
+        by_week: {
+          "2026-07-20": {
+            ...aiReviewBucket,
+            by_review_count: [{ value: "1", ...aiReviewCounts, reviewed_ticket_count: 99 }],
+          },
+        },
+      },
+    ],
+    [
+      "duplicate dimension values",
+      {
+        ...aiReview,
+        by_week: {
+          "2026-07-20": {
+            ...aiReviewBucket,
+            by_dimension: {
+              ...aiReviewBucket.by_dimension,
+              skill: [
+                { value: "interbank-fund-transfer", ...aiReviewCounts },
+                { value: "interbank-fund-transfer", ...emptyAiReviewCounts },
+              ],
+            },
+          },
+        },
+      },
+    ],
+    [
+      "an invalid review-count value",
+      {
+        ...aiReview,
+        by_week: {
+          "2026-07-20": {
+            ...aiReviewBucket,
+            by_review_count: [{ value: "once", ...aiReviewCounts }],
+          },
+        },
+      },
+    ],
+    [
+      "an AI review week outside the view",
+      { ...aiReview, by_week: { "2026-07-27": aiReviewBucket } },
+    ],
+    [
+      "non-Freshdesk source",
+      { ...aiReview, source: "langfuse" },
+    ],
+  ])("rejects an AI review payload with %s", (_label, value) => {
+    expect(DashboardEnvelopeSchema.safeParse(envelopeWithAiReview(value)).success).toBe(
+      false,
+    );
+  });
 });
