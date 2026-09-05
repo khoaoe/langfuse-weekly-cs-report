@@ -563,6 +563,48 @@ def test_ai_review_command_skips_a_ticket_freshdesk_no_longer_has(
     assert set(cache.fetched_weeks) == {"2026-06-29"}
 
 
+def test_ai_review_command_does_not_vouch_for_a_cookie_it_never_used(
+    monkeypatch, tmp_path: Path
+):
+    """A run that stops before its first request proves nothing about the cookie.
+
+    `mark_cookie_verified` drives the UI's "cookie still good" state, so
+    writing it on a run that made no request would let an already-expired
+    cookie read as healthy until the next job happens to try one.
+    """
+
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report import freshdesk_csat
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(
+        cli_module,
+        "_ai_review_population",
+        lambda *_args: {"2026-06-29": ("101",)},
+    )
+    verified: list[Path] = []
+    monkeypatch.setattr(freshdesk_csat, "mark_cookie_verified", verified.append)
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_ticket_metadata(self, ticket_id):
+            raise AssertionError("the deadline had already passed")
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
+
+    result = cli_module._run_fetch_freshdesk_ai_review_command(
+        _ai_review_args(runtime, max_duration="0")
+    )
+
+    assert result["status"] == "duration_limit_reached"
+    assert verified == []
+
+
 def test_ai_review_command_skips_a_just_fetched_week_on_the_next_run(
     monkeypatch, tmp_path: Path
 ):

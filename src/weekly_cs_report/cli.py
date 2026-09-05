@@ -1281,6 +1281,10 @@ def _run_fetch_freshdesk_ai_review_command(
         return monotonic_time.monotonic() >= deadline
 
     status = "complete"
+    # Only a request that actually came back proves the cookie still works;
+    # a run that stops on its deadline before the first one vouches for
+    # nothing.
+    answered = False
     try:
         with _freshdesk_client(args.auth, runtime_directory) as client:
             for week in target_weeks:
@@ -1296,6 +1300,7 @@ def _run_fetch_freshdesk_ai_review_command(
                     except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
                         interrupted = True
                         break
+                    answered = True
                     if metadata is None:
                         # Deleted or merged since the snapshot was built; the
                         # week is still complete without it.
@@ -1333,7 +1338,7 @@ def _run_fetch_freshdesk_ai_review_command(
         if args.auth == "cookie":
             mark_cookie_expired(runtime_directory)
         raise
-    if args.auth == "cookie" and target_weeks:
+    if args.auth == "cookie" and answered:
         mark_cookie_verified(runtime_directory)
 
     selected_records = tuple(
