@@ -24,6 +24,8 @@ from weekly_cs_report.dashboard_schema import (
     ticket_day_aggregate,
     ticket_page,
 )
+from weekly_cs_report.ai_review import AIReviewRecord
+from weekly_cs_report.ai_review_cache import AIReviewCache
 from weekly_cs_report.entry_coverage_cache import (
     EntryCoverageCache,
     EntryCoverageRecord,
@@ -136,7 +138,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 25
+    assert snapshot.storage_dict()["schema_version"] == 26
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -186,7 +188,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 25
+    value["schema_version"] = 26
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -675,6 +677,210 @@ def test_entry_coverage_ticket_page_cuts_to_the_picked_days():
     assert [item["ticket_id"] for item in days["items"]] == ["145667", "145665"]
     assert days["total"] == 2
     assert weeks["total"] == 3
+
+
+_AI_REVIEW_COUNT_KEYS = (
+    "reviewed_ticket_count",
+    "rated_ticket_count",
+    "satisfied_count",
+    "satisfied_with_edit_count",
+    "needs_edit_count",
+)
+
+
+def _ai_review_snapshot() -> DashboardSnapshot:
+    """The same shape as `_entry_coverage_snapshot()`, hậu kiểm AI grain.
+
+    145665/145667/145666 sit in the fetched week 2026-07-20: reviewed with a
+    rating, reviewed with count 0 and no rating yet, and reviewed with a
+    different rating. 145670 sits in the same week but was never touched by
+    hậu kiểm at all (both fields null) -- the fourth ticket that keeps
+    `reviewed_ticket_count`/`rated_ticket_count` from accidentally equaling
+    the week's total ticket count. 145669 sits in an unfetched week.
+    """
+    run = _run(
+        [
+            _meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply")),
+            _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML)),
+            # 18:00Z on Friday the 24th is already Saturday the 25th in Vietnam.
+            _meta(trace("weekend", "145666", 0, "2026-07-24T18:00:00Z", "AI reply")),
+            _meta(trace("never-reviewed", "145670", 0, "2026-07-21T02:00:00Z", "AI reply")),
+            _meta(trace("unfetched", "145669", 0, "2026-07-14T02:00:00Z", "AI reply")),
+        ]
+    )
+    cache = AIReviewCache(
+        fetched_weeks={"2026-07-20": "2026-08-04T01:00:00Z"},
+        records=(
+            AIReviewRecord(
+                ticket_id="145665",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+                rating="satisfied",
+                review_count=2,
+                review_date="2026-07-21",
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=True,
+            ),
+            AIReviewRecord(
+                ticket_id="145667",
+                opened_at="2026-07-22T02:00:00Z",
+                cohort_week="2026-07-20",
+                rating=None,
+                review_count=0,
+                review_date=None,
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=None,
+            ),
+            AIReviewRecord(
+                ticket_id="145666",
+                opened_at="2026-07-24T18:00:00Z",
+                cohort_week="2026-07-20",
+                rating="needs_edit",
+                review_count=1,
+                review_date="2026-07-25",
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=False,
+            ),
+            AIReviewRecord(
+                ticket_id="145670",
+                opened_at="2026-07-21T02:00:00Z",
+                cohort_week="2026-07-20",
+                rating=None,
+                review_count=None,
+                review_date=None,
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=None,
+            ),
+            AIReviewRecord(
+                ticket_id="145669",
+                opened_at="2026-07-14T02:00:00Z",
+                cohort_week="2026-07-13",
+                rating="satisfied",
+                review_count=1,
+                review_date="2026-07-15",
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=True,
+            ),
+        ),
+    )
+    return project_dashboard(run, ai_review_cache=cache)
+
+
+def test_ai_review_denominators_are_distinct_and_neither_equals_total_ticket_count():
+    dashboard = _ai_review_snapshot().dashboard_dict()
+    week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
+
+    # 4 tickets total this week; 3 were reviewed (count present, including
+    # 0); 2 of those carry a rating. Every number below must differ, or the
+    # fixture is not actually exercising the "two mẫu số" contract.
+    assert week["reviewed_ticket_count"] == 3
+    assert week["rated_ticket_count"] == 2
+    assert week["satisfied_count"] == 1
+    assert week["needs_edit_count"] == 1
+    assert week["satisfied_with_edit_count"] == 0
+    weekly_by_key = {
+        item["cohort_week"]: item for item in dashboard["views"]["mon_sun"]["weekly"]
+    }
+    total_tickets = weekly_by_key["2026-07-20"]["total_tickets"]
+    assert total_tickets == 4
+    assert week["reviewed_ticket_count"] != total_tickets
+    assert week["rated_ticket_count"] != total_tickets
+    assert week["rated_ticket_count"] != week["reviewed_ticket_count"]
+
+
+def test_ai_review_ticket_with_zero_review_count_is_reviewed_but_not_rated():
+    dashboard = _ai_review_snapshot().dashboard_dict()
+    week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
+    review_count_rows = {row["value"]: row for row in week["by_review_count"]}
+
+    # 145667 has review_count == 0 and no rating: it must land in the "0"
+    # review-count bucket and count toward reviewed, but never toward rated.
+    assert review_count_rows["0"]["reviewed_ticket_count"] == 1
+    assert review_count_rows["0"]["rated_ticket_count"] == 0
+    # 145670 (never reviewed at all) must not appear in any review-count
+    # bucket -- it has no review_count to key one on.
+    assert sum(row["reviewed_ticket_count"] for row in week["by_review_count"]) == 3
+
+
+def test_ai_review_accepts_a_rating_without_a_review_count():
+    """The two custom fields are filled independently in production.
+
+    Measured 2026-09-05 over the live cache: 8.717 tickets carry
+    `cf_rating_ai` but only 6.677 carry `cf_s_ln_hu_kim_ai` -- 3.574 are
+    rated with no review count at all, and 1.534 the other way round. The
+    validator used to assert `rated <= reviewed`, which no real week
+    satisfies, so every refresh raised and the dashboard sat on a stale
+    snapshot still showing the "job never ran" empty state.
+
+    `_ai_review_snapshot()` never caught it because every rated record in
+    that fixture also carries a count.
+    """
+
+    run = _run([_meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))])
+    cache = AIReviewCache(
+        fetched_weeks={"2026-07-20": "2026-08-04T01:00:00Z"},
+        records=(
+            AIReviewRecord(
+                ticket_id="145665",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+                rating="satisfied",
+                review_count=None,
+                review_date=None,
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=None,
+            ),
+        ),
+    )
+
+    dashboard = project_dashboard(run, ai_review_cache=cache).dashboard_dict()
+    week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
+
+    assert week["rated_ticket_count"] == 1
+    assert week["satisfied_count"] == 1
+    assert week["reviewed_ticket_count"] == 0
+
+
+def test_ai_review_buckets_by_vietnam_day_and_sums_back_to_its_week():
+    dashboard = _ai_review_snapshot().dashboard_dict()
+
+    mon_sun = dashboard["views"]["mon_sun"]["ai_review"]
+    mon_fri = dashboard["views"]["mon_fri"]["ai_review"]
+    by_day = mon_sun["by_day"]
+
+    # One bucket per Vietnam-local opening day (from each record's own
+    # `opened_at`, not a session timestamp). The 18:00Z record belongs to
+    # Saturday the 25th; a UTC-keyed cut would file it under Friday.
+    assert sorted(by_day) == ["2026-07-20", "2026-07-21", "2026-07-22", "2026-07-25"]
+    # 2026-07-14 has a record, but its week was never fetched from Freshdesk.
+    # Neither grain may invent a bucket for it.
+    assert "2026-07-14" not in by_day
+    assert "2026-07-13" not in mon_sun["by_week"]
+
+    week = mon_sun["by_week"]["2026-07-20"]
+    for field in _AI_REVIEW_COUNT_KEYS:
+        assert sum(day[field] for day in by_day.values()) == week[field], field
+
+    # mon_fri drops the weekend-start ticket at both grains, exactly as it
+    # drops it everywhere else on the dashboard.
+    assert "2026-07-25" not in mon_fri["by_day"]
+    assert mon_fri["by_week"]["2026-07-20"]["reviewed_ticket_count"] == 2
+    assert (
+        sum(day["reviewed_ticket_count"] for day in mon_fri["by_day"].values()) == 2
+    )
+
+
+def test_missing_ai_review_cache_projects_explicit_null_in_both_views():
+    dashboard = _snapshot().dashboard_dict()
+
+    assert dashboard["views"]["mon_sun"]["ai_review"] is None
+    assert dashboard["views"]["mon_fri"]["ai_review"] is None
 
 
 def test_missing_csat_cache_projects_explicit_null_in_both_views():

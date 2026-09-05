@@ -309,6 +309,106 @@ def test_ui_list_ticket_metadata_resumes_past_prior_call_page_budget():
     assert [item.ticket_id for item in result] == ["1301"]
 
 
+def test_ui_get_retries_a_transient_transport_error_then_succeeds():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        if len(attempts) < 3:
+            raise httpx.ConnectError("connection reset", request=request)
+        return httpx.Response(200, json={"tickets": []})
+
+    slept: list[float] = []
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(handler),
+        sleep=slept.append,
+    ) as client:
+        result = client.list_ticket_metadata(
+            updated_since=datetime(2026, 6, 28, 17, tzinfo=timezone.utc),
+            created_before=datetime(2026, 6, 29, 17, tzinfo=timezone.utc),
+        )
+
+    assert result == ()
+    assert len(attempts) == 3
+    assert slept[:2] == [2.0, 2.0]
+
+
+def test_ui_get_gives_up_after_the_transport_retry_budget():
+    attempts = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        attempts.append(request)
+        raise httpx.ConnectError("connection reset", request=request)
+
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _seconds: None,
+    ) as client:
+        with pytest.raises(FreshdeskCSATError, match="request failed"):
+            client.list_ticket_metadata(
+                updated_since=datetime(2026, 6, 28, 17, tzinfo=timezone.utc),
+                created_before=datetime(2026, 6, 29, 17, tzinfo=timezone.utc),
+            )
+
+    assert len(attempts) == 12  # _MAX_RETRIES + 1
+
+
+def test_ui_get_ticket_metadata_reads_the_wrapped_ticket_payload():
+    """The single-ticket endpoint wraps its body, unlike the listing."""
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "ticket": {
+                    "id": 6964960,
+                    "created_at": "2026-06-28T18:08:04Z",
+                    "custom_fields": {
+                        "cf_rating_ai": "Hài Lòng",
+                        "cf_trng_thi_ai_reopen": "Đã phản hồi 2",
+                    },
+                }
+            },
+        )
+
+    with FreshdeskUIClient(
+        "cs_session=abc123", transport=httpx.MockTransport(handler)
+    ) as client:
+        metadata = client.get_ticket_metadata("6964960")
+
+    assert requests[0].url.path == "/api/_/tickets/6964960"
+    assert metadata is not None
+    assert metadata.ticket_id == "6964960"
+    assert metadata.created_at == "2026-06-28T18:08:04Z"
+    assert metadata.ai_review_rating_raw == "Hài Lòng"
+    assert metadata.ai_reopen_status_raw == "Đã phản hồi 2"
+    assert metadata.ai_review_count_raw is None
+
+
+def test_ui_get_ticket_metadata_returns_none_for_a_missing_ticket():
+    """A deleted or merged ticket must skip, not end the population run."""
+
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(lambda r: httpx.Response(404, json={})),
+    ) as client:
+        assert client.get_ticket_metadata("6964960") is None
+
+
+def test_ui_get_ticket_metadata_rejects_a_non_numeric_ticket_id():
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={})),
+    ) as client:
+        with pytest.raises(FreshdeskCSATError, match="ticket ID"):
+            client.get_ticket_metadata("../admin")
+
+
 def test_ui_list_ticket_metadata_windows_query_by_created_before():
     requests: list[httpx.Request] = []
 

@@ -50,6 +50,7 @@ _BUCKETS = ("positive", "neutral", "negative")
 # waits cover up to 55 minutes without increasing request concurrency.
 _MAX_RETRIES = 11
 _MAX_RETRY_AFTER_SECONDS = 300.0
+_TRANSPORT_RETRY_SECONDS = 2.0
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 _MAX_CONVERSATION_PAGES = 100
 _CONVERSATION_PAGE_SIZE = 100
@@ -100,6 +101,9 @@ def _ticket_metadata_from_item(item: Mapping[str, object]) -> FreshdeskTicketMet
         created_at=item["created_at"],
         **extracted,
     )
+
+
+_TICKET_NOT_FOUND = object()
 
 
 class FreshdeskCSATError(RuntimeError):
@@ -375,6 +379,27 @@ class FreshdeskClient:
             raise FreshdeskCSATError("Freshdesk rating response is invalid")
         return tuple(value)
 
+    def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
+        """One ticket by ID; see the cookie client's method for why.
+
+        REST returns the ticket unwrapped, where the UI API nests it under
+        `ticket`. Only the cookie path was exercised live on 2026-09-05 --
+        this mirrors the documented REST shape so `--auth rest` keeps
+        working, and is covered by unit test only.
+        """
+
+        if not ticket_id.isdigit():
+            raise FreshdeskCSATError("Freshdesk ticket ID is invalid")
+        value = self._get_json(
+            f"/api/v2/tickets/{ticket_id}",
+            not_found=_TICKET_NOT_FOUND,
+        )
+        if value is _TICKET_NOT_FOUND:
+            return None
+        if not isinstance(value, Mapping):
+            raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+        return _ticket_metadata_from_item(value)
+
     def get_conversation_metadata(
         self,
         ticket_id: str,
@@ -608,6 +633,38 @@ class FreshdeskUIClient:
         if not isinstance(value, (list, tuple)):
             raise FreshdeskCSATError("Freshdesk rating response is invalid")
         return tuple(value)
+
+    def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
+        """One ticket by ID, for a job scoped to a known population.
+
+        The AI post-review job used to reach these same custom fields by
+        paginating a search over every Freshdesk ticket in the week, which is
+        how it met the 300-page cap: measured 2026-09-05, that universe is
+        190.723 tickets where the dashboard can only ever show 18.134 --
+        `_ai_review_payload` intersects records with Langfuse sessions, so
+        the other ~172.000 are fetched and then discarded. Addressing tickets
+        by ID, the shape `fetch-csat` has always used, puts the population
+        under our control and makes the cap unreachable rather than merely
+        far away.
+
+        Unlike the listing, this endpoint wraps its body in `ticket`
+        (verified live 2026-09-05).
+        """
+
+        if not ticket_id.isdigit():
+            raise FreshdeskCSATError("Freshdesk ticket ID is invalid")
+        value = self._get_json(
+            f"/api/_/tickets/{ticket_id}",
+            not_found=_TICKET_NOT_FOUND,
+        )
+        if value is _TICKET_NOT_FOUND:
+            return None
+        if not isinstance(value, Mapping):
+            raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+        ticket = value.get("ticket")
+        if not isinstance(ticket, Mapping):
+            raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+        return _ticket_metadata_from_item(ticket)
 
     def get_conversation_metadata(
         self,
@@ -843,6 +900,18 @@ class FreshdeskUIClient:
             try:
                 response = self._client.get(path, params=params)
             except httpx.HTTPError:
+                # A backfill issues thousands of GETs over ~an hour and will
+                # meet a reset or timeout eventually; without this, one hiccup
+                # ends the whole run (observed 2026-09-05). These are
+                # idempotent reads, so retry them on the same budget as 429.
+                if attempt < _MAX_RETRIES:
+                    if should_stop is not None and should_stop():
+                        raise FreshdeskFetchDeadline(
+                            "Freshdesk fetch duration limit reached"
+                        ) from None
+                    self._sleep(_TRANSPORT_RETRY_SECONDS)
+                    _check_fetch_deadline(should_stop)
+                    continue
                 raise FreshdeskCSATError("Freshdesk request failed") from None
             if response.is_redirect:
                 raise FreshdeskCSATError("Freshdesk redirect was rejected")

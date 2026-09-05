@@ -1109,6 +1109,173 @@ export const EntryCoverageSchema = z
   .strict();
 export type EntryCoverage = z.infer<typeof EntryCoverageSchema>;
 
+const AI_REVIEW_COUNT_KEYS = [
+  "reviewed_ticket_count",
+  "rated_ticket_count",
+  "satisfied_count",
+  "satisfied_with_edit_count",
+  "needs_edit_count",
+] as const;
+
+function aiReviewRatingsReconcile(value: {
+  reviewed_ticket_count: number;
+  rated_ticket_count: number;
+  satisfied_count: number;
+  satisfied_with_edit_count: number;
+  needs_edit_count: number;
+}): boolean {
+  // Only the rating buckets reconcile. `rated` does NOT nest inside
+  // `reviewed`: CS fills `cf_rating_ai` and `cf_s_ln_hu_kim_ai`
+  // independently, and every week before 2026-07-27 has ratings with no
+  // review count at all.
+  return (
+    value.rated_ticket_count ===
+    value.satisfied_count + value.satisfied_with_edit_count + value.needs_edit_count
+  );
+}
+
+/** Two denominators, never the total ticket count: reviewed (hậu kiểm ran) vs rated (a label exists). */
+const AiReviewCountsSchema = z
+  .object({
+    reviewed_ticket_count: nonNegativeInteger,
+    rated_ticket_count: nonNegativeInteger,
+    satisfied_count: nonNegativeInteger,
+    satisfied_with_edit_count: nonNegativeInteger,
+    needs_edit_count: nonNegativeInteger,
+  })
+  .strict()
+  .refine(aiReviewRatingsReconcile, {
+    message: "AI review rating buckets must reconcile.",
+  });
+
+const AiReviewDimensionCountsSchema = z
+  .object({
+    value: safeLabel,
+    reviewed_ticket_count: nonNegativeInteger,
+    rated_ticket_count: nonNegativeInteger,
+    satisfied_count: nonNegativeInteger,
+    satisfied_with_edit_count: nonNegativeInteger,
+    needs_edit_count: nonNegativeInteger,
+  })
+  .strict()
+  .refine(aiReviewRatingsReconcile, {
+    message: "AI review dimension buckets must reconcile.",
+  });
+
+const AiReviewCountByReviewCountSchema = z
+  .object({
+    value: z.string().regex(/^\d+$/),
+    reviewed_ticket_count: nonNegativeInteger,
+    rated_ticket_count: nonNegativeInteger,
+    satisfied_count: nonNegativeInteger,
+    satisfied_with_edit_count: nonNegativeInteger,
+    needs_edit_count: nonNegativeInteger,
+  })
+  .strict()
+  .refine(aiReviewRatingsReconcile, {
+    message: "AI review review-count buckets must reconcile.",
+  });
+
+export const AiReviewBucketSchema = z
+  .object({
+    reviewed_ticket_count: nonNegativeInteger,
+    rated_ticket_count: nonNegativeInteger,
+    satisfied_count: nonNegativeInteger,
+    satisfied_with_edit_count: nonNegativeInteger,
+    needs_edit_count: nonNegativeInteger,
+    by_outcome: z
+      .object({
+        ai_end_to_end: AiReviewCountsSchema,
+        ai_then_cs: AiReviewCountsSchema,
+        direct_cs: AiReviewCountsSchema,
+        unclassified: AiReviewCountsSchema,
+      })
+      .strict(),
+    by_dimension: z
+      .object({
+        skill: z.array(AiReviewDimensionCountsSchema),
+        issue_category: z.array(AiReviewDimensionCountsSchema),
+      })
+      .strict(),
+    by_review_count: z.array(AiReviewCountByReviewCountSchema),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (!aiReviewRatingsReconcile(value)) {
+      context.addIssue({
+        code: "custom",
+        path: ["rated_ticket_count"],
+        message: "AI review rating buckets must reconcile.",
+      });
+    }
+    for (const key of AI_REVIEW_COUNT_KEYS) {
+      const outcomeTotal = Object.values(value.by_outcome).reduce(
+        (total, row) => total + row[key],
+        0,
+      );
+      if (outcomeTotal !== value[key]) {
+        context.addIssue({
+          code: "custom",
+          path: ["by_outcome"],
+          message: `AI review outcome ${key} does not reconcile.`,
+        });
+      }
+    }
+    for (const dimension of ["skill", "issue_category"] as const) {
+      const rows = value.by_dimension[dimension];
+      const labels = new Set(rows.map((row) => row.value));
+      if (labels.size !== rows.length) {
+        context.addIssue({
+          code: "custom",
+          path: ["by_dimension", dimension],
+          message: "AI review dimension values must be unique.",
+        });
+      }
+      for (const key of AI_REVIEW_COUNT_KEYS) {
+        if (rows.reduce((total, row) => total + row[key], 0) !== value[key]) {
+          context.addIssue({
+            code: "custom",
+            path: ["by_dimension", dimension],
+            message: `AI review dimension ${key} does not reconcile.`,
+          });
+        }
+      }
+    }
+    const reviewCountLabels = new Set(value.by_review_count.map((row) => row.value));
+    if (reviewCountLabels.size !== value.by_review_count.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["by_review_count"],
+        message: "AI review review-count values must be unique.",
+      });
+    }
+    const reviewCountTotal = value.by_review_count.reduce(
+      (total, row) => total + row.reviewed_ticket_count,
+      0,
+    );
+    if (reviewCountTotal !== value.reviewed_ticket_count) {
+      context.addIssue({
+        code: "custom",
+        path: ["by_review_count"],
+        message: "AI review review-count reviewed total does not reconcile.",
+      });
+    }
+  });
+export type AiReviewBucket = z.infer<typeof AiReviewBucketSchema>;
+
+export const AiReviewSchema = z
+  .object({
+    source: z.literal("freshdesk"),
+    fetched_at: UtcDateTimeSchema,
+    by_week: z.record(WeekStringSchema, AiReviewBucketSchema),
+    // Unlike CSAT/EntryCoverage, ai_review has no legacy snapshots predating
+    // day-grain -- both grains have always shipped together, so this is
+    // required rather than optional.
+    by_day: z.record(IsoDateSchema, AiReviewBucketSchema),
+  })
+  .strict();
+export type AiReview = z.infer<typeof AiReviewSchema>;
+
 export const DashboardViewSchema = z
   .object({
     totals: z
@@ -1157,6 +1324,7 @@ export const DashboardViewSchema = z
     csat: CsatSchema.nullable(),
     outcome_reconciliation: OutcomeReconciliationSchema.nullable(),
     entry_coverage: EntryCoverageSchema.nullable(),
+    ai_review: AiReviewSchema.nullable(),
     rule_gt4: z
       .object({
         gt4_turn_total: nonNegativeInteger,
@@ -1229,6 +1397,17 @@ export const DashboardViewSchema = z
             code: "custom",
             message: "CSAT weeks must stay inside the dashboard view.",
             path: ["csat", "by_week", cohortWeek],
+          });
+        }
+      }
+    }
+    if (view.ai_review !== null) {
+      for (const cohortWeek of Object.keys(view.ai_review.by_week)) {
+        if (!weeklyKeys.has(cohortWeek)) {
+          context.addIssue({
+            code: "custom",
+            message: "AI review weeks must stay inside the dashboard view.",
+            path: ["ai_review", "by_week", cohortWeek],
           });
         }
       }

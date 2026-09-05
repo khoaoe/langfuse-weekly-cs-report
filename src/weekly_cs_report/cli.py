@@ -1183,7 +1183,20 @@ def _entry_coverage_population(runtime_directory: Path, weeks: int):
     return selected_weeks, langfuse_tickets
 
 
-def _ai_review_population(runtime_directory: Path, weeks: int) -> tuple[str, ...]:
+def _ai_review_population(
+    runtime_directory: Path, weeks: int
+) -> dict[str, tuple[str, ...]]:
+    """Week -> the Langfuse ticket IDs to ask Freshdesk about.
+
+    Same shape and same reasoning as `_csat_population`: the dashboard can
+    only ever show a ticket that Langfuse already knows, because
+    `_ai_review_payload` keeps a record only when `session_id` matches one.
+    Measured 2026-09-05, searching Freshdesk for the whole week instead
+    returned 190.723 tickets to serve 18.134 -- and hit the 300-page cap on
+    9 of 10 weeks. Naming the tickets up front is what makes the cap
+    unreachable; every other guard only pushes it further away.
+    """
+
     from .ai_review_cache import AI_REVIEW_START_WEEK
     from .ai_review import AIReviewError
     from .dashboard_cache import ProtectedSnapshotStore
@@ -1195,19 +1208,26 @@ def _ai_review_population(runtime_directory: Path, weeks: int) -> tuple[str, ...
     if snapshot is None:
         raise AIReviewError("Dashboard snapshot is unavailable for AI review")
     weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
-    return tuple(
+    selected_weeks = tuple(
         row["cohort_week"]
         for row in weekly_rows[-weeks:]
         if row["cohort_week"] >= AI_REVIEW_START_WEEK
     )
+    return {
+        week: tuple(
+            sorted(
+                ticket.ticket_id
+                for ticket in snapshot.tickets
+                if ticket.cohort_week == week and str(ticket.ticket_id).isdigit()
+            )
+        )
+        for week in selected_weeks
+    }
 
 
 def _run_fetch_freshdesk_ai_review_command(
     args: argparse.Namespace,
 ) -> dict[str, object]:
-    from datetime import timedelta
-
-    from .cohort import VIETNAM_TIMEZONE
     from .ai_review import AIReviewError, build_ai_review_record, load_ai_review_label_config
     from .ai_review_cache import (
         AIReviewCache,
@@ -1215,7 +1235,6 @@ def _run_fetch_freshdesk_ai_review_command(
         load_ai_review_cache,
         write_ai_review_cache,
     )
-    from .freshdesk_entry_coverage import _cohort_week
     from .freshdesk_csat import (
         FreshdeskCookieExpired,
         FreshdeskFetchDeadline,
@@ -1227,13 +1246,14 @@ def _run_fetch_freshdesk_ai_review_command(
     import time as monotonic_time
 
     runtime_directory = Path(args.runtime_dir)
-    selected_weeks = _ai_review_population(runtime_directory, args.weeks)
+    population = _ai_review_population(runtime_directory, args.weeks)
+    selected_weeks = tuple(sorted(population))
     if not selected_weeks:
         raise AIReviewError("AI review has no report weeks")
     selected = frozenset(selected_weeks)
-    # A checkpoint from before the windowed-crawl redesign (2026-09-05) is
-    # anchored to an open-ended query and cannot be resumed; each week is now
-    # bounded on its own, so no cross-run page checkpoint is needed at all.
+    # A checkpoint from the crawl era (2026-09-05) is anchored to a search
+    # cursor that no longer exists; the population is now a list of ticket IDs
+    # resumed per week, so no cross-run page checkpoint is needed at all.
     stale_checkpoint_path = (
         runtime_directory.parent / "artifacts" / "freshdesk_ai_review" / "inventory_checkpoint.json"
     )
@@ -1261,54 +1281,60 @@ def _run_fetch_freshdesk_ai_review_command(
         return monotonic_time.monotonic() >= deadline
 
     status = "complete"
-    for week in target_weeks:
-        if should_stop():
-            status = "duration_limit_reached"
-            break
-        week_start = datetime.combine(date.fromisoformat(week), time.min, tzinfo=VIETNAM_TIMEZONE)
-        week_end = week_start + timedelta(days=7)
-        # created_before windows the UI (cookie) client's query to one
-        # cohort week, which is what keeps it under the 300-page cap (see
-        # docs/superpowers/specs/2026-09-05-ai-review-windowed-crawl-design.md).
-        # The REST client has no equivalent upper-bound filter; --auth rest
-        # keeps its pre-existing open-ended-query behavior, unchanged by
-        # this fix and out of its scope.
-        list_kwargs: dict[str, object] = {
-            "updated_since": week_start,
-            "should_stop": should_stop,
-        }
-        if args.auth == "cookie":
-            list_kwargs["created_before"] = week_end
-        try:
-            with _freshdesk_client(args.auth, runtime_directory) as client:
-                tickets = client.list_ticket_metadata(**list_kwargs)
-        except FreshdeskCookieExpired:
-            if args.auth == "cookie":
-                mark_cookie_expired(runtime_directory)
-            raise
-        except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
-            status = "duration_limit_reached"
-            break
-        if args.auth == "cookie":
-            mark_cookie_verified(runtime_directory)
+    try:
+        with _freshdesk_client(args.auth, runtime_directory) as client:
+            for week in target_weeks:
+                ticket_ids = population[week]
+                fetched: list[object] = []
+                interrupted = False
+                for ticket_id in ticket_ids:
+                    if should_stop():
+                        interrupted = True
+                        break
+                    try:
+                        metadata = client.get_ticket_metadata(ticket_id)
+                    except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+                        interrupted = True
+                        break
+                    if metadata is None:
+                        # Deleted or merged since the snapshot was built; the
+                        # week is still complete without it.
+                        continue
+                    fetched.append(build_ai_review_record(metadata, labels))
+                if interrupted:
+                    # A half-fetched week must not be recorded as fetched; the
+                    # next run restarts this week from its first ticket.
+                    status = "duration_limit_reached"
+                    break
 
-        for ticket_id, record in list(base_records.items()):
-            if record.cohort_week == week:
-                del base_records[ticket_id]
-        for item in tickets:
-            if _cohort_week(item.created_at) != week:
-                continue
-            record = build_ai_review_record(item, labels)
-            base_records[record.ticket_id] = record
-        base_weeks[week] = _utc_iso(as_of)
+                # Drop by the IDs just asked for, not by each record's own
+                # cohort_week: Freshdesk `created_at` can put a ticket in a
+                # different week than Langfuse did, and keying the delete on
+                # the record would strand those copies.
+                for ticket_id in ticket_ids:
+                    base_records.pop(ticket_id, None)
+                for record in fetched:
+                    base_records[record.ticket_id] = record
+                base_weeks[week] = _utc_iso(as_of)
 
-        try:
-            write_ai_review_cache(
-                runtime_directory / "ai_review_cache.json",
-                AIReviewCache(fetched_weeks=base_weeks, records=tuple(base_records.values())),
-            )
-        except AIReviewCacheError as error:
-            raise AIReviewError("Freshdesk AI review cache could not be published") from error
+                try:
+                    write_ai_review_cache(
+                        runtime_directory / "ai_review_cache.json",
+                        AIReviewCache(
+                            fetched_weeks=base_weeks,
+                            records=tuple(base_records.values()),
+                        ),
+                    )
+                except AIReviewCacheError as error:
+                    raise AIReviewError(
+                        "Freshdesk AI review cache could not be published"
+                    ) from error
+    except FreshdeskCookieExpired:
+        if args.auth == "cookie":
+            mark_cookie_expired(runtime_directory)
+        raise
+    if args.auth == "cookie" and target_weeks:
+        mark_cookie_verified(runtime_directory)
 
     selected_records = tuple(
         item for item in base_records.values() if item.cohort_week in selected

@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, time, timedelta, timezone
 import re
-from typing import AbstractSet, Mapping, Sequence
+from typing import TYPE_CHECKING, AbstractSet, Mapping, Sequence
 from unicodedata import category, decimal, normalize
 from zoneinfo import ZoneInfo
 
@@ -30,8 +30,14 @@ from .pipeline import SamePeriodComparison, summarize_same_period
 from .reopen_shadow import ReopenReasonShadow, unavailable_shadow
 from .report import ReportRun
 
+if TYPE_CHECKING:
+    # Both modules import from here for TicketRow/etc; importing them at
+    # module load time would cycle back into this file.
+    from .ai_review import AIReviewRecord
+    from .ai_review_cache import AIReviewCache
 
-_STORAGE_VERSION = 25
+
+_STORAGE_VERSION = 26
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -110,6 +116,8 @@ _VIETNAMESE_FAMILY_NAMES = frozenset({
 _VIETNAMESE_NAME_MIDDLES = frozenset({"văn", "van", "thị", "thi"})
 _OUTCOMES = ("ai_end_to_end", "ai_then_cs", "direct_cs", "unclassified")
 _CSAT_BUCKETS = ("positive", "neutral", "negative")
+_AI_REVIEW_RATING_BUCKETS = ("satisfied_count", "satisfied_with_edit_count", "needs_edit_count")
+_AI_REVIEW_COUNT_KEYS = ("reviewed_ticket_count", "rated_ticket_count", *_AI_REVIEW_RATING_BUCKETS)
 _CSAT_TICKET_STATES = frozenset({*_CSAT_BUCKETS, "unrated"})
 _CSAT_SORT_RANK = {"negative": 0, "neutral": 1, "positive": 2}
 _VIEWS = ("mon_sun", "mon_fri")
@@ -322,6 +330,7 @@ def project_dashboard(
     csat_cache: CSATCache | None = None,
     reconciliation_cache: ReconciliationCache | None = None,
     entry_coverage_cache: EntryCoverageCache | None = None,
+    ai_review_cache: AIReviewCache | None = None,
 ) -> DashboardSnapshot:
     result = run.result
     generated_at = result.selection.window.as_of.astimezone(timezone.utc)
@@ -357,6 +366,7 @@ def project_dashboard(
             ordered_csat,
             reconciliation_cache,
             entry_coverage_cache,
+            ai_review_cache,
         ),
         tickets,
         tuple(entry_coverage_cache.records) if entry_coverage_cache is not None else (),
@@ -920,6 +930,7 @@ def _dashboard_payload(
     ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
     reconciliation_cache: ReconciliationCache | None,
     entry_coverage_cache: EntryCoverageCache | None,
+    ai_review_cache: AIReviewCache | None,
 ) -> dict[str, object]:
     result = run.result
     selection = result.selection
@@ -940,6 +951,7 @@ def _dashboard_payload(
             ordered_csat,
             reconciliation_cache,
             entry_coverage_cache,
+            ai_review_cache,
             tpe_status_index,
         ),
         "mon_fri": _view_payload(
@@ -953,6 +965,7 @@ def _dashboard_payload(
             ordered_csat,
             reconciliation_cache,
             entry_coverage_cache,
+            ai_review_cache,
             tpe_status_index,
         ),
     }
@@ -999,6 +1012,7 @@ def _view_payload(
     ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
     reconciliation_cache: ReconciliationCache | None,
     entry_coverage_cache: EntryCoverageCache | None,
+    ai_review_cache: AIReviewCache | None,
     tpe_status_index: Mapping[tuple[str, str | None], str],
 ) -> dict[str, object]:
     sessions = tuple(
@@ -1036,6 +1050,7 @@ def _view_payload(
                 ordered_csat,
                 reconciliation_cache,
                 entry_coverage_cache,
+                ai_review_cache,
                 tpe_status_index,
             )
         weekly_payloads.append(_weekly_payload(summary, reopen_reason))
@@ -1088,6 +1103,7 @@ def _view_payload(
             week_definition,
             entry_coverage_cache,
         ),
+        "ai_review": _ai_review_payload(sessions, weekly, ai_review_cache),
         "rule_gt4": {
             "gt4_turn_total": gt4_with + gt4_without,
             "gt4_turn_with_cs": gt4_with,
@@ -1437,6 +1453,142 @@ def _csat_bucket(
         },
         "feedback_entries": feedback_entries,
     }
+
+
+def _ai_review_payload(
+    sessions: tuple[SessionMetrics, ...],
+    weekly: tuple[WeeklySummary, ...],
+    cache: "AIReviewCache | None",
+) -> dict[str, object] | None:
+    """Bucket Freshdesk AI post-review (hậu kiểm) at both week and day grain.
+
+    Mirrors `_csat_payload`'s shape so the frontend does not learn a second
+    one. Unlike CSAT, every record carries its own opening instant (see
+    `AIReviewRecord.opened_at`), so `by_day` keys on that directly instead of
+    a session's Langfuse turn0 timestamp -- the same reasoning that lets
+    `_entry_coverage_payload` skip a session join for its day key. A session
+    join is still needed here, for the outcome/skill/issue_category
+    breakdowns issue 02 requires, which `EntryCoverageRecord` has no
+    equivalent of.
+    """
+    if cache is None or cache.fetched_at is None:
+        return None
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    observed_weeks = {
+        summary.cohort_week
+        for summary in weekly
+        if summary.cohort_week.isoformat() in fetched_weeks
+    }
+    records_by_ticket = {record.ticket_id: record for record in cache.records}
+    scoped = tuple(
+        session
+        for session in sessions
+        if _is_safe_ticket_id(session.session_id)
+        and session.cohort_week in observed_weeks
+        and session.session_id in records_by_ticket
+    )
+    week_members: dict[str, list[SessionMetrics]] = {
+        summary.cohort_week.isoformat(): []
+        for summary in weekly
+        if summary.cohort_week in observed_weeks
+    }
+    day_members: dict[str, list[SessionMetrics]] = {}
+    for session in scoped:
+        week_members[session.cohort_week.isoformat()].append(session)
+        record = records_by_ticket[session.session_id]
+        day = _parse_utc_iso(
+            record.opened_at, "AI review opened_at"
+        ).astimezone(_VIETNAM_TIMEZONE).date().isoformat()
+        day_members.setdefault(day, []).append(session)
+    return {
+        "source": "freshdesk",
+        "fetched_at": cache.fetched_at,
+        "by_week": {
+            key: _ai_review_bucket(members, records_by_ticket)
+            for key, members in sorted(week_members.items())
+        },
+        "by_day": {
+            key: _ai_review_bucket(members, records_by_ticket)
+            for key, members in sorted(day_members.items())
+        },
+    }
+
+
+def _ai_review_bucket(
+    sessions: Sequence[SessionMetrics],
+    records_by_ticket: Mapping[str, "AIReviewRecord"],
+) -> dict[str, object]:
+    """Aggregate one bucket of tickets, whatever key selected them.
+
+    Grain-agnostic on purpose: a day bucket and a week bucket are the same
+    computation over a different member list, so the two can never drift.
+
+    Two denominators, never the total ticket count: `reviewed_ticket_count`
+    (hậu kiểm count present, including 0) and `rated_ticket_count` (a rating
+    label present).
+    """
+    outcome_counts = {outcome: _empty_ai_review_counts() for outcome in _OUTCOMES}
+    dimension_counts: dict[str, dict[str, dict[str, int]]] = {
+        "skill": {},
+        "issue_category": {},
+    }
+    review_count_counts: dict[str, dict[str, int]] = {}
+    totals = _empty_ai_review_counts()
+    for session in sessions:
+        record = records_by_ticket[session.session_id]
+        outcome = _outcome(session.outcome)
+        _increment_ai_review_counts(totals, record)
+        _increment_ai_review_counts(outcome_counts[outcome], record)
+        dimension_values = {
+            "skill": _skill_bucket(session),
+            "issue_category": _safe_dimension(session.dimensions.issue_category),
+        }
+        for dimension, value in dimension_values.items():
+            counts = dimension_counts[dimension].setdefault(
+                value, _empty_ai_review_counts()
+            )
+            _increment_ai_review_counts(counts, record)
+        if record.review_count is not None:
+            counts = review_count_counts.setdefault(
+                str(record.review_count), _empty_ai_review_counts()
+            )
+            _increment_ai_review_counts(counts, record)
+    return {
+        **totals,
+        "by_outcome": outcome_counts,
+        "by_dimension": {
+            dimension: [
+                {"value": value, **counts}
+                for value, counts in sorted(
+                    values.items(),
+                    key=lambda item: (
+                        -item[1]["reviewed_ticket_count"],
+                        _natural_string_sort_key(item[0]),
+                    ),
+                )
+            ]
+            for dimension, values in dimension_counts.items()
+        },
+        "by_review_count": [
+            {"value": value, **counts}
+            for value, counts in sorted(review_count_counts.items(), key=lambda item: int(item[0]))
+        ],
+    }
+
+
+def _empty_ai_review_counts() -> dict[str, int]:
+    return {key: 0 for key in _AI_REVIEW_COUNT_KEYS}
+
+
+def _increment_ai_review_counts(
+    counts: dict[str, int],
+    record: "AIReviewRecord",
+) -> None:
+    if record.review_count is not None:
+        counts["reviewed_ticket_count"] += 1
+    if record.rating is not None:
+        counts["rated_ticket_count"] += 1
+        counts[f"{record.rating}_count"] += 1
 
 
 def _csat_response_order(
@@ -2503,6 +2655,7 @@ def _validate_view(value: object, expected_definition: str) -> None:
             "csat",
             "outcome_reconciliation",
             "entry_coverage",
+            "ai_review",
             "rule_gt4",
         },
         "view",
@@ -2573,6 +2726,7 @@ def _validate_view(value: object, expected_definition: str) -> None:
         weekly_by_key,
     )
     _validate_entry_coverage(view["entry_coverage"], weekly_by_key)
+    _validate_ai_review(view["ai_review"], weekly_by_key)
     _validate_segment_rollup(
         view["segments"],
         tuple(
@@ -2691,6 +2845,176 @@ def _validate_entry_coverage_bucket(
         counts["not_observed_human_replied"] + counts["not_observed_no_human_reply"]
     ):
         raise ValueError("entry coverage human counts do not reconcile")
+
+
+def _validate_ai_review(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    ai_review = _require_mapping(value, "view.ai_review")
+    _require_exact_keys(
+        ai_review,
+        {"source", "fetched_at", "by_week", "by_day"},
+        "view.ai_review",
+    )
+    if ai_review["source"] != "freshdesk":
+        raise ValueError("view.ai_review source is invalid")
+    _parse_utc_iso(ai_review["fetched_at"], "view.ai_review.fetched_at")
+    by_week = _require_mapping(ai_review["by_week"], "view.ai_review.by_week")
+    if not set(by_week).issubset(weekly_by_key):
+        raise ValueError("view.ai_review contains a week outside this view")
+    for cohort_week, raw_counts in by_week.items():
+        _week_string(cohort_week, "view.ai_review.by_week key")
+        _validate_ai_review_bucket(
+            raw_counts,
+            f"view.ai_review.by_week.{cohort_week}",
+            weekly_by_key[cohort_week]["total_tickets"],
+        )
+    by_day = _require_mapping(ai_review["by_day"], "view.ai_review.by_day")
+    for day, raw_counts in by_day.items():
+        parsed_day = _day_string(day, "view.ai_review.by_day key")
+        cohort_week = (
+            parsed_day - timedelta(days=parsed_day.weekday())
+        ).isoformat()
+        if cohort_week not in weekly_by_key:
+            raise ValueError("view.ai_review contains a day outside this view")
+        _validate_ai_review_bucket(
+            raw_counts,
+            f"view.ai_review.by_day.{day}",
+            weekly_by_key[cohort_week]["total_tickets"],
+        )
+
+
+def _validate_ai_review_bucket(
+    raw_counts: object,
+    path: str,
+    population_cap: object,
+) -> None:
+    """Validate one AI-review bucket. Grain-agnostic, like `_ai_review_bucket()`.
+
+    `reviewed_ticket_count`/`rated_ticket_count` are two distinct denominators
+    -- never the total ticket count -- so, unlike CSAT, there is no single
+    `ticket_count` field to compare against `population_cap`; only that
+    neither denominator may exceed it.
+
+    Neither nests inside the other either: `cf_rating_ai` and
+    `cf_s_ln_hu_kim_ai` are filled independently by CS. Measured 2026-09-05
+    over the live cache, 3.574 tickets are rated with no review count and
+    1.534 have a count but no rating.
+    """
+    counts = _require_mapping(raw_counts, path)
+    _require_exact_keys(
+        counts,
+        {*_AI_REVIEW_COUNT_KEYS, "by_outcome", "by_dimension", "by_review_count"},
+        path,
+    )
+    for key in _AI_REVIEW_COUNT_KEYS:
+        _nonnegative_int(counts[key], f"{path}.{key}")
+    if counts["rated_ticket_count"] != sum(
+        counts[key] for key in _AI_REVIEW_RATING_BUCKETS
+    ):
+        raise ValueError("view.ai_review rating counts do not reconcile")
+    if counts["reviewed_ticket_count"] > population_cap:
+        raise ValueError("view.ai_review reviewed count exceeds weekly population")
+    if counts["rated_ticket_count"] > population_cap:
+        raise ValueError("view.ai_review rated count exceeds weekly population")
+
+    by_outcome = _require_mapping(counts["by_outcome"], f"{path}.by_outcome")
+    _require_exact_keys(by_outcome, set(_OUTCOMES), f"{path}.by_outcome")
+    outcome_rows = [
+        _validate_ai_review_count_row(
+            by_outcome[outcome],
+            f"view.ai_review outcome {outcome}",
+        )
+        for outcome in _OUTCOMES
+    ]
+    _validate_ai_review_rollup(counts, outcome_rows, "outcome")
+
+    by_dimension = _require_mapping(counts["by_dimension"], f"{path}.by_dimension")
+    _require_exact_keys(by_dimension, {"skill", "issue_category"}, f"{path}.by_dimension")
+    for dimension in ("skill", "issue_category"):
+        raw_rows = by_dimension[dimension]
+        if not isinstance(raw_rows, list):
+            raise ValueError("view.ai_review dimension rows are invalid")
+        labels: set[str] = set()
+        dimension_rows: list[Mapping[str, object]] = []
+        for raw_row in raw_rows:
+            row = _require_mapping(raw_row, "view.ai_review dimension row")
+            _require_exact_keys(
+                row,
+                {"value", *_AI_REVIEW_COUNT_KEYS},
+                "view.ai_review dimension row",
+            )
+            label = _safe_string(row["value"], "view.ai_review dimension value")
+            if label in labels:
+                raise ValueError("view.ai_review dimension values are duplicated")
+            labels.add(label)
+            dimension_rows.append(
+                _validate_ai_review_count_row(
+                    {key: row[key] for key in _AI_REVIEW_COUNT_KEYS},
+                    "view.ai_review dimension row",
+                )
+            )
+        _validate_ai_review_rollup(counts, dimension_rows, "dimension")
+
+    raw_review_count_rows = counts["by_review_count"]
+    if not isinstance(raw_review_count_rows, list):
+        raise ValueError("view.ai_review review-count rows are invalid")
+    review_count_labels: set[str] = set()
+    review_count_rows: list[Mapping[str, object]] = []
+    for raw_row in raw_review_count_rows:
+        row = _require_mapping(raw_row, "view.ai_review review-count row")
+        _require_exact_keys(
+            row,
+            {"value", *_AI_REVIEW_COUNT_KEYS},
+            "view.ai_review review-count row",
+        )
+        value = row["value"]
+        if not isinstance(value, str) or not value.isdigit():
+            raise ValueError("view.ai_review review-count value is invalid")
+        if value in review_count_labels:
+            raise ValueError("view.ai_review review-count values are duplicated")
+        review_count_labels.add(value)
+        review_count_rows.append(
+            _validate_ai_review_count_row(
+                {key: row[key] for key in _AI_REVIEW_COUNT_KEYS},
+                "view.ai_review review-count row",
+            )
+        )
+    # Every reviewed ticket falls into exactly one review-count bucket, so
+    # this rollup uses `reviewed_ticket_count` as its anchor instead of the
+    # rating-only reconciliation `_validate_ai_review_rollup` checks share
+    # with outcome/dimension. A rated ticket is NOT necessarily a reviewed
+    # one, so a rating-anchored rollup would not close here.
+    if sum(row["reviewed_ticket_count"] for row in review_count_rows) != counts[
+        "reviewed_ticket_count"
+    ]:
+        raise ValueError("view.ai_review review-count counts do not reconcile")
+
+
+def _validate_ai_review_count_row(
+    value: object,
+    name: str,
+) -> Mapping[str, object]:
+    row = _require_mapping(value, name)
+    _require_exact_keys(row, set(_AI_REVIEW_COUNT_KEYS), name)
+    for key in _AI_REVIEW_COUNT_KEYS:
+        _nonnegative_int(row[key], f"{name}.{key}")
+    if row["rated_ticket_count"] != sum(row[key] for key in _AI_REVIEW_RATING_BUCKETS):
+        raise ValueError(f"{name} rating buckets do not reconcile")
+    return row
+
+
+def _validate_ai_review_rollup(
+    totals: Mapping[str, object],
+    rows: list[Mapping[str, object]],
+    name: str,
+) -> None:
+    for key in _AI_REVIEW_COUNT_KEYS:
+        if sum(row[key] for row in rows) != totals[key]:
+            raise ValueError(f"view.ai_review {name} counts do not reconcile")
 
 
 def _validate_csat(
