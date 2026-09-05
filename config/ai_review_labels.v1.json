@@ -1,0 +1,1 @@
+{"approved_at":"2026-09-04","approved_by":"PO","notes":"Anh xa cf_rating_ai sang slug an toan. Chuoi nguon khong nhat quan hoa/thuong, so khop chinh xac, khong normalize. Gia tri la ngoai bang nay lam job fail closed.","rating_labels":{"Hài Lòng":"satisfied","Hài lòng có chỉnh sửa":"satisfied_with_edit","Cần chỉnh sửa":"needs_edit"},"schema_version":1}

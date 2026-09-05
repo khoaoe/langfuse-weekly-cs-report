@@ -309,6 +309,39 @@ def test_ui_list_ticket_metadata_resumes_past_prior_call_page_budget():
     assert [item.ticket_id for item in result] == ["1301"]
 
 
+def test_ui_list_ticket_metadata_windows_query_by_created_before():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"tickets": []})
+
+    with FreshdeskUIClient(
+        "cs_session=abc123", transport=httpx.MockTransport(handler)
+    ) as client:
+        client.list_ticket_metadata(
+            updated_since=datetime(2026, 6, 28, 17, tzinfo=timezone.utc),
+            created_before=datetime(2026, 7, 5, 17, tzinfo=timezone.utc),
+        )
+
+    assert (
+        requests[0].url.params["query_hash[0][value][to]"]
+        == "2026-07-05T17:00:00.999Z"
+    )
+
+
+def test_ui_list_ticket_metadata_rejects_created_before_at_or_before_updated_since():
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"tickets": []})),
+    ) as client:
+        with pytest.raises(FreshdeskCSATError, match="listing options"):
+            client.list_ticket_metadata(
+                updated_since=datetime(2026, 7, 5, 17, tzinfo=timezone.utc),
+                created_before=datetime(2026, 7, 5, 17, tzinfo=timezone.utc),
+            )
+
+
 def test_ui_list_ticket_metadata_rejects_duplicate_tickets_across_pages():
     def handler(request: httpx.Request) -> httpx.Response:
         rows = [{"id": 999, "created_at": "2026-07-06T01:00:00Z"}]

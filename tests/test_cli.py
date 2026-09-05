@@ -458,6 +458,149 @@ def test_entry_coverage_command_resumes_inventory_after_rate_limit_checkpoint(
     assert {record.ticket_id for record in cache.records} == {"123", "456"}
 
 
+def test_ai_review_command_fetches_each_selected_week_windowed_and_writes_cache(
+    monkeypatch, tmp_path: Path
+):
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.ai_review_cache import load_ai_review_cache
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(
+        cli_module,
+        "_ai_review_population",
+        lambda *_args: ("2026-06-29", "2026-07-06"),
+    )
+    calls: list[dict[str, object]] = []
+    tickets_by_week = {
+        "2026-06-29": FreshdeskTicketMetadata("101", "2026-06-30T01:00:00Z"),
+        "2026-07-06": FreshdeskTicketMetadata("102", "2026-07-07T01:00:00Z"),
+    }
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def list_ticket_metadata(self, *, updated_since, created_before, **_kwargs):
+            calls.append(
+                {"updated_since": updated_since, "created_before": created_before}
+            )
+            week = updated_since.date().isoformat()
+            return (tickets_by_week[week],)
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
+
+    result = cli_module._run_fetch_freshdesk_ai_review_command(
+        build_parser().parse_args(
+            [
+                "fetch-freshdesk-ai-review",
+                "--runtime-dir",
+                str(runtime),
+                "--weeks",
+                "13",
+                "--max-duration",
+                "60",
+            ]
+        )
+    )
+
+    assert result["status"] == "complete"
+    assert len(calls) == 2
+    for call in calls:
+        assert (call["created_before"] - call["updated_since"]).days == 7
+    cache = load_ai_review_cache(runtime / "ai_review_cache.json")
+    assert cache is not None
+    assert {record.ticket_id for record in cache.records} == {"101", "102"}
+    assert set(cache.fetched_weeks) == {"2026-06-29", "2026-07-06"}
+
+
+def test_ai_review_command_skips_a_just_fetched_week_on_the_next_run(
+    monkeypatch, tmp_path: Path
+):
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(
+        cli_module, "_ai_review_population", lambda *_args: ("2026-06-29",)
+    )
+    call_count = 0
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def list_ticket_metadata(self, **_kwargs):
+            nonlocal call_count
+            call_count += 1
+            return (FreshdeskTicketMetadata("101", "2026-06-30T01:00:00Z"),)
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
+    args = build_parser().parse_args(
+        [
+            "fetch-freshdesk-ai-review",
+            "--runtime-dir",
+            str(runtime),
+            "--weeks",
+            "13",
+            "--max-duration",
+            "60",
+        ]
+    )
+
+    first = cli_module._run_fetch_freshdesk_ai_review_command(args)
+    second = cli_module._run_fetch_freshdesk_ai_review_command(args)
+
+    assert first["status"] == "complete"
+    assert second["status"] == "complete"
+    assert call_count == 1
+
+
+def test_ai_review_command_fails_loudly_when_a_week_exceeds_the_page_cap(
+    monkeypatch, tmp_path: Path
+):
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.freshdesk_csat import FreshdeskPageLimitReached
+
+    runtime = tmp_path / "runtime"
+    monkeypatch.setattr(
+        cli_module, "_ai_review_population", lambda *_args: ("2026-06-29",)
+    )
+
+    class OverflowingClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def list_ticket_metadata(self, **_kwargs):
+            raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: OverflowingClient())
+
+    with pytest.raises(FreshdeskPageLimitReached):
+        cli_module._run_fetch_freshdesk_ai_review_command(
+            build_parser().parse_args(
+                [
+                    "fetch-freshdesk-ai-review",
+                    "--runtime-dir",
+                    str(runtime),
+                    "--weeks",
+                    "13",
+                    "--max-duration",
+                    "60",
+                ]
+            )
+        )
+
+
 def test_fetch_csat_command_checkpoints_completed_weeks_without_publishing_partial(
     monkeypatch, tmp_path: Path
 ):

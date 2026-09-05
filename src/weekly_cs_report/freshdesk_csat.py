@@ -67,6 +67,41 @@ _TRANSACTION_TOKEN_PATTERN = re.compile(
 )
 
 
+_AI_REVIEW_CUSTOM_FIELDS = (
+    ("cf_rating_ai", "ai_review_rating_raw"),
+    ("cf_s_ln_hu_kim_ai", "ai_review_count_raw"),
+    ("cf_ngy_hu_kim_ai", "ai_review_date_raw"),
+    ("cf_trng_thi_ai_reopen", "ai_reopen_status_raw"),
+    ("cf_trng_thi_phn_hi_ai_cho_user", "ai_user_replied_raw"),
+)
+
+
+def _ticket_metadata_from_item(item: Mapping[str, object]) -> FreshdeskTicketMetadata:
+    """Build ticket metadata, shared by the REST and cookie ticket listings.
+
+    Both endpoints return `custom_fields` by default (no `include` needed),
+    so this is the single place that reaches into it for the AI post-review
+    fields -- extending the struct here keeps both auth paths in sync.
+    """
+
+    custom_fields = item.get("custom_fields")
+    if custom_fields is None:
+        custom_fields = {}
+    if not isinstance(custom_fields, Mapping):
+        raise FreshdeskCSATError("Freshdesk ticket custom fields are invalid")
+    extracted: dict[str, str | None] = {}
+    for source_key, field_name in _AI_REVIEW_CUSTOM_FIELDS:
+        raw = custom_fields.get(source_key)
+        if raw is not None and not isinstance(raw, str):
+            raise FreshdeskCSATError("Freshdesk ticket custom field is invalid")
+        extracted[field_name] = raw
+    return FreshdeskTicketMetadata(
+        ticket_id=str(item["id"]),
+        created_at=item["created_at"],
+        **extracted,
+    )
+
+
 class FreshdeskCSATError(RuntimeError):
     """A sanitized failure safe to print from the command-line boundary."""
 
@@ -454,10 +489,7 @@ class FreshdeskClient:
                 if not isinstance(item, Mapping):
                     raise FreshdeskCSATError("Freshdesk ticket response is invalid")
                 try:
-                    row = FreshdeskTicketMetadata(
-                        ticket_id=str(item["id"]),
-                        created_at=item["created_at"],
-                    )
+                    row = _ticket_metadata_from_item(item)
                 except (KeyError, TypeError, FreshdeskEntryCoverageError):
                     raise FreshdeskCSATError(
                         "Freshdesk ticket response is invalid"
@@ -677,6 +709,7 @@ class FreshdeskUIClient:
         self,
         *,
         updated_since: datetime,
+        created_before: datetime | None = None,
         max_pages: int = 300,
         page_size: int = 50,
         start_page: int = 1,
@@ -697,6 +730,13 @@ class FreshdeskUIClient:
         Filtering by created_at here produces the identical final population,
         just without the wasted fetch.
 
+        `created_before` bounds the query's upper edge; omitted, it defaults
+        to now (the original open-ended behavior every caller but AI review
+        still relies on). AI review passes one cohort week's end here so a
+        single query never grows past a handful of pages, no matter how long
+        `updated_since` sits in the past -- see
+        docs/superpowers/specs/2026-09-05-ai-review-windowed-crawl-design.md.
+
         `max_pages` bounds how many pages THIS call may fetch, not an
         absolute page index -- resuming from a `start_page` beyond the
         first call's `max_pages` must still be able to make progress.
@@ -704,6 +744,14 @@ class FreshdeskUIClient:
         if (
             updated_since.tzinfo is None
             or updated_since.utcoffset() is None
+            or (
+                created_before is not None
+                and (
+                    created_before.tzinfo is None
+                    or created_before.utcoffset() is None
+                    or created_before <= updated_since
+                )
+            )
             or max_pages < 1
             or max_pages > 300
             or page_size != 50
@@ -714,7 +762,11 @@ class FreshdeskUIClient:
         ):
             raise FreshdeskCSATError("Freshdesk ticket listing options are invalid")
         updated_since_utc = updated_since.astimezone(timezone.utc)
-        now = datetime.now(timezone.utc)
+        now = (
+            created_before.astimezone(timezone.utc)
+            if created_before is not None
+            else datetime.now(timezone.utc)
+        )
         projected: list[FreshdeskTicketMetadata] = list(existing)
         seen_ids: set[str] = {item.ticket_id for item in projected}
         if len(seen_ids) != len(projected):
@@ -756,10 +808,7 @@ class FreshdeskUIClient:
                 if not isinstance(item, Mapping):
                     raise FreshdeskCSATError("Freshdesk ticket response is invalid")
                 try:
-                    row = FreshdeskTicketMetadata(
-                        ticket_id=str(item["id"]),
-                        created_at=item["created_at"],
-                    )
+                    row = _ticket_metadata_from_item(item)
                 except (KeyError, TypeError, FreshdeskEntryCoverageError):
                     raise FreshdeskCSATError(
                         "Freshdesk ticket response is invalid"

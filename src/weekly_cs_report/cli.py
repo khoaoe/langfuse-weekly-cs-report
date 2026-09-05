@@ -66,6 +66,7 @@ REOPEN_DISCOVERY_PATH = (
     PROJECT_ROOT / "artifacts" / "reopen_discovery" / "reasons.csv"
 )
 FRESHDESK_AGENT_CONFIG_PATH = PROJECT_ROOT / "config" / "freshdesk_agents.v1.json"
+AI_REVIEW_LABEL_CONFIG_PATH = PROJECT_ROOT / "config" / "ai_review_labels.v1.json"
 
 # Seed scale for `discover-agents`, which re-approves it into
 # FRESHDESK_AGENT_CONFIG_PATH. The key is the Freshdesk survey ID; the values
@@ -300,6 +301,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH
     )
     entry_coverage.add_argument(
+        "--auth", choices=("cookie", "rest"), default="cookie"
+    )
+    ai_review = subparsers.add_parser("fetch-freshdesk-ai-review")
+    ai_review.add_argument("--weeks", type=int, default=13)
+    ai_review.add_argument("--max-duration", type=int, default=30 * 60)
+    ai_review.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
+    ai_review.add_argument(
         "--auth", choices=("cookie", "rest"), default="cookie"
     )
     parser.set_defaults(command="dry-run")
@@ -1175,6 +1183,158 @@ def _entry_coverage_population(runtime_directory: Path, weeks: int):
     return selected_weeks, langfuse_tickets
 
 
+def _ai_review_population(runtime_directory: Path, weeks: int) -> tuple[str, ...]:
+    from .ai_review_cache import AI_REVIEW_START_WEEK
+    from .ai_review import AIReviewError
+    from .dashboard_cache import ProtectedSnapshotStore
+
+    runtime_directory = Path(runtime_directory)
+    if not runtime_directory.is_absolute() or not 1 <= weeks <= 52:
+        raise AIReviewError("AI review population options are invalid")
+    snapshot = ProtectedSnapshotStore(runtime_directory).load()
+    if snapshot is None:
+        raise AIReviewError("Dashboard snapshot is unavailable for AI review")
+    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    return tuple(
+        row["cohort_week"]
+        for row in weekly_rows[-weeks:]
+        if row["cohort_week"] >= AI_REVIEW_START_WEEK
+    )
+
+
+def _run_fetch_freshdesk_ai_review_command(
+    args: argparse.Namespace,
+) -> dict[str, object]:
+    from datetime import timedelta
+
+    from .cohort import VIETNAM_TIMEZONE
+    from .ai_review import AIReviewError, build_ai_review_record, load_ai_review_label_config
+    from .ai_review_cache import (
+        AIReviewCache,
+        AIReviewCacheError,
+        load_ai_review_cache,
+        write_ai_review_cache,
+    )
+    from .freshdesk_entry_coverage import _cohort_week
+    from .freshdesk_csat import (
+        FreshdeskCookieExpired,
+        FreshdeskFetchDeadline,
+        FreshdeskRateLimitExhausted,
+        _week_needs_fetch,
+        mark_cookie_expired,
+        mark_cookie_verified,
+    )
+    import time as monotonic_time
+
+    runtime_directory = Path(args.runtime_dir)
+    selected_weeks = _ai_review_population(runtime_directory, args.weeks)
+    if not selected_weeks:
+        raise AIReviewError("AI review has no report weeks")
+    selected = frozenset(selected_weeks)
+    # A checkpoint from before the windowed-crawl redesign (2026-09-05) is
+    # anchored to an open-ended query and cannot be resumed; each week is now
+    # bounded on its own, so no cross-run page checkpoint is needed at all.
+    stale_checkpoint_path = (
+        runtime_directory.parent / "artifacts" / "freshdesk_ai_review" / "inventory_checkpoint.json"
+    )
+    stale_checkpoint_path.unlink(missing_ok=True)
+
+    try:
+        labels = load_ai_review_label_config(AI_REVIEW_LABEL_CONFIG_PATH)
+        published = load_ai_review_cache(runtime_directory / "ai_review_cache.json")
+    except AIReviewCacheError as error:
+        raise AIReviewError("Freshdesk AI review private state is invalid") from error
+
+    as_of = datetime.now(timezone.utc)
+    base_weeks = dict(published.fetched_weeks) if published is not None else {}
+    base_records: dict[str, object] = {
+        item.ticket_id: item for item in (published.records if published is not None else ())
+    }
+    target_weeks = tuple(
+        week for week in sorted(selected) if _week_needs_fetch(week, base_weeks, as_of)
+    )
+
+    started = monotonic_time.monotonic()
+    deadline = started + args.max_duration
+
+    def should_stop() -> bool:
+        return monotonic_time.monotonic() >= deadline
+
+    status = "complete"
+    for week in target_weeks:
+        if should_stop():
+            status = "duration_limit_reached"
+            break
+        week_start = datetime.combine(date.fromisoformat(week), time.min, tzinfo=VIETNAM_TIMEZONE)
+        week_end = week_start + timedelta(days=7)
+        # created_before windows the UI (cookie) client's query to one
+        # cohort week, which is what keeps it under the 300-page cap (see
+        # docs/superpowers/specs/2026-09-05-ai-review-windowed-crawl-design.md).
+        # The REST client has no equivalent upper-bound filter; --auth rest
+        # keeps its pre-existing open-ended-query behavior, unchanged by
+        # this fix and out of its scope.
+        list_kwargs: dict[str, object] = {
+            "updated_since": week_start,
+            "should_stop": should_stop,
+        }
+        if args.auth == "cookie":
+            list_kwargs["created_before"] = week_end
+        try:
+            with _freshdesk_client(args.auth, runtime_directory) as client:
+                tickets = client.list_ticket_metadata(**list_kwargs)
+        except FreshdeskCookieExpired:
+            if args.auth == "cookie":
+                mark_cookie_expired(runtime_directory)
+            raise
+        except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+            status = "duration_limit_reached"
+            break
+        if args.auth == "cookie":
+            mark_cookie_verified(runtime_directory)
+
+        for ticket_id, record in list(base_records.items()):
+            if record.cohort_week == week:
+                del base_records[ticket_id]
+        for item in tickets:
+            if _cohort_week(item.created_at) != week:
+                continue
+            record = build_ai_review_record(item, labels)
+            base_records[record.ticket_id] = record
+        base_weeks[week] = _utc_iso(as_of)
+
+        try:
+            write_ai_review_cache(
+                runtime_directory / "ai_review_cache.json",
+                AIReviewCache(fetched_weeks=base_weeks, records=tuple(base_records.values())),
+            )
+        except AIReviewCacheError as error:
+            raise AIReviewError("Freshdesk AI review cache could not be published") from error
+
+    selected_records = tuple(
+        item for item in base_records.values() if item.cohort_week in selected
+    )
+    weeks_fetched = sum(week in base_weeks for week in selected_weeks)
+    return _ai_review_command_result(status, selected_weeks, selected_records, weeks_fetched)
+
+
+def _ai_review_command_result(
+    status: str,
+    selected_weeks: Sequence[str],
+    selected_records: Sequence[object],
+    weeks_fetched: int,
+) -> dict[str, object]:
+    ratings = Counter(getattr(item, "rating", None) for item in selected_records)
+    return {
+        "status": status,
+        "weeks_fetched": weeks_fetched,
+        "freshdesk_ticket_count": len(selected_records),
+        "satisfied_count": ratings["satisfied"],
+        "satisfied_with_edit_count": ratings["satisfied_with_edit"],
+        "needs_edit_count": ratings["needs_edit"],
+        "unrated_count": ratings[None],
+    }
+
+
 def _run_fetch_freshdesk_entry_coverage_command(
     args: argparse.Namespace,
 ) -> dict[str, object]:
@@ -1815,7 +1975,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             "fetch-csat",
             "reconcile-freshdesk-outcomes",
             "fetch-freshdesk-entry-coverage",
+            "fetch-freshdesk-ai-review",
         }:
+            from .ai_review import AIReviewError
             from .freshdesk_csat import FreshdeskCSATError
             from .freshdesk_entry_coverage import FreshdeskEntryCoverageError
             from .outcome_reconciliation import OutcomeReconciliationError
@@ -1827,9 +1989,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result = _run_fetch_csat_command(args)
                 elif args.command == "reconcile-freshdesk-outcomes":
                     result = _run_reconcile_freshdesk_outcomes_command(args)
-                else:
+                elif args.command == "fetch-freshdesk-entry-coverage":
                     result = _run_fetch_freshdesk_entry_coverage_command(args)
+                else:
+                    result = _run_fetch_freshdesk_ai_review_command(args)
             except (
+                AIReviewError,
                 FreshdeskCSATError,
                 FreshdeskEntryCoverageError,
                 OutcomeReconciliationError,
