@@ -22,7 +22,6 @@ function renderShell() {
         refreshHint=""
         runtimeKind="loading"
         activeFilters={[]}
-        onRemoveFilter={() => {}}
         onResetFilters={() => {}}
       >
         <section id="weekly">Dashboard body</section>

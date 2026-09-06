@@ -238,6 +238,8 @@ const SegmentCountsSchema = z
     ai_first: nonNegativeInteger,
     transferred: nonNegativeInteger,
     reopen: nonNegativeInteger,
+    ai_end_to_end: nonNegativeInteger,
+    direct_cs: nonNegativeInteger,
   })
   .strict();
 
@@ -817,6 +819,7 @@ export const CsatFeedbackEntrySchema = z
     outcome: OutcomeSchema,
     skill: safeLabel,
     issue_category: safeLabel,
+    app: safeLabel,
     text: safeFeedbackText,
     response_number: positiveInteger,
     response_total: positiveInteger,
@@ -863,6 +866,7 @@ export const CsatWeekSchema = z
       .object({
         skill: z.array(CsatDimensionCountsSchema),
         issue_category: z.array(CsatDimensionCountsSchema),
+        app: z.array(CsatDimensionCountsSchema),
       })
       .strict(),
     response_by_outcome: z
@@ -878,6 +882,7 @@ export const CsatWeekSchema = z
       .object({
         skill: z.array(CsatDimensionCountsSchema),
         issue_category: z.array(CsatDimensionCountsSchema),
+        app: z.array(CsatDimensionCountsSchema),
       })
       .strict()
       .optional(),
@@ -922,7 +927,7 @@ export const CsatWeekSchema = z
         });
       }
     }
-    for (const dimension of ["skill", "issue_category"] as const) {
+    for (const dimension of ["skill", "issue_category", "app"] as const) {
       const rows = value.by_dimension[dimension];
       const labels = new Set(rows.map((row) => row.value));
       if (labels.size !== rows.length) {
@@ -950,6 +955,7 @@ export const CsatWeekSchema = z
         entry.outcome,
         entry.skill,
         entry.issue_category,
+        entry.app,
       ]);
       const existing = metadataByTicket.get(entry.ticket_id);
       if (existing !== undefined && existing !== metadata) {
@@ -1195,6 +1201,7 @@ export const AiReviewBucketSchema = z
       .object({
         skill: z.array(AiReviewDimensionCountsSchema),
         issue_category: z.array(AiReviewDimensionCountsSchema),
+        app: z.array(AiReviewDimensionCountsSchema),
       })
       .strict(),
     by_review_count: z.array(AiReviewCountByReviewCountSchema),
@@ -1221,7 +1228,7 @@ export const AiReviewBucketSchema = z
         });
       }
     }
-    for (const dimension of ["skill", "issue_category"] as const) {
+    for (const dimension of ["skill", "issue_category", "app"] as const) {
       const rows = value.by_dimension[dimension];
       const labels = new Set(rows.map((row) => row.value));
       if (labels.size !== rows.length) {

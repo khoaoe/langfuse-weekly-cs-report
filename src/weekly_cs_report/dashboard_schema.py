@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 26
+_STORAGE_VERSION = 28
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -143,6 +143,7 @@ _SEGMENTS = (
     "entry_point",
     "model_core",
 )
+_HAS_VALUE = "__has_value__"
 _MISSING = "Không xác định"
 # `skill` never used _MISSING accurately: a ticket with three distinct skills
 # and a ticket with zero `execute` observations both collapsed to the same
@@ -487,16 +488,20 @@ def ticket_page(
         )
         and (selected_outcomes is None or row.outcome in selected_outcomes)
         and (ticket_id is None or row.ticket_id == ticket_id)
-        and (multi_strings["issue_category"] is None or _ticket_filter_value(row, "issue_category") in multi_strings["issue_category"])
-        and (multi_strings["app"] is None or _ticket_filter_value(row, "app") in multi_strings["app"])
-        and (multi_strings["product_code"] is None or _ticket_filter_value(row, "product_code") in multi_strings["product_code"])
-        and (multi_strings["skill"] is None or _ticket_filter_value(row, "skill") in multi_strings["skill"])
+        and _matches_multi_dimension(row, "issue_category", multi_strings["issue_category"])
+        and _matches_multi_dimension(row, "app", multi_strings["app"])
+        and _matches_multi_dimension(row, "product_code", multi_strings["product_code"])
+        and _matches_multi_dimension(row, "skill", multi_strings["skill"])
         and (intent is None or _ticket_filter_value(row, "intent") == intent)
-        and (multi_strings["tpe_code"] is None or _ticket_filter_value(row, "tpe_code") in multi_strings["tpe_code"])
-        and (multi_strings["model_core"] is None or _ticket_filter_value(row, "model_core") in multi_strings["model_core"])
+        and _matches_multi_dimension(row, "tpe_code", multi_strings["tpe_code"])
+        and _matches_multi_dimension(row, "model_core", multi_strings["model_core"])
         and (
             selected_tool_error_codes is None
-            or not selected_tool_error_codes.isdisjoint(row.tool_error_codes)
+            or (
+                bool(row.tool_error_codes)
+                if selected_tool_error_codes == frozenset({_HAS_VALUE})
+                else not selected_tool_error_codes.isdisjoint(row.tool_error_codes)
+            )
         )
         and (selected_transfer_reasons is None or row.transfer_reason in selected_transfer_reasons)
         and (
@@ -619,7 +624,15 @@ def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
             if label is None:
                 continue
             bucket = segments[dimension].setdefault(
-                label, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}
+                label,
+                {
+                    "total": 0,
+                    "ai_first": 0,
+                    "transferred": 0,
+                    "reopen": 0,
+                    "ai_end_to_end": 0,
+                    "direct_cs": 0,
+                },
             )
             bucket["total"] += 1
             if row.ai_first:
@@ -628,6 +641,10 @@ def _day_aggregate_for(day: str, rows: list[TicketRow]) -> dict[str, object]:
                 bucket["transferred"] += 1
             if row.reopen_lifetime:
                 bucket["reopen"] += row.reopen_lifetime
+            if row.outcome == "ai_end_to_end":
+                bucket["ai_end_to_end"] += 1
+            elif row.outcome == "direct_cs":
+                bucket["direct_cs"] += 1
 
     return {
         "day": day,
@@ -861,6 +878,22 @@ def _ticket_sort_value(
         for part in _NATURAL_SORT_PART.split(normalised)
         if part
     )
+
+
+def _matches_multi_dimension(
+    ticket: TicketRow, name: str, selected: frozenset[str] | None
+) -> bool:
+    """True when ``ticket`` satisfies a multi-select dimension filter.
+
+    ``selected == {_HAS_VALUE}`` (C6) means "any value other than the
+    dimension's own missing sentinel" rather than one specific value.
+    """
+    if selected is None:
+        return True
+    value = _ticket_filter_value(ticket, name)
+    if selected == frozenset({_HAS_VALUE}):
+        return value not in (_MISSING, _NO_SKILL)
+    return value in selected
 
 
 def _ticket_filter_value(ticket: TicketRow, name: str) -> str:
@@ -1347,10 +1380,12 @@ def _csat_bucket(
     dimension_counts: dict[str, dict[str, dict[str, int]]] = {
         "skill": {},
         "issue_category": {},
+        "app": {},
     }
     response_dimension_counts: dict[str, dict[str, dict[str, int]]] = {
         "skill": {},
         "issue_category": {},
+        "app": {},
     }
     for ticket_id, response in latest.items():
         session = session_by_ticket[ticket_id]
@@ -1361,6 +1396,7 @@ def _csat_bucket(
             "issue_category": _safe_dimension(
                 session.dimensions.issue_category
             ),
+            "app": _safe_dimension(session.dimensions.app),
         }
         for dimension, value in dimension_values.items():
             counts = dimension_counts[dimension].setdefault(
@@ -1376,6 +1412,7 @@ def _csat_bucket(
             "issue_category": _safe_dimension(
                 session.dimensions.issue_category
             ),
+            "app": _safe_dimension(session.dimensions.app),
         }
         for response in responses:
             _increment_csat_counts(response_outcome_counts[outcome], response)
@@ -1403,6 +1440,7 @@ def _csat_bucket(
                     "issue_category": _safe_dimension(
                         session.dimensions.issue_category
                     ),
+                    "app": _safe_dimension(session.dimensions.app),
                     "text": response.comment_redacted,
                     "response_number": response_number,
                     "response_total": response_total,
@@ -1531,6 +1569,7 @@ def _ai_review_bucket(
     dimension_counts: dict[str, dict[str, dict[str, int]]] = {
         "skill": {},
         "issue_category": {},
+        "app": {},
     }
     review_count_counts: dict[str, dict[str, int]] = {}
     totals = _empty_ai_review_counts()
@@ -1542,6 +1581,7 @@ def _ai_review_bucket(
         dimension_values = {
             "skill": _skill_bucket(session),
             "issue_category": _safe_dimension(session.dimensions.issue_category),
+            "app": _safe_dimension(session.dimensions.app),
         }
         for dimension, value in dimension_values.items():
             counts = dimension_counts[dimension].setdefault(
@@ -1966,17 +2006,41 @@ def _segments(
         buckets: dict[str, dict[str, int]] = {}
         for session in sessions:
             value = _segment_value(session, dimension, safe_intents)
-            bucket = buckets.setdefault(value, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0})
+            bucket = buckets.setdefault(
+                value,
+                {
+                    "total": 0,
+                    "ai_first": 0,
+                    "transferred": 0,
+                    "reopen": 0,
+                    "ai_end_to_end": 0,
+                    "direct_cs": 0,
+                },
+            )
             bucket["total"] += 1
             bucket["ai_first"] += int(session.ai_first)
             bucket["transferred"] += int(session.transferred)
             bucket["reopen"] += session.reopen_lifetime or 0
+            if session.outcome == "ai_end_to_end":
+                bucket["ai_end_to_end"] += 1
+            elif session.outcome == "direct_cs":
+                bucket["direct_cs"] += 1
         # The missing bucket is always present, making the consumer's closure
         # logic deterministic even when this run happens to have no missing
         # data. `skill` uses its own always-present "chưa ghi nhận" bucket
         # instead, since _MISSING would sit alongside it meaning nothing.
         missing_label = _NO_SKILL if dimension == "skill" else _MISSING
-        buckets.setdefault(missing_label, {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0})
+        buckets.setdefault(
+            missing_label,
+            {
+                "total": 0,
+                "ai_first": 0,
+                "transferred": 0,
+                "reopen": 0,
+                "ai_end_to_end": 0,
+                "direct_cs": 0,
+            },
+        )
         result[dimension] = dict(sorted(buckets.items()))
     return result
 
@@ -2358,9 +2422,16 @@ def _parse_multi_ticket_filter(
 
     A bare single value (no comma) parses identically to the old exact-match
     filter, so this is a superset of the previous single-select behaviour.
+
+    ``_HAS_VALUE`` (C6, "Chỉ ticket có ...") is a reserved sentinel meaning
+    "any real value" rather than one specific value from ``allowed`` -- it is
+    recognised here, before the allowlist check, and never combined with a
+    real value in the same request.
     """
     if value is None:
         return None
+    if value == _HAS_VALUE:
+        return frozenset({_HAS_VALUE})
     pieces = value.split(",")
     if not pieces or len(set(pieces)) != len(pieces):
         raise ValueError(f"{name} is invalid")
@@ -2933,8 +3004,8 @@ def _validate_ai_review_bucket(
     _validate_ai_review_rollup(counts, outcome_rows, "outcome")
 
     by_dimension = _require_mapping(counts["by_dimension"], f"{path}.by_dimension")
-    _require_exact_keys(by_dimension, {"skill", "issue_category"}, f"{path}.by_dimension")
-    for dimension in ("skill", "issue_category"):
+    _require_exact_keys(by_dimension, {"skill", "issue_category", "app"}, f"{path}.by_dimension")
+    for dimension in ("skill", "issue_category", "app"):
         raw_rows = by_dimension[dimension]
         if not isinstance(raw_rows, list):
             raise ValueError("view.ai_review dimension rows are invalid")
@@ -3135,10 +3206,10 @@ def _validate_csat_bucket(
     )
     _require_exact_keys(
         by_dimension,
-        {"skill", "issue_category"},
+        {"skill", "issue_category", "app"},
         f"{path}.by_dimension",
     )
-    for dimension in ("skill", "issue_category"):
+    for dimension in ("skill", "issue_category", "app"):
         raw_rows = by_dimension[dimension]
         if not isinstance(raw_rows, list):
             raise ValueError("view.csat dimension rows are invalid")
@@ -3197,10 +3268,10 @@ def _validate_csat_bucket(
     )
     _require_exact_keys(
         response_by_dimension,
-        {"skill", "issue_category"},
+        {"skill", "issue_category", "app"},
         f"{path}.response_by_dimension",
     )
-    for dimension in ("skill", "issue_category"):
+    for dimension in ("skill", "issue_category", "app"):
         raw_rows = response_by_dimension[dimension]
         if not isinstance(raw_rows, list):
             raise ValueError("view.csat response dimension rows are invalid")
@@ -3255,6 +3326,7 @@ def _validate_csat_bucket(
                 "outcome",
                 "skill",
                 "issue_category",
+                "app",
                 "text",
                 "response_number",
                 "response_total",
@@ -3277,6 +3349,7 @@ def _validate_csat_bucket(
             entry["issue_category"],
             "view.csat feedback issue_category",
         )
+        app = _safe_string(entry["app"], "view.csat feedback app")
         text = _safe_string(entry["text"], "view.csat feedback text")
         if _COMMENT_URL.search(text):
             raise ValueError("view.csat feedback text is unsafe")
@@ -3304,6 +3377,7 @@ def _validate_csat_bucket(
             entry["outcome"],
             skill,
             issue_category,
+            app,
         )
         if ticket_id in ticket_metadata and ticket_metadata[ticket_id] != metadata:
             raise ValueError("view.csat feedback ticket metadata is inconsistent")
@@ -3867,7 +3941,7 @@ def _validate_segment_rollup(
         _require_mapping(value, "weekly segments")
         for value in weekly_values
     )
-    fields = ("total", "ai_first", "transferred", "reopen")
+    fields = ("total", "ai_first", "transferred", "reopen", "ai_end_to_end", "direct_cs")
     for dimension in _SEGMENTS:
         aggregate_buckets = _require_mapping(
             aggregate[dimension],
@@ -3913,7 +3987,11 @@ def _validate_segments(value: object, total: object) -> None:
         summed = 0
         for label, counts in buckets.items():
             _validate_segment_label(name, label)
-            _validate_count_map(counts, {"total", "ai_first", "transferred", "reopen"}, f"segments.{name}")
+            _validate_count_map(
+                counts,
+                {"total", "ai_first", "transferred", "reopen", "ai_end_to_end", "direct_cs"},
+                f"segments.{name}",
+            )
             summed += counts["total"]
         if summed != total: raise ValueError("segment totals do not reconcile")
 

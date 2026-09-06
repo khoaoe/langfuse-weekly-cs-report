@@ -188,6 +188,7 @@ describe("dashboard API envelope", () => {
     outcome: "ai_end_to_end" as const,
     skill: "interbank-fund-transfer",
     issue_category: "Chuyển tiền",
+    app: "Zalopay",
     text: "Cảm ơn, xử lý nhanh",
     response_number: 1,
     response_total: 2,
@@ -238,6 +239,15 @@ describe("dashboard API envelope", () => {
       issue_category: [
         {
           value: "Chuyển tiền",
+          ticket_count: 1,
+          positive: 0,
+          neutral: 1,
+          negative: 0,
+        },
+      ],
+      app: [
+        {
+          value: "Zalopay",
           ticket_count: 1,
           positive: 0,
           neutral: 1,
@@ -1243,6 +1253,7 @@ describe("dashboard API envelope", () => {
     by_dimension: {
       skill: [{ value: "interbank-fund-transfer", ...aiReviewCounts }],
       issue_category: [{ value: "Chuyển tiền", ...aiReviewCounts }],
+      app: [{ value: "Zalopay", ...aiReviewCounts }],
     },
     by_review_count: [{ value: "1", ...aiReviewCounts }],
   };

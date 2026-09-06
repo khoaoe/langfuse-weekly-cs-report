@@ -110,6 +110,9 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
 export interface ActiveFilterChip {
   readonly key: TicketFilterKey;
   readonly label: string;
+  /** Set only when `label` collapses multiple values (e.g. "3 giá trị") —
+   * carries the full, uncollapsed text for a chip's `title` attribute. */
+  readonly fullLabel?: string;
   /** Keys to clear together when this chip's remove button is clicked.
    * Defaults to just `key` when omitted (see the combined date-range chip). */
   readonly clearKeys?: readonly TicketFilterKey[];
@@ -210,6 +213,23 @@ const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
   "transfer_reason",
 ]);
 
+/** Reserved value meaning "any real value" for a dimension (C6) -- matches
+ * `MultiSelectField`'s own sentinel and the server's `_parse_multi_ticket_filter`. */
+const HAS_VALUE = "__has_value__";
+
+/** Per-dimension "has value" label, matching the radio option text each
+ * `MultiSelectField` shows for that filter (C6). Must read the same on the
+ * chip as on the radio -- naming the noun, not a shared adjective. */
+const HAS_VALUE_LABELS: Partial<Record<TicketFilterKey, string>> = {
+  issue_category: "Chỉ ticket đã phân loại",
+  app: "Chỉ ticket có giá trị",
+  product_code: "Chỉ ticket có giá trị",
+  skill: "Chỉ ticket có skill",
+  tpe_code: "Chỉ ticket có giá trị",
+  model_core: "Chỉ ticket có giá trị",
+  tool_error_codes: "Chỉ ticket có lỗi",
+};
+
 function displayFilterValuePiece(key: TicketFilterKey, value: string): string {
   if (key === "outcome") {
     return OUTCOME_FILTER_LABELS[value] ?? value;
@@ -244,12 +264,30 @@ function displayFilterValue(
     return value === "true" ? "Có" : "Không";
   }
   if (MULTI_SELECT_FILTER_KEYS.has(key)) {
-    return value
-      .split(",")
-      .map((piece) => displayFilterValuePiece(key, piece))
-      .join(", ");
+    if (value === HAS_VALUE) {
+      return HAS_VALUE_LABELS[key] ?? value;
+    }
+    const pieces = value.split(",").filter(Boolean);
+    if (pieces.length > 2) {
+      return `${pieces.length} giá trị`;
+    }
+    return pieces.map((piece) => displayFilterValuePiece(key, piece)).join(", ");
   }
   return value;
+}
+
+function displayFilterValueFull(
+  key: TicketFilterKey,
+  value: string,
+): string | undefined {
+  if (!MULTI_SELECT_FILTER_KEYS.has(key) || value === HAS_VALUE) {
+    return undefined;
+  }
+  const pieces = value.split(",").filter(Boolean);
+  if (pieces.length <= 2) {
+    return undefined;
+  }
+  return pieces.map((piece) => displayFilterValuePiece(key, piece)).join(", ");
 }
 
 export function activeTicketFilterChips(
@@ -282,10 +320,12 @@ export function activeTicketFilterChips(
         : key === "outcome"
           ? "Kết quả"
           : FILTER_LABELS[key];
+    const fullValue = displayFilterValueFull(key, value);
     return [
       {
         key,
         label: `${label}: ${displayFilterValue(key, value, weekDefinition)}`,
+        ...(fullValue === undefined ? {} : { fullLabel: `${label}: ${fullValue}` }),
       },
     ];
   });

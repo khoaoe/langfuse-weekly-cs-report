@@ -17,12 +17,19 @@
   display: inline-flex;
   align-items: center;
   min-height: 44px;
+  max-width: 22rem;
   padding-left: var(--space-3);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface-sunken);
   color: var(--ink);
   font-size: 13px;
+}
+
+.filterChipLabel {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .filterChip button {

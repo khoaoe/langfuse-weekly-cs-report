@@ -35,14 +35,13 @@ function rowHeaders(table: HTMLElement): string[] {
     .map((cell) => cell.textContent?.trim() ?? "");
 }
 
-// The TPE table's row header (first column) is now the governed Trạng thái
-// label, not the Transstatus code — this reads the Transstatus column
-// (second column) directly to check sort order on the exact-source code.
+// B1: the "Trạng thái" column was removed; Transstatus is now the sticky
+// rowheader (first column), not a plain cell.
 function transstatusCells(table: HTMLElement): string[] {
   return within(table)
     .getAllByRole("row")
     .slice(1)
-    .map((row) => within(row).getAllByRole("cell")[0]?.textContent?.trim() ?? "");
+    .map((row) => within(row).getAllByRole("rowheader")[0]?.textContent?.trim() ?? "");
 }
 
 function weekRow(
@@ -74,9 +73,9 @@ function snapshotWithWeekly(
 
 function analysisSnapshot(): DashboardSnapshot {
   const issueCategory = {
-    "Nhóm 10": { total: 4, ai_first: 1, transferred: 2, reopen: 0 },
-    "Nhóm 2": { total: 4, ai_first: 3, transferred: 1, reopen: 2 },
-    "Áp dụng": { total: 2, ai_first: 2, transferred: 0, reopen: 1 },
+    "Nhóm 10": { total: 4, ai_first: 1, transferred: 2, reopen: 0, ai_end_to_end: 1, direct_cs: 1 },
+    "Nhóm 2": { total: 4, ai_first: 3, transferred: 1, reopen: 2, ai_end_to_end: 2, direct_cs: 1 },
+    "Áp dụng": { total: 2, ai_first: 2, transferred: 0, reopen: 1, ai_end_to_end: 2, direct_cs: 0 },
   };
   const transferReasons = {
     observed_transfer_denominator: 12,
@@ -175,7 +174,7 @@ function belowFold(snapshot: DashboardSnapshot) {
       activeWeek=""
       onWeekSelect={() => {}}
       onSegmentSelect={() => {}}
-      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
       onCsatBreakdownSelect={() => {}}
       onCsatBreakdownGroupingChange={() => {}}
     />
@@ -405,7 +404,7 @@ describe("sorting bảng dữ liệu", () => {
       name: /Xếp theo số ca chuyển CS nhiều nhất/,
     });
     expect(document.getElementById("segmentCaption")).toHaveTextContent(
-      "Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó.",
+      "Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, AI xử lý trọn, CS First, Chuyển CS: tỷ lệ trong chính nhóm đó. Lượt reopen: đếm số lượt, một ticket có thể reopen nhiều lần.",
     );
     expect(document.getElementById("segmentCaption")).not.toHaveTextContent(
       /tăng dần|giảm dần|Đang sắp xếp/,

@@ -478,7 +478,7 @@ describe("scopeSnapshotToDayRange", () => {
       day({
         day: "2026-08-03",
         segments: {
-          skill: { billing: { total: 2, ai_first: 1, transferred: 0, reopen: 0 } },
+          skill: { billing: { total: 2, ai_first: 1, transferred: 0, reopen: 0, ai_end_to_end: 1, direct_cs: 1 } },
           app: {},
           issue_category: {},
         },

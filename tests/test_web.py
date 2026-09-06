@@ -72,7 +72,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
                 "ai_first": {"count": 0, "rate": 0.0},
                 "reopen": {"lifetime": {"numerator": 0, "denominator": 0}, "within_7d": {"numerator": 0, "denominator": 0}},
                 "weekly": [],
-                "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core")},
+                "segments": {name: {("Chưa ghi nhận" if name == "skill" else "Không xác định"): {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0, "ai_end_to_end": 0, "direct_cs": 0}} for name in ("issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core")},
                 "transfer_reasons": _empty_transfer_reasons(),
                 "by_week": {},
                 "same_period": None,
@@ -571,6 +571,8 @@ def test_ticket_endpoint_aggregate_returns_day_buckets_instead_of_ticket_list(
                             "ai_first": 2,
                             "transferred": 2,
                             "reopen": 0,
+                            "ai_end_to_end": 1,
+                            "direct_cs": 1,
                         }
                     },
                     "issue_category": {
@@ -579,6 +581,8 @@ def test_ticket_endpoint_aggregate_returns_day_buckets_instead_of_ticket_list(
                             "ai_first": 2,
                             "transferred": 2,
                             "reopen": 0,
+                            "ai_end_to_end": 1,
+                            "direct_cs": 1,
                         }
                     },
                 },

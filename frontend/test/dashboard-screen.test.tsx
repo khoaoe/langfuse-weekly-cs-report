@@ -94,6 +94,10 @@ describe("DashboardScreen", () => {
           { value: "Chuyển tiền", ticket_count: 1, positive: 1, neutral: 0, negative: 0 },
           { value: "Không xác định", ticket_count: 1, positive: 0, neutral: 0, negative: 1 },
         ],
+        app: [
+          { value: "Zalopay", ticket_count: 1, positive: 1, neutral: 0, negative: 0 },
+          { value: "Chưa ghi nhận", ticket_count: 1, positive: 0, neutral: 0, negative: 1 },
+        ],
       },
       feedback_entries: [
         {
@@ -103,6 +107,7 @@ describe("DashboardScreen", () => {
           outcome: "ai_end_to_end" as const,
           skill: "interbank-fund-transfer",
           issue_category: "Chuyển tiền",
+          app: "Zalopay",
           text: "Phản hồi outcome A",
           response_number: 1,
           response_total: 1,
@@ -115,6 +120,7 @@ describe("DashboardScreen", () => {
           outcome: "direct_cs" as const,
           skill: "Nhiều skill",
           issue_category: "Không xác định",
+          app: "Chưa ghi nhận",
           text: "Phản hồi outcome B",
           response_number: 1,
           response_total: 1,
@@ -127,13 +133,48 @@ describe("DashboardScreen", () => {
       segments: {
         ...view.segments,
         skill: {
-          "interbank-fund-transfer": { total: 4, ai_first: 4, transferred: 1, reopen: 1 },
-          "Nhiều skill": { total: 3, ai_first: 1, transferred: 2, reopen: 1 },
-          "Chưa ghi nhận": { total: 3, ai_first: 3, transferred: 0, reopen: 0 },
+          "interbank-fund-transfer": {
+            total: 4,
+            ai_first: 4,
+            transferred: 1,
+            reopen: 1,
+            ai_end_to_end: 3,
+            direct_cs: 0,
+          },
+          "Nhiều skill": {
+            total: 3,
+            ai_first: 1,
+            transferred: 2,
+            reopen: 1,
+            ai_end_to_end: 1,
+            direct_cs: 1,
+          },
+          "Chưa ghi nhận": {
+            total: 3,
+            ai_first: 3,
+            transferred: 0,
+            reopen: 0,
+            ai_end_to_end: 3,
+            direct_cs: 0,
+          },
         },
         issue_category: {
-          "Chuyển tiền": { total: 5, ai_first: 4, transferred: 1, reopen: 1 },
-          "Không xác định": { total: 5, ai_first: 4, transferred: 2, reopen: 1 },
+          "Chuyển tiền": {
+            total: 5,
+            ai_first: 4,
+            transferred: 1,
+            reopen: 1,
+            ai_end_to_end: 3,
+            direct_cs: 1,
+          },
+          "Không xác định": {
+            total: 5,
+            ai_first: 4,
+            transferred: 2,
+            reopen: 1,
+            ai_end_to_end: 2,
+            direct_cs: 1,
+          },
         },
       },
       csat: {
@@ -570,15 +611,18 @@ describe("DashboardScreen", () => {
     });
     await user.click(diagnosticAction);
     const diagnosticFilters = screen.getByRole("region", {
-      name: "Bộ lọc đang áp dụng",
+      name: "Bộ lọc đang áp dụng trong Ticket Explorer",
     });
     expect(diagnosticFilters).toHaveTextContent(">3 lượt xử lý: Có");
     expect(diagnosticFilters).toHaveTextContent("Đã chuyển CS: Không");
-    expect(diagnosticFilters).not.toHaveTextContent("Tuần:");
     expect(screen.getByRole("combobox", { name: "Tuần" })).toHaveValue(
       "2026-07-20",
     );
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
+
+    // Category is not a default-visible column (C2); show it before filtering.
+    await user.click(screen.getByText("Chọn cột hiển thị"));
+    await user.click(screen.getByRole("checkbox", { name: "Category" }));
 
     await toggleMultiSelectOption(
       user,
@@ -589,12 +633,17 @@ describe("DashboardScreen", () => {
     );
 
     const activeFilters = screen.getByRole("region", {
-      name: "Bộ lọc đang áp dụng",
+      name: "Bộ lọc đang áp dụng trong Ticket Explorer",
     });
     expect(activeFilters).toHaveTextContent("Category: Thanh toán-IBFT");
     expect(screen.getByRole("button", { name: "Xoá lọc" })).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
+    expect(
+      screen.queryByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toBeNull();
     expect(
       screen.queryByRole("region", { name: "Bộ lọc đang áp dụng" }),
     ).toBeNull();
@@ -616,10 +665,9 @@ describe("DashboardScreen", () => {
       within(transferCell as HTMLElement).getByRole("button"),
     );
     const filtersAfterTransfer = screen.getByRole("region", {
-      name: "Bộ lọc đang áp dụng",
+      name: "Bộ lọc đang áp dụng trong Ticket Explorer",
     });
     expect(filtersAfterTransfer).toHaveTextContent("Đã chuyển CS: Có");
-    expect(filtersAfterTransfer).not.toHaveTextContent("Tuần:");
     expect(filtersAfterTransfer).not.toHaveTextContent(">3 lượt xử lý");
 
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
@@ -627,7 +675,7 @@ describe("DashboardScreen", () => {
     const directCsCell = document.getElementById("ledger-direct-cs");
     await user.click(within(directCsCell as HTMLElement).getByRole("button"));
     const filtersAfterDirectCs = screen.getByRole("region", {
-      name: "Bộ lọc đang áp dụng",
+      name: "Bộ lọc đang áp dụng trong Ticket Explorer",
     });
     expect(filtersAfterDirectCs).toHaveTextContent(
       "Kết quả: Chuyển CS ngay từ đầu",
@@ -640,7 +688,9 @@ describe("DashboardScreen", () => {
     const aiEndToEndCell = document.getElementById("ledger-ai-end-to-end");
     await user.click(within(aiEndToEndCell as HTMLElement).getByRole("button"));
     expect(
-      screen.getByRole("region", { name: "Bộ lọc đang áp dụng" }),
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
     ).toHaveTextContent("Kết quả: AI xử lý trọn");
 
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
@@ -678,9 +728,11 @@ describe("DashboardScreen", () => {
     await user.selectOptions(outcomeFilter, "ai_end_to_end");
 
     expect(outcomeFilter).toHaveValue("ai_end_to_end");
-    expect(screen.getByRole("region", { name: "Bộ lọc đang áp dụng" })).toHaveTextContent(
-      "Kết quả: AI xử lý trọn",
-    );
+    expect(
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent("Kết quả: AI xử lý trọn");
     expect(within(csatSection).getByText("Phản hồi outcome A")).toBeVisible();
     expect(within(csatSection).queryByText("Phản hồi outcome B")).toBeNull();
     const ticketExplorer = document.getElementById("tickets") as HTMLElement;
@@ -702,9 +754,11 @@ describe("DashboardScreen", () => {
       name: "Lọc nội dung theo Skill",
     });
     await user.selectOptions(skillFilter, "interbank-fund-transfer");
-    expect(screen.getByRole("region", { name: "Bộ lọc đang áp dụng" })).toHaveTextContent(
-      "Skill: interbank-fund-transfer",
-    );
+    expect(
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent("Skill: interbank-fund-transfer");
     expect(multiSelectSummaryText(ticketExplorer, "Skill")).toBe(
       "interbank-fund-transfer",
     );
@@ -719,9 +773,11 @@ describe("DashboardScreen", () => {
       }),
       "Chuyển tiền",
     );
-    expect(screen.getByRole("region", { name: "Bộ lọc đang áp dụng" })).toHaveTextContent(
-      "Category: Chuyển tiền",
-    );
+    expect(
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent("Category: Chuyển tiền");
     expect(multiSelectSummaryText(ticketExplorer, "Category")).toBe(
       "Chuyển tiền",
     );
@@ -812,7 +868,7 @@ describe("DashboardScreen", () => {
     ).toHaveValue("true");
   });
 
-  it("hien status da resolve va gan nhan chua phan loai cho phan con lai", async () => {
+  it("hien transstatus truc tiep, khong con cot Trang thai", async () => {
     const user = userEvent.setup();
     server.use(
       http.get("/api/dashboard", () =>
@@ -827,8 +883,12 @@ describe("DashboardScreen", () => {
     );
 
     const tpeTable = document.getElementById("tpeDistribution") as HTMLElement;
-    expect(within(tpeTable).getByText("SUCCESSFUL")).toBeInTheDocument();
-    expect(within(tpeTable).getByText("Chưa phân loại")).toBeInTheDocument();
+    expect(within(tpeTable).getByRole("rowheader", { name: "1" })).toBeInTheDocument();
+    expect(
+      within(tpeTable).getByRole("rowheader", { name: "-217" }),
+    ).toBeInTheDocument();
+    expect(within(tpeTable).queryByText("SUCCESSFUL")).toBeNull();
+    expect(within(tpeTable).queryByText("Chưa phân loại")).toBeNull();
   });
 
   it("keeps the last-good report visible after a refresh fails", async () => {

@@ -227,7 +227,6 @@ export function WeeklyReport({
   const [exportNotice, setExportNotice] = useState("");
   const [sort, setSort] =
     useState<TableSort<WeeklySortKey>>(DEFAULT_WEEKLY_SORT);
-  const [showEmptyWeeks, setShowEmptyWeeks] = useState(false);
 
   const view = selectView(snapshot, weekDefinition);
   const weekly = useMemo(() => selectWeekly(view), [view]);
@@ -295,7 +294,6 @@ export function WeeklyReport({
     }),
     [cohortLabel, updatedAt, weekDefinition, dayRangeWeekLabels],
   );
-  const emptyWeekCount = rows.filter((row) => !row.source.has_data).length;
   const isCustomSort =
     sort.key !== DEFAULT_WEEKLY_SORT.key ||
     sort.direction !== DEFAULT_WEEKLY_SORT.direction;
@@ -472,9 +470,7 @@ export function WeeklyReport({
           <tbody id="weeklyRows">
             {table
               .getRowModel()
-              .rows.filter(
-                (row) => showEmptyWeeks || row.original.source.has_data,
-              )
+              .rows.filter((row) => row.original.source.has_data)
               .map((row) => (
               <tr
                 key={row.original.key}
@@ -513,19 +509,6 @@ export function WeeklyReport({
           </tbody>
         </table>
       </div>
-
-      {emptyWeekCount === 0 ? null : (
-        <button
-          type="button"
-          className={styles.action}
-          aria-pressed={showEmptyWeeks}
-          onClick={() => setShowEmptyWeeks((current) => !current)}
-        >
-          {showEmptyWeeks
-            ? "Ẩn tuần không có dữ liệu"
-            : `+ ${emptyWeekCount} tuần không có dữ liệu`}
-        </button>
-      )}
 
       <p aria-live="polite" className={styles.caption}>
         {exportNotice}

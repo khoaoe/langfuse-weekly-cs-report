@@ -35,6 +35,7 @@ import {
   TICKET_COLUMN_STORAGE_KEY,
 } from "../src/lib/ticket-columns";
 import { dashboardEnvelopeFixture } from "./fixtures/dashboard";
+import { toggleMultiSelectOption } from "./multi-select";
 import { server } from "./msw/server";
 
 const baseSnapshot = DashboardEnvelopeSchema.parse(dashboardEnvelopeFixture)
@@ -64,7 +65,6 @@ function shell(
       refreshHint="Có thể làm mới"
       runtimeKind={snapshot === null ? "loading" : "ready"}
       activeFilters={[]}
-      onRemoveFilter={() => {}}
       onResetFilters={() => {}}
       {...overrides}
     >
@@ -218,9 +218,10 @@ describe("dashboard cross-filter orchestration", () => {
           name: "Lọc Ticket Explorer theo Category: Thanh toán-IBFT",
         }),
       );
-      expect(
-        screen.getByRole("region", { name: "Bộ lọc đang áp dụng" }),
-      ).toHaveTextContent("Category: Thanh toán-IBFT");
+      const explorerChips = screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      });
+      expect(explorerChips).toHaveTextContent("Category: Thanh toán-IBFT");
       await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
       await waitFor(() =>
         expect(
@@ -230,17 +231,11 @@ describe("dashboard cross-filter orchestration", () => {
 
       await user.click(
         screen.getByRole("button", {
-          name: "Bỏ lọc Category: Thanh toán-IBFT",
+          name: "Bỏ lọc Category: Thanh toán-IBFT (Ticket Explorer)",
         }),
       );
-      expect(
-        screen.queryByRole("region", { name: "Bộ lọc đang áp dụng" }),
-      ).toBeNull();
-      expect(
-        screen.getByRole("region", {
-          name: "Bộ lọc đang áp dụng trong Ticket Explorer",
-        }),
-      ).toHaveTextContent("Tuần: 20/07–24/07");
+      expect(explorerChips).not.toHaveTextContent("Category: Thanh toán-IBFT");
+      expect(explorerChips).toHaveTextContent("Tuần: 20/07–24/07");
     } finally {
       Reflect.deleteProperty(Element.prototype, "scrollIntoView");
     }
@@ -252,6 +247,8 @@ const zeroCounts = {
   ai_first: 0,
   transferred: 0,
   reopen: 0,
+  ai_end_to_end: 0,
+  direct_cs: 0,
 } as const;
 
 const sparseSegments: Segments = {
@@ -322,7 +319,7 @@ function renderBelowFold(snapshot: DashboardSnapshot) {
       activeWeek="2026-07-20"
       onWeekSelect={() => {}}
       onSegmentSelect={() => {}}
-      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
       onCsatBreakdownSelect={() => {}}
       onCsatBreakdownGroupingChange={() => {}}
     />,
@@ -706,6 +703,46 @@ describe("Ticket Explorer behavioral branches", () => {
     );
   });
 
+  it("shows a filter box only while its column is visible, unless it already has a value", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<ExplorerHarness />);
+    await screen.findByText("Không có ticket nào khớp bộ lọc hiện tại.");
+
+    // Skill is not a default-visible column, so its filter starts hidden.
+    expect(screen.queryByRole("button", { name: /^Skill:/ })).toBeNull();
+
+    await user.click(screen.getByText("Chọn cột hiển thị"));
+    await user.click(screen.getByRole("checkbox", { name: "Skill" }));
+    expect(screen.getByRole("button", { name: /^Skill:/ })).toBeVisible();
+
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "skillInput",
+      "Skill",
+      "interbank-fund-transfer",
+    );
+
+    // Hiding the column again must not silently drop the active filter.
+    await user.click(screen.getByRole("checkbox", { name: "Skill" }));
+    expect(screen.getByRole("button", { name: /^Skill:/ })).toBeVisible();
+    expect(
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent("Skill: interbank-fund-transfer");
+
+    // Only clearing the value removes the filter box for a hidden column.
+    await toggleMultiSelectOption(
+      user,
+      document.body,
+      "skillInput",
+      "Skill",
+      "interbank-fund-transfer",
+    );
+    expect(screen.queryByRole("button", { name: /^Skill:/ })).toBeNull();
+  });
+
   it("restores Ticket as the row header before legacy-selected fields", async () => {
     localStorage.setItem(
       TICKET_COLUMN_STORAGE_KEY,
@@ -752,9 +789,11 @@ describe("Ticket Explorer behavioral branches", () => {
 
     await user.click(screen.getByText("Chọn cột hiển thị"));
 
+    // C4: the "Ticket column is mandatory" note was removed as redundant —
+    // the absent checkbox itself already communicates that.
     expect(
-      screen.getByText("Cột Ticket luôn hiển thị để giữ định danh điều tra."),
-    ).toBeVisible();
+      screen.queryByText("Cột Ticket luôn hiển thị để giữ định danh điều tra."),
+    ).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "Ticket" })).not.toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Sắp xếp theo Ticket/ }),

@@ -28,7 +28,7 @@ import styles from "./dashboard.module.css";
 
 type TpeReason = TransferReasons["tpe"][number];
 type TransferTrigger = TransferReasons["triggers"][number];
-type TpeSortKey = "status" | "transstatus" | "step_result" | "count" | "share";
+type TpeSortKey = "transstatus" | "step_result" | "count" | "share";
 type TransferReasonSortKey =
   | "reason"
   | "rule"
@@ -57,19 +57,7 @@ function formatTransferShare(count: number, denominator: number): string {
   return count < PERCENTAGE_SAMPLE_MINIMUM ? "—" : formatRate(count / denominator);
 }
 
-const TPE_UNCLASSIFIED_LABEL = "Chưa phân loại";
-
-function tpeStatusLabel(status: string | null): string {
-  return status === null ? TPE_UNCLASSIFIED_LABEL : status;
-}
-
 const TPE_SORT_COLUMNS: readonly TpeSortColumn[] = [
-  {
-    key: "status",
-    label: "Trạng thái",
-    initialDirection: "asc",
-    value: (item) => item.status,
-  },
   {
     key: "transstatus",
     label: "Transstatus",
@@ -160,7 +148,7 @@ function TpeZone({
                 <tr>
                   {TPE_SORT_COLUMNS.map((column, index) => {
                     const active = sort.key === column.key;
-                    const numeric = index >= 3;
+                    const numeric = index >= 2;
                     return (
                       <th
                         key={column.key}
@@ -203,7 +191,7 @@ function TpeZone({
               <tbody>
                 {transfer.tpe.length === 0 ? (
                   <tr>
-                    <td className={styles.emptyCell} colSpan={5}>
+                    <td className={styles.emptyCell} colSpan={4}>
                       Không có Transstatus trong phạm vi đang chọn.
                     </td>
                   </tr>
@@ -213,9 +201,6 @@ function TpeZone({
                     key={`tpe-${item.transstatus}-${item.step_result ?? "missing"}`}
                   >
                     <th scope="row" className={styles.stickyColumn}>
-                      {tpeStatusLabel(item.status)}
-                    </th>
-                    <td>
                       <FilterValueButton
                         label={item.transstatus}
                         filterLabel="Transstatus"
@@ -223,7 +208,7 @@ function TpeZone({
                           onTicketFilterSelect({ tpe_code: item.transstatus })
                         }
                       />
-                    </td>
+                    </th>
                     <td>
                       {item.step_result === null
                         ? "Không có Step result"
@@ -340,7 +325,7 @@ function TransferReasonZone({
   return (
     <section
       id="guardrailDistribution"
-      className={belowFoldStyles.diagnosticZone}
+      className={`${belowFoldStyles.diagnosticZone} ${belowFoldStyles.diagnosticZoneWide}`}
       aria-labelledby="system-condition-title"
     >
       <h3
@@ -475,107 +460,118 @@ function Gt4Zone({
       className={belowFoldStyles.diagnosticZone}
       aria-labelledby="gt4-title"
     >
-      <h3 id="gt4-title" className={belowFoldStyles.diagnosticTitle}>
-        Ticket có hơn 3 lượt xử lý
-      </h3>
-      <div
-        className={styles.tableScroll}
-        tabIndex={0}
-        role="region"
-        aria-label="Bảng ticket có hơn 3 lượt xử lý"
-      >
-        <table className={styles.table} aria-labelledby="gt4-title">
-          <thead>
-            <tr>
-              <th scope="col" className={styles.stickyColumn}>
-                Trạng thái
-              </th>
-              <th scope="col" className={styles.numeric}>
-                Ticket
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <th scope="row" className={styles.stickyColumn}>
-                {rule.gt4_turn_total === 0 ? (
-                  "Tổng"
-                ) : (
-                  <FilterValueButton
-                    label="Tổng"
-                    filterLabel="Trạng thái"
-                    onClick={() =>
-                      onTicketFilterSelect({
-                        gt4_turn: "true",
-                        transferred: "",
-                      })
-                    }
-                  />
-                )}
-              </th>
-              <td className={styles.numeric}>
-                {formatCount(rule.gt4_turn_total)}
-              </td>
-            </tr>
-            <tr>
-              <th scope="row" className={styles.stickyColumn}>
-                {rule.gt4_turn_with_cs === 0 ? (
-                  "Đã chuyển CS"
-                ) : (
-                  <FilterValueButton
-                    label="Đã chuyển CS"
-                    filterLabel="Trạng thái"
-                    onClick={() =>
-                      onTicketFilterSelect({
-                        gt4_turn: "true",
-                        transferred: "true",
-                      })
-                    }
-                  />
-                )}
-              </th>
-              <td className={styles.numeric}>
-                {formatCount(rule.gt4_turn_with_cs)}
-              </td>
-            </tr>
-            <tr>
-              <th scope="row" className={styles.stickyColumn}>
-                {rule.gt4_turn_without_cs === 0 ? (
-                  "Chưa chuyển CS"
-                ) : (
-                  <FilterValueButton
-                    label="Chưa chuyển CS"
-                    filterLabel="Trạng thái"
-                    onClick={() =>
-                      onTicketFilterSelect({
-                        gt4_turn: "true",
-                        transferred: "false",
-                      })
-                    }
-                  />
-                )}
-              </th>
-              <td className={styles.numeric}>
-                <span>{formatCount(rule.gt4_turn_without_cs)}</span>
-                {rule.gt4_turn_without_cs > 0 ? (
-                  <button
-                    id="ruleGt4Alert"
-                    type="button"
-                    className={belowFoldStyles.inlineAction}
-                    onClick={onShowStuckTickets}
-                  >
-                    {`Xem ${formatCount(
-                      rule.gt4_turn_without_cs,
-                    )} ticket chưa chuyển CS`}
-                  </button>
-                ) : (
-                  <span id="ruleGt4Alert" hidden aria-hidden="true" />
-                )}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
+      <details className={styles.qualityDisclosure}>
+        <summary className={styles.qualitySummary}>
+          <span
+            id="gt4-title"
+            className={belowFoldStyles.diagnosticTitle}
+            role="heading"
+            aria-level={3}
+          >
+            {`Ticket có hơn 3 lượt xử lý · ${formatCount(rule.gt4_turn_total)}`}
+          </span>
+        </summary>
+        <div className={styles.qualityContent}>
+          <div
+            className={styles.tableScroll}
+            tabIndex={0}
+            role="region"
+            aria-label="Bảng ticket có hơn 3 lượt xử lý"
+          >
+            <table className={styles.table} aria-labelledby="gt4-title">
+              <thead>
+                <tr>
+                  <th scope="col" className={styles.stickyColumn}>
+                    Trạng thái
+                  </th>
+                  <th scope="col" className={styles.numeric}>
+                    Ticket
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row" className={styles.stickyColumn}>
+                    {rule.gt4_turn_total === 0 ? (
+                      "Tổng"
+                    ) : (
+                      <FilterValueButton
+                        label="Tổng"
+                        filterLabel="Trạng thái"
+                        onClick={() =>
+                          onTicketFilterSelect({
+                            gt4_turn: "true",
+                            transferred: "",
+                          })
+                        }
+                      />
+                    )}
+                  </th>
+                  <td className={styles.numeric}>
+                    {formatCount(rule.gt4_turn_total)}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row" className={styles.stickyColumn}>
+                    {rule.gt4_turn_with_cs === 0 ? (
+                      "Đã chuyển CS"
+                    ) : (
+                      <FilterValueButton
+                        label="Đã chuyển CS"
+                        filterLabel="Trạng thái"
+                        onClick={() =>
+                          onTicketFilterSelect({
+                            gt4_turn: "true",
+                            transferred: "true",
+                          })
+                        }
+                      />
+                    )}
+                  </th>
+                  <td className={styles.numeric}>
+                    {formatCount(rule.gt4_turn_with_cs)}
+                  </td>
+                </tr>
+                <tr>
+                  <th scope="row" className={styles.stickyColumn}>
+                    {rule.gt4_turn_without_cs === 0 ? (
+                      "Chưa chuyển CS"
+                    ) : (
+                      <FilterValueButton
+                        label="Chưa chuyển CS"
+                        filterLabel="Trạng thái"
+                        onClick={() =>
+                          onTicketFilterSelect({
+                            gt4_turn: "true",
+                            transferred: "false",
+                          })
+                        }
+                      />
+                    )}
+                  </th>
+                  <td className={styles.numeric}>
+                    <span>{formatCount(rule.gt4_turn_without_cs)}</span>
+                    {rule.gt4_turn_without_cs > 0 ? (
+                      <button
+                        id="ruleGt4Alert"
+                        type="button"
+                        className={belowFoldStyles.inlineAction}
+                        onClick={onShowStuckTickets}
+                      >
+                        {`Xem ${formatCount(
+                          rule.gt4_turn_without_cs,
+                        )} ticket chưa chuyển CS`}
+                      </button>
+                    ) : (
+                      <span id="ruleGt4Alert" hidden aria-hidden="true" />
+                    )}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </details>
       <span id="ruleScope" hidden aria-hidden="true" />
     </section>
   );
@@ -644,13 +640,13 @@ export function TransferDiagnostics({
           transfer={transfer}
           onTicketFilterSelect={onTicketFilterSelect}
         />
-        <TransferReasonZone
-          transfer={transfer}
-          onTicketFilterSelect={onTicketFilterSelect}
-        />
         <Gt4Zone
           rule={rule}
           onShowStuckTickets={onShowStuckTickets}
+          onTicketFilterSelect={onTicketFilterSelect}
+        />
+        <TransferReasonZone
+          transfer={transfer}
           onTicketFilterSelect={onTicketFilterSelect}
         />
       </div>

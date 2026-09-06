@@ -78,6 +78,8 @@ type SegmentSortKey =
   | "total"
   | "ai_first"
   | "transferred"
+  | "ai_end_to_end"
+  | "direct_cs"
   | "reopen";
 
 interface SegmentRow {
@@ -283,8 +285,20 @@ const SEGMENT_SORT_COLUMNS: readonly SegmentSortColumn[] = [
     value: (row) => row.counts.transferred,
   },
   {
+    key: "ai_end_to_end",
+    label: "AI xử lý trọn",
+    initialDirection: "desc",
+    value: (row) => row.counts.ai_end_to_end,
+  },
+  {
+    key: "direct_cs",
+    label: "CS First",
+    initialDirection: "desc",
+    value: (row) => row.counts.direct_cs,
+  },
+  {
     key: "reopen",
-    label: "Reopen",
+    label: "Lượt reopen",
     initialDirection: "desc",
     value: (row) => row.counts.reopen,
   },
@@ -752,8 +766,10 @@ function SegmentTable({
       ai_first: sum.ai_first + row.counts.ai_first,
       transferred: sum.transferred + row.counts.transferred,
       reopen: sum.reopen + row.counts.reopen,
+      ai_end_to_end: sum.ai_end_to_end + row.counts.ai_end_to_end,
+      direct_cs: sum.direct_cs + row.counts.direct_cs,
     }),
-    { total: 0, ai_first: 0, transferred: 0, reopen: 0 },
+    { total: 0, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 },
   );
   const activeTabId = `segment-tab-${dimension}`;
 
@@ -810,7 +826,7 @@ function SegmentTable({
         className={styles.tableCaption}
         aria-live="polite"
       >
-        {`Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, Chuyển CS, Reopen: tỷ lệ trong chính nhóm đó.`}
+        {`Xếp theo số ca chuyển CS nhiều nhất. Ticket: tỷ trọng trong tuần. AI First, AI xử lý trọn, CS First, Chuyển CS: tỷ lệ trong chính nhóm đó. Lượt reopen: đếm số lượt, một ticket có thể reopen nhiều lần.`}
       </p>
 
       <div
@@ -888,7 +904,13 @@ function SegmentTable({
                   {formatMetric(counts.transferred, counts.total)}
                 </td>
                 <td className={styles.numeric}>
-                  {formatMetric(counts.reopen, counts.total)}
+                  {formatMetric(counts.ai_end_to_end, counts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatMetric(counts.direct_cs, counts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatCount(counts.reopen)}
                 </td>
               </tr>
             ))}
@@ -913,7 +935,13 @@ function SegmentTable({
                   {formatMetric(restCounts.transferred, restCounts.total)}
                 </td>
                 <td className={styles.numeric}>
-                  {formatMetric(restCounts.reopen, restCounts.total)}
+                  {formatMetric(restCounts.ai_end_to_end, restCounts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatMetric(restCounts.direct_cs, restCounts.total)}
+                </td>
+                <td className={styles.numeric}>
+                  {formatCount(restCounts.reopen)}
                 </td>
               </tr>
             )}
@@ -928,7 +956,7 @@ function SegmentTable({
                     {`Thu gọn về ${SEGMENT_HEAD_ROWS} nhóm đầu`}
                   </button>
                 </th>
-                <td className={styles.numeric} colSpan={4} />
+                <td className={styles.numeric} colSpan={6} />
               </tr>
             ) : null}
           </tbody>
@@ -953,7 +981,7 @@ export interface BelowFoldProps {
   readonly onTicketFilterSelect?: (patch: Partial<TicketFilters>) => void;
   readonly activeCsatBreakdownFilters: Pick<
     TicketFilters,
-    "outcome" | "skill" | "issue_category"
+    "outcome" | "skill" | "issue_category" | "app"
   >;
   readonly onCsatBreakdownSelect: (
     grouping: CsatGrouping,

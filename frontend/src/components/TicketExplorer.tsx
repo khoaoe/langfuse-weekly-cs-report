@@ -22,7 +22,7 @@ import {
   updateTicketFilters,
 } from "../lib/dashboard-filters";
 import { formatCount, formatUpdatedAt, formatWeekRange } from "../lib/format";
-import { selectLatestWeek, selectView } from "../lib/selectors";
+import { selectView } from "../lib/selectors";
 import { csvCell } from "../lib/spreadsheet";
 import { transferReasonLabel } from "../lib/transfer-copy";
 import {
@@ -435,7 +435,6 @@ export function TicketExplorer({
   } as const;
 
   const explorerActiveFilters = activeTicketFilterChips(filters, weekDefinition);
-  const latestWeek = selectLatestWeek(view);
 
   const toggleSort = useCallback((key: TicketColumnKey) => {
     setPage(1);
@@ -479,35 +478,6 @@ export function TicketExplorer({
         </div>
       </div>
 
-      <div
-        id="ticketQuickFilters"
-        className={styles.controls}
-        role="group"
-        aria-label="Lọc nhanh"
-      >
-        <button
-          type="button"
-          className={styles.action}
-          disabled={latestWeek === null}
-          onClick={() =>
-            latestWeek !== null &&
-            update({
-              cohort_week: latestWeek.cohort_week,
-              cohort_weeks: "",
-            })
-          }
-        >
-          Tuần này
-        </button>
-        <button
-          type="button"
-          className={styles.action}
-          onClick={() => update({ gt4_turn: "true", transferred: "false" })}
-        >
-          &gt;3 lượt xử lý chưa chuyển
-        </button>
-      </div>
-
       {explorerActiveFilters.length === 0 ? null : (
         <div
           id="explorerActiveFilterChips"
@@ -517,7 +487,12 @@ export function TicketExplorer({
         >
           {explorerActiveFilters.map((filter) => (
             <span key={filter.key} className={styles.filterChip}>
-              {filter.label}
+              <span
+                className={styles.filterChipLabel}
+                title={filter.fullLabel ?? filter.label}
+              >
+                {filter.label}
+              </span>
               <button
                 type="button"
                 aria-label={`Bỏ lọc ${filter.label} (Ticket Explorer)`}
@@ -580,130 +555,169 @@ export function TicketExplorer({
             onChange={(event) => update({ ticket_id: event.target.value })}
           />
         </label>
-        <MultiSelectField
-          id="outcomeInput"
-          label="Kết quả"
-          options={multiSelectOptions.outcome}
-          value={filters.outcome}
-          onChange={(value) => update({ outcome: value })}
-        />
-        <MultiSelectField
-          id="csatSatisfactionInput"
-          label="CSAT"
-          options={multiSelectOptions.csat_satisfaction}
-          value={filters.csat_satisfaction}
-          onChange={(value) => update({ csat_satisfaction: value })}
-        />
-        <MultiSelectField
-          id="issueCategoryInput"
-          label="Category"
-          options={multiSelectOptions.issue_category}
-          value={filters.issue_category}
-          onChange={(value) => update({ issue_category: value })}
-        />
-        <MultiSelectField
-          id="appInput"
-          label="App"
-          options={multiSelectOptions.app}
-          value={filters.app}
-          onChange={(value) => update({ app: value })}
-        />
-        <MultiSelectField
-          id="productCodeInput"
-          label="Product Code"
-          options={multiSelectOptions.product_code}
-          value={filters.product_code}
-          onChange={(value) => update({ product_code: value })}
-        />
-        <MultiSelectField
-          id="skillInput"
-          label="Skill"
-          options={multiSelectOptions.skill}
-          value={filters.skill}
-          onChange={(value) => update({ skill: value })}
-        />
-        <label className={ticketStyles.field}>
-          Intent
-          <input
-            id="intentInput"
-            type="text"
-            list="intentOptions"
-            value={filters.intent}
-            onChange={(event) => update({ intent: event.target.value })}
-            placeholder="Gõ để tìm"
+        {visible.includes("outcome") || filters.outcome !== "" ? (
+          <MultiSelectField
+            id="outcomeInput"
+            label="Kết quả"
+            options={multiSelectOptions.outcome}
+            value={filters.outcome}
+            onChange={(value) => update({ outcome: value })}
           />
-          <datalist id="intentOptions">
-            {filterOptions.intent.map((value) => (
-              <option key={value} value={value} />
-            ))}
-          </datalist>
-        </label>
-        <MultiSelectField
-          id="tpeCodeInput"
-          label="Transstatus"
-          options={multiSelectOptions.tpe_code}
-          value={filters.tpe_code}
-          onChange={(value) => update({ tpe_code: value })}
-        />
-        <MultiSelectField
-          id="modelCoreInput"
-          label="Model"
-          options={multiSelectOptions.model_core}
-          value={filters.model_core}
-          onChange={(value) => update({ model_core: value })}
-        />
-        <MultiSelectField
-          id="toolErrorCodesInput"
-          label="Lỗi gọi tool"
-          options={multiSelectOptions.tool_error_codes}
-          value={filters.tool_error_codes}
-          onChange={(value) => update({ tool_error_codes: value })}
-        />
-        <label className={ticketStyles.field}>
-          Hơn 3 lượt xử lý
-          <select
-            id="gt4TurnInput"
-            value={filters.gt4_turn}
-            onChange={(event) => update({ gt4_turn: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            <option value="true">Có</option>
-            <option value="false">Không</option>
-          </select>
-        </label>
-        <label className={ticketStyles.field}>
-          Đã chuyển CS
-          <select
-            id="transferredInput"
-            value={filters.transferred}
-            onChange={(event) => update({ transferred: event.target.value })}
-          >
-            <option value="">Tất cả</option>
-            <option value="true">Có</option>
-            <option value="false">Không</option>
-          </select>
-        </label>
-        <MultiSelectField
-          id="transferReasonInput"
-          label="Lý do chuyển CS"
-          options={multiSelectOptions.transfer_reason}
-          value={filters.transfer_reason}
-          onChange={(value) => update({ transfer_reason: value })}
-        />
-        <label className={ticketStyles.field}>
-          Bắt đầu cuối tuần
-          <select
-            id="weekendInput"
-            value={filters.is_weekend_start}
-            onChange={(event) =>
-              update({ is_weekend_start: event.target.value })
-            }
-          >
-            <option value="">Tất cả</option>
-            <option value="true">Có</option>
-            <option value="false">Không</option>
-          </select>
-        </label>
+        ) : null}
+        {visible.includes("csat_satisfaction") ||
+        filters.csat_satisfaction !== "" ? (
+          <MultiSelectField
+            id="csatSatisfactionInput"
+            label="CSAT"
+            options={multiSelectOptions.csat_satisfaction}
+            value={filters.csat_satisfaction}
+            onChange={(value) => update({ csat_satisfaction: value })}
+          />
+        ) : null}
+        {visible.includes("issue_category") || filters.issue_category !== "" ? (
+          <MultiSelectField
+            id="issueCategoryInput"
+            label="Category"
+            options={multiSelectOptions.issue_category}
+            value={filters.issue_category}
+            onChange={(value) => update({ issue_category: value })}
+            hasValueLabel="Chỉ ticket đã phân loại"
+          />
+        ) : null}
+        {visible.includes("app") || filters.app !== "" ? (
+          <MultiSelectField
+            id="appInput"
+            label="App"
+            options={multiSelectOptions.app}
+            value={filters.app}
+            onChange={(value) => update({ app: value })}
+            hasValueLabel="Chỉ ticket có giá trị"
+          />
+        ) : null}
+        {visible.includes("product_code") || filters.product_code !== "" ? (
+          <MultiSelectField
+            id="productCodeInput"
+            label="Product Code"
+            options={multiSelectOptions.product_code}
+            value={filters.product_code}
+            onChange={(value) => update({ product_code: value })}
+            hasValueLabel="Chỉ ticket có giá trị"
+          />
+        ) : null}
+        {visible.includes("skill") || filters.skill !== "" ? (
+          <MultiSelectField
+            id="skillInput"
+            label="Skill"
+            options={multiSelectOptions.skill}
+            value={filters.skill}
+            onChange={(value) => update({ skill: value })}
+            hasValueLabel="Chỉ ticket có skill"
+          />
+        ) : null}
+        {visible.includes("intent") || filters.intent !== "" ? (
+          <label className={ticketStyles.field}>
+            Intent
+            <input
+              id="intentInput"
+              type="text"
+              list="intentOptions"
+              value={filters.intent}
+              onChange={(event) => update({ intent: event.target.value })}
+              placeholder="Gõ để tìm"
+            />
+            <datalist id="intentOptions">
+              {filterOptions.intent.map((value) => (
+                <option key={value} value={value} />
+              ))}
+            </datalist>
+          </label>
+        ) : null}
+        {visible.includes("tpe_code") || filters.tpe_code !== "" ? (
+          <MultiSelectField
+            id="tpeCodeInput"
+            label="Transstatus"
+            options={multiSelectOptions.tpe_code}
+            value={filters.tpe_code}
+            onChange={(value) => update({ tpe_code: value })}
+            hasValueLabel="Chỉ ticket có giá trị"
+          />
+        ) : null}
+        {visible.includes("model_core") || filters.model_core !== "" ? (
+          <MultiSelectField
+            id="modelCoreInput"
+            label="Model"
+            options={multiSelectOptions.model_core}
+            value={filters.model_core}
+            onChange={(value) => update({ model_core: value })}
+            hasValueLabel="Chỉ ticket có giá trị"
+          />
+        ) : null}
+        {visible.includes("tool_error_codes") ||
+        filters.tool_error_codes !== "" ? (
+          <MultiSelectField
+            id="toolErrorCodesInput"
+            label="Lỗi gọi tool"
+            options={multiSelectOptions.tool_error_codes}
+            value={filters.tool_error_codes}
+            onChange={(value) => update({ tool_error_codes: value })}
+            hasValueLabel="Chỉ ticket có lỗi"
+          />
+        ) : null}
+        {visible.includes("gt4_turn") || filters.gt4_turn !== "" ? (
+          <label className={ticketStyles.field}>
+            Hơn 3 lượt xử lý
+            <select
+              id="gt4TurnInput"
+              value={filters.gt4_turn}
+              onChange={(event) => update({ gt4_turn: event.target.value })}
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
+        {visible.includes("transferred") || filters.transferred !== "" ? (
+          <label className={ticketStyles.field}>
+            Đã chuyển CS
+            <select
+              id="transferredInput"
+              value={filters.transferred}
+              onChange={(event) => update({ transferred: event.target.value })}
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
+        {visible.includes("transfer_reason") ||
+        filters.transfer_reason !== "" ? (
+          <MultiSelectField
+            id="transferReasonInput"
+            label="Lý do chuyển CS"
+            options={multiSelectOptions.transfer_reason}
+            value={filters.transfer_reason}
+            onChange={(value) => update({ transfer_reason: value })}
+          />
+        ) : null}
+        {visible.includes("is_weekend_start") ||
+        filters.is_weekend_start !== "" ? (
+          <label className={ticketStyles.field}>
+            Bắt đầu cuối tuần
+            <select
+              id="weekendInput"
+              value={filters.is_weekend_start}
+              onChange={(event) =>
+                update({ is_weekend_start: event.target.value })
+              }
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
       </div>
 
       <p
@@ -828,8 +842,8 @@ export function TicketExplorer({
       <details id="ticketColumnChooser" className={ticketStyles.columnPicker}>
         <summary>Chọn cột hiển thị</summary>
         <div id="ticketColumnOptions" className={ticketStyles.columnList}>
-          <p className={ticketStyles.mandatoryColumnNote}>
-            Cột Ticket luôn hiển thị để giữ định danh điều tra.
+          <p className={ticketStyles.columnPickerNote}>
+            Cột đang hiện cũng quyết định ô lọc nào xuất hiện.
           </p>
           {TICKET_COLUMNS.filter((column) => column.key !== "ticket_id").map((column) => (
             <label

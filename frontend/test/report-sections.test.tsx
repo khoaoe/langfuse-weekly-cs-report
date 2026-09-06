@@ -124,6 +124,7 @@ function csatWeek(overrides: Partial<CsatWeek> = {}): CsatWeek {
     by_dimension: {
       skill: [{ value: "interbank-fund-transfer", ...counts }],
       issue_category: [{ value: "Chuyển tiền", ...counts }],
+      app: [],
     },
     feedback_entries: [],
     ...overrides,
@@ -139,6 +140,7 @@ function csatComments(count: number): CsatWeek["feedback_entries"] {
     outcome: "ai_end_to_end" as const,
     skill: "interbank-fund-transfer",
     issue_category: "Chuyển tiền",
+    app: "241 - Chuyển Tiền ATM",
     text: `Nội dung phản hồi ${index + 1}`,
     response_number: 1,
     response_total: 1,
@@ -290,7 +292,7 @@ function belowFold(
       activeWeek=""
       onWeekSelect={() => {}}
       onSegmentSelect={() => {}}
-      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+      activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
       onCsatBreakdownSelect={() => {}}
       onCsatBreakdownGroupingChange={() => {}}
       {...overrides}
@@ -300,7 +302,6 @@ function belowFold(
 
 describe("Weekly Report", () => {
   it("groups the decision-useful screen columns by ticket flow and never turns an empty week into zero", async () => {
-    const user = userEvent.setup();
     const snapshot = snapshotWithWeeks([
       weekRow({
         cohort_week: "2026-07-13",
@@ -356,13 +357,11 @@ describe("Weekly Report", () => {
       ">3 lượt xử lý chưa chuyển",
     ]);
 
-    // Weeks without data collapse behind an explicit toggle by default, so a
-    // 13-row table does not read as 62% empty on first paint.
+    // Weeks without data are never shown -- no toggle button to reveal them.
     expect(within(table).queryByText("Không có dữ liệu")).toBeNull();
-    await user.click(
-      screen.getByRole("button", { name: "+ 1 tuần không có dữ liệu" }),
-    );
-    expect(within(table).getByText("Không có dữ liệu")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: /tuần không có dữ liệu/ }),
+    ).toBeNull();
     expect(
       within(table).getByRole("rowheader", { name: "20/07–26/07 (WTD)" }),
     ).toBeVisible();
@@ -494,6 +493,7 @@ describe("Weekly Report", () => {
             outcome: "ai_end_to_end",
             skill: "interbank-fund-transfer",
             issue_category: "Chuyển tiền",
+            app: "241 - Chuyển Tiền ATM",
             text: privateComment,
             response_number: 1,
             response_total: 1,
@@ -641,6 +641,8 @@ describe("Below-fold analysis", () => {
                 ai_first: 500,
                 transferred: 100,
                 reopen: 50,
+                ai_end_to_end: 400,
+                direct_cs: 99,
               },
             },
           },
@@ -954,6 +956,10 @@ describe("Below-fold analysis", () => {
             { value: "Chuyển tiền", ticket_count: 12, positive: 7, neutral: 3, negative: 2 },
             { value: "Rút tiền", ticket_count: 8, positive: 5, neutral: 2, negative: 1 },
           ],
+          app: [
+            { value: "241 - Chuyển Tiền ATM", ticket_count: 14, positive: 9, neutral: 3, negative: 2 },
+            { value: "Chưa ghi nhận", ticket_count: 6, positive: 3, neutral: 2, negative: 1 },
+          ],
         },
       }),
     });
@@ -965,6 +971,7 @@ describe("Below-fold analysis", () => {
       "Kết quả xử lý",
       "Skill",
       "Category",
+      "App",
     ]);
     expect(grouping).toHaveValue("outcome");
     expect(within(section).getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
@@ -988,6 +995,13 @@ describe("Below-fold analysis", () => {
     expect(within(smallRow).queryByText("%", { exact: false })).toBeNull();
     expect(within(section).queryByRole("button", { name: "Chuyển CS ngay từ đầu" })).toBeNull();
     expect(within(section).queryByRole("rowheader", { name: "Admin CS ZaloPay" })).toBeNull();
+
+    // F6: App is a grouping here too, not only in the segment comparison.
+    await user.selectOptions(grouping, "app");
+    expect(within(section).getByRole("columnheader", { name: "App" })).toBeVisible();
+    expect(
+      within(section).getByRole("rowheader", { name: "241 - Chuyển Tiền ATM" }),
+    ).toBeVisible();
 
     await user.selectOptions(grouping, "skill");
     expect(within(section).getByRole("columnheader", { name: "Skill" })).toBeVisible();
@@ -1136,6 +1150,7 @@ describe("Below-fold analysis", () => {
             outcome: "ai_end_to_end",
             skill: "interbank-fund-transfer",
             issue_category: "Chuyển tiền",
+            app: "241 - Chuyển Tiền ATM",
             text: "Phản hồi tuần trước",
             response_number: 1,
             response_total: 1,
@@ -1157,6 +1172,7 @@ describe("Below-fold analysis", () => {
             outcome: "ai_end_to_end",
             skill: "interbank-fund-transfer",
             issue_category: "Chuyển tiền",
+            app: "241 - Chuyển Tiền ATM",
             text: "Phản hồi tuần mới nhất",
             response_number: 1,
             response_total: 1,
@@ -1247,6 +1263,7 @@ describe("Below-fold analysis", () => {
               outcome: "ai_end_to_end",
               skill: "interbank-fund-transfer",
               issue_category: "Chuyển tiền",
+              app: "241 - Chuyển Tiền ATM",
               text: firstComment,
               response_number: 1,
               response_total: 2,
@@ -1259,6 +1276,7 @@ describe("Below-fold analysis", () => {
               outcome: "ai_end_to_end",
               skill: "interbank-fund-transfer",
               issue_category: "Chuyển tiền",
+              app: "241 - Chuyển Tiền ATM",
               text: secondComment,
               response_number: 2,
               response_total: 2,
@@ -1271,6 +1289,7 @@ describe("Below-fold analysis", () => {
               outcome: "ai_end_to_end",
               skill: "interbank-fund-transfer",
               issue_category: "Chuyển tiền",
+              app: "241 - Chuyển Tiền ATM",
               text: thirdComment,
               response_number: 1,
               response_total: 1,
@@ -1535,6 +1554,7 @@ describe("Below-fold analysis", () => {
             outcome: "ai_end_to_end",
             skill: "interbank-fund-transfer",
             issue_category: "Chuyển tiền",
+            app: "241 - Chuyển Tiền ATM",
             text: "Chỉ thuộc tuần trước",
             response_number: 1,
             response_total: 1,
@@ -1623,16 +1643,12 @@ describe("Below-fold analysis", () => {
         .getAllByRole("columnheader")
         .map((header) => header.textContent),
     ).toEqual([
-      "Trạng thái",
       "Transstatus",
       "Step result",
       "Ticket",
       "Tỷ lệ ticket có mã này",
     ]);
     const tpeRow = within(tpeTable).getByRole("row", { name: /-365/ });
-    expect(
-      within(tpeRow).getByRole("rowheader", { name: "FAILED_FACE_AUTH" }),
-    ).toBeVisible();
     expect(
       within(tpeRow).getByRole("button", {
         name: "Lọc Ticket Explorer theo Transstatus: -365",
@@ -1647,9 +1663,6 @@ describe("Below-fold analysis", () => {
       within(tpeRow).getAllByRole("cell").at(-1),
     ).toHaveTextContent("—");
     const missingRow = within(tpeTable).getByRole("row", { name: /-217/ });
-    expect(
-      within(missingRow).getByRole("rowheader", { name: "Chưa phân loại" }),
-    ).toBeVisible();
     expect(
       within(missingRow).getByText("Không có Step result"),
     ).toBeVisible();
@@ -1706,9 +1719,16 @@ describe("Below-fold analysis", () => {
     expect(responseReason).toHaveTextContent("—");
 
     const gt4Region = screen.getByRole("region", {
-      name: "Ticket có hơn 3 lượt xử lý",
+      name: "Ticket có hơn 3 lượt xử lý · 3",
     });
     expect(gt4Region).toHaveAttribute("id", "ruleGt4Panel");
+    // B2: Gt4Zone is collapsed by default; its count must be readable from
+    // the summary alone before opening it.
+    await user.click(
+      within(gt4Region).getByRole("heading", {
+        name: "Ticket có hơn 3 lượt xử lý · 3",
+      }),
+    );
     expect(within(gt4Region).getByRole("row", { name: /^Tổng/ })).toHaveTextContent(
       "3",
     );
@@ -1848,8 +1868,8 @@ describe("Below-fold analysis", () => {
     async (tabLabel, dimension) => {
       const user = userEvent.setup();
       const snapshot = snapshotWithActiveSegmentBuckets(dimension, {
-        "Có ticket": { total: 6, ai_first: 0, transferred: 0, reopen: 0 },
-        "Không có ticket": { total: 0, ai_first: 0, transferred: 0, reopen: 0 },
+        "Có ticket": { total: 6, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 },
+        "Không có ticket": { total: 0, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 },
       });
       renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-20" }));
 
@@ -1871,7 +1891,7 @@ describe("Below-fold analysis", () => {
   it("shows a real empty state when every bucket in the selected dimension has zero tickets", async () => {
     const user = userEvent.setup();
     const snapshot = snapshotWithActiveSkillBuckets({
-      "Chưa ghi nhận": { total: 0, ai_first: 0, transferred: 0, reopen: 0 },
+      "Chưa ghi nhận": { total: 0, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 },
     });
     renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-20" }));
 
@@ -1931,13 +1951,15 @@ describe("Below-fold analysis", () => {
       })
       .closest("tr");
     expect(row).not.toBeNull();
-    // Every denominator in this fixture (10, 8, 3, 2) is below the
-    // small-sample threshold (20), so the shared guard falls back to the
-    // raw count for all four columns instead of asserting a rate.
+    // Every denominator in this fixture is below the small-sample threshold
+    // (20), so the shared guard falls back to the raw count for every rate
+    // column. Lượt reopen is never a rate (A1): it counts events, not tickets.
     expect(within(row as HTMLTableRowElement).getAllByRole("cell").map((cell) => cell.textContent)).toEqual([
       "10",
       "8",
       "3",
+      "6",
+      "1",
       "2",
     ]);
     expect(row).not.toHaveTextContent("(");
@@ -2288,11 +2310,18 @@ describe("Ticket Explorer", () => {
     expect(stored).not.toContain("trace_id");
   });
 
-  it("surfaces quick filters and a locally scoped active-filter list", async () => {
+  it("surfaces a locally scoped active-filter list", async () => {
     const user = userEvent.setup();
 
+    // C1 removed the ">3 lượt xử lý chưa chuyển" quick filter button — it
+    // was a shortcut for exactly this pair of already-present filters, set
+    // by hand here instead of through the removed control.
     function ControlledTicketExplorer() {
-      const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
+      const [filters, setFilters] = useState<TicketFilters>({
+        ...EMPTY_TICKET_FILTERS,
+        gt4_turn: "true",
+        transferred: "false",
+      });
       return (
         <TicketExplorer
           snapshot={baseSnapshot}
@@ -2305,10 +2334,6 @@ describe("Ticket Explorer", () => {
     }
 
     renderWithQuery(<ControlledTicketExplorer />);
-
-    await user.click(
-      screen.getByRole("button", { name: ">3 lượt xử lý chưa chuyển" }),
-    );
 
     const explorerChips = screen.getByRole("region", {
       name: "Bộ lọc đang áp dụng trong Ticket Explorer",
@@ -2323,6 +2348,11 @@ describe("Ticket Explorer", () => {
     );
     expect(explorerChips).toHaveTextContent("Đã chuyển CS: Không");
     expect(explorerChips).not.toHaveTextContent(">3 lượt xử lý: Có");
+
+    // C2 ties this filter's visibility to its column, off by default — show
+    // the column to exercise the field itself.
+    await user.click(screen.getByText("Chọn cột hiển thị"));
+    await user.click(screen.getByRole("checkbox", { name: "Intent" }));
 
     const intentInput = screen.getByRole("combobox", { name: "Intent" });
     expect(intentInput).toHaveAttribute("list", "intentOptions");

@@ -22,7 +22,7 @@ function aiReviewBucket(overrides: Partial<AiReviewBucket> = {}): AiReviewBucket
       direct_cs: emptyAiCounts,
       unclassified: emptyAiCounts,
     },
-    by_dimension: { skill: [], issue_category: [] },
+    by_dimension: { skill: [], issue_category: [], app: [] },
     by_review_count: [],
     ...overrides,
   };
@@ -37,6 +37,7 @@ describe("AiReviewBreakdownTable", () => {
       by_dimension: {
         skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 3, rated_ticket_count: 3, satisfied_count: 3 }],
         issue_category: [],
+        app: [],
       },
     });
     render(
@@ -70,6 +71,7 @@ describe("AiReviewBreakdownTable", () => {
       by_dimension: {
         skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 20, rated_ticket_count: 20, satisfied_count: 20 }],
         issue_category: [],
+        app: [],
       },
     });
     render(
@@ -93,7 +95,7 @@ describe("AiReviewBreakdownTable", () => {
 const baseProps = {
   effectiveWeek: "2026-08-31",
   weekDefinition: "mon_sun" as const,
-  activeBreakdownFilters: { outcome: "", skill: "", issue_category: "" },
+  activeBreakdownFilters: { outcome: "", skill: "", issue_category: "", app: "" },
   onBreakdownSelect: () => {},
   onBreakdownRowSelect: () => {},
   onBreakdownGroupingChange: () => {},

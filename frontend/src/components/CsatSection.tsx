@@ -162,11 +162,13 @@ function aggregateWeeks(weeks: readonly CsatWeek[]): CsatWeek | null {
     by_dimension: {
       skill: aggregateDimension("skill"),
       issue_category: aggregateDimension("issue_category"),
+      app: aggregateDimension("app"),
     },
     response_by_outcome: responseByOutcome,
     response_by_dimension: {
       skill: aggregateDimension("skill", true),
       issue_category: aggregateDimension("issue_category", true),
+      app: aggregateDimension("app", true),
     },
     feedback_entries: weeks.flatMap((week) => week.feedback_entries),
   };
@@ -278,6 +280,7 @@ function aggregateAiReviewBuckets(buckets: readonly AiReviewBucket[]): AiReviewB
     by_dimension: {
       skill: aggregateAiReviewDimension(buckets, "skill"),
       issue_category: aggregateAiReviewDimension(buckets, "issue_category"),
+      app: aggregateAiReviewDimension(buckets, "app"),
     },
     by_review_count: [...byReviewCountValue.values()].sort(
       (left, right) => Number(left.value) - Number(right.value),
@@ -564,7 +567,7 @@ export interface CsatSectionProps {
   readonly weekDefinition: WeekDefinition;
   readonly activeBreakdownFilters: Pick<
     TicketFilters,
-    "outcome" | "skill" | "issue_category"
+    "outcome" | "skill" | "issue_category" | "app"
   >;
   readonly onBreakdownSelect: (
     grouping: CsatGrouping,

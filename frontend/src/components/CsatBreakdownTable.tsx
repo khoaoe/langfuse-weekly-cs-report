@@ -8,7 +8,7 @@ import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
 import satisfactionStyles from "./satisfaction-badge.module.css";
 
-export type CsatGrouping = "outcome" | "skill" | "issue_category";
+export type CsatGrouping = "outcome" | "skill" | "issue_category" | "app";
 
 export const OUTCOME_ORDER: readonly Outcome[] = [
   "ai_end_to_end",
@@ -29,7 +29,8 @@ export interface BreakdownRow {
 
 export function csatGroupingLabel(grouping: CsatGrouping): string {
   if (grouping === "outcome") return "Kết quả xử lý";
-  return grouping === "skill" ? "Skill" : "Category";
+  if (grouping === "skill") return "Skill";
+  return grouping === "issue_category" ? "Category" : "App";
 }
 
 /**
@@ -120,6 +121,7 @@ export function CsatGroupingField({
         <option value="outcome">Kết quả xử lý</option>
         <option value="skill">Skill</option>
         <option value="issue_category">Category</option>
+        <option value="app">App</option>
       </select>
     </label>
   );

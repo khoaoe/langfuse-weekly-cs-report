@@ -5,7 +5,6 @@ import type { WeekDefinition } from "../lib/dashboard-schema";
 import {
   EMPTY_TICKET_FILTERS,
   activeTicketFilterChips,
-  type TicketFilterKey,
   type TicketFilters,
   updateTicketFilters,
 } from "../lib/dashboard-filters";
@@ -258,10 +257,6 @@ function DashboardBody() {
     );
   }, [currentExplorerWeekPatch, isDayRangeMode, reportView]);
 
-  const removeFilter = useCallback((key: TicketFilterKey) => {
-    setFilters((current) => updateTicketFilters(current, { [key]: "" }));
-  }, []);
-
   const resetFilters = useCallback(() => {
     setFilters(EMPTY_TICKET_FILTERS);
   }, []);
@@ -337,7 +332,6 @@ function DashboardBody() {
       reportRange={reportScope.mode === "range" ? reportScope : null}
       onReportRangeChange={changeReportRange}
       activeFilters={shellFilters}
-      onRemoveFilter={removeFilter}
       onResetFilters={resetFilters}
       freshdeskCookieState={freshdeskCookie?.state ?? null}
       onOpenFreshdeskCookieDialog={() => setCookieDialogOpen(true)}
@@ -432,6 +426,7 @@ function DashboardBody() {
               outcome: filters.outcome,
               skill: filters.skill,
               issue_category: filters.issue_category,
+              app: filters.app,
             }}
             onCsatBreakdownGroupingChange={() => {
               setFilters((current) =>

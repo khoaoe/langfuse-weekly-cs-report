@@ -78,9 +78,8 @@ export function equivalentWtdCohortEnvelope() {
 
 /**
  * One TPE pair resolves to a governed status; the other has no taxonomy
- * entry yet. Exercises the diagnostics table's status column: a resolved
- * label renders as-is, and the unmapped pair renders an explicit
- * "unclassified" label rather than silently omitting status.
+ * entry yet. The diagnostics table no longer renders a status column (B1) —
+ * both pairs must render by their transstatus/step_result values alone.
  */
 export function tpeStatusDiagnosticsEnvelope() {
   const base = dashboardEnvelopeFixture;

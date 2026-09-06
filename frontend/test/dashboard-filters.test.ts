@@ -53,6 +53,45 @@ describe("dashboard filter state", () => {
     ]);
   });
 
+  it("collapses a multi-select chip to a count once it holds more than 2 values", () => {
+    const twoValues = {
+      ...EMPTY_TICKET_FILTERS,
+      tool_error_codes: "get_bank_name:UNKNOWN_BANK_CODE,get_zalopay_id_by_phone:NOT_FOUND",
+    } as const;
+    expect(activeTicketFilterChips(twoValues, "mon_sun")).toEqual([
+      {
+        key: "tool_error_codes",
+        label:
+          "Lỗi gọi tool: get_bank_name:UNKNOWN_BANK_CODE, get_zalopay_id_by_phone:NOT_FOUND",
+      },
+    ]);
+
+    const threeValues = {
+      ...EMPTY_TICKET_FILTERS,
+      tool_error_codes:
+        "get_bank_name:UNKNOWN_BANK_CODE,get_zalopay_id_by_phone:NOT_FOUND,get_bank_info:NO_DATA",
+    } as const;
+    expect(activeTicketFilterChips(threeValues, "mon_sun")).toEqual([
+      {
+        key: "tool_error_codes",
+        label: "Lỗi gọi tool: 3 giá trị",
+        fullLabel:
+          "Lỗi gọi tool: get_bank_name:UNKNOWN_BANK_CODE, get_zalopay_id_by_phone:NOT_FOUND, get_bank_info:NO_DATA",
+      },
+    ]);
+  });
+
+  it("chips the has-value sentinel under its dimension's own label, not a value count (C6)", () => {
+    const current = {
+      ...EMPTY_TICKET_FILTERS,
+      tool_error_codes: "__has_value__",
+    } as const;
+
+    expect(activeTicketFilterChips(current, "mon_sun")).toEqual([
+      { key: "tool_error_codes", label: "Lỗi gọi tool: Chỉ ticket có lỗi" },
+    ]);
+  });
+
   it("selecting an opened-date range clears the week filter, and vice versa", () => {
     const withWeek = updateTicketFilters(EMPTY_TICKET_FILTERS, {
       cohort_week: "2026-07-20",

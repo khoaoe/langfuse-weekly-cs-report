@@ -4,7 +4,14 @@
  * It intentionally contains no trace/session/internal identifiers or customer text.
  */
 const segmentCounts = {
-  "Thanh toán-IBFT": { total: 10, ai_first: 8, transferred: 3, reopen: 2 },
+  "Thanh toán-IBFT": {
+    total: 10,
+    ai_first: 8,
+    transferred: 3,
+    reopen: 2,
+    ai_end_to_end: 6,
+    direct_cs: 1,
+  },
 };
 
 const weekly = [
@@ -58,7 +65,17 @@ function view(weekDefinition: "mon_sun" | "mon_fri", total: number) {
   }));
   const segments: Record<
     string,
-    Record<string, { total: number; ai_first: number; transferred: number; reopen: number }>
+    Record<
+      string,
+      {
+        total: number;
+        ai_first: number;
+        transferred: number;
+        reopen: number;
+        ai_end_to_end: number;
+        direct_cs: number;
+      }
+    >
   > = Object.fromEntries(
     ["issue_category", "app", "product_code", "skill", "intent", "tpe", "guardrail_rule", "entry_point", "model_core"].map(
       (name) => [

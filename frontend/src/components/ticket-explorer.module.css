@@ -140,6 +140,30 @@
   border-color: var(--interactive);
 }
 
+.hasValueRadioRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--rule);
+}
+
+.hasValueRadioOption {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  font-size: 12px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.hasValueRadioOption input[type="radio"] {
+  flex: none;
+  width: 18px;
+  height: 18px;
+}
+
 .multiSelectPanel {
   position: absolute;
   z-index: 20;
@@ -262,6 +286,7 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: center;
   gap: var(--space-3);
   margin-top: var(--space-3);
   color: var(--muted);
@@ -301,7 +326,7 @@
   min-height: 44px;
 }
 
-.mandatoryColumnNote {
+.columnPickerNote {
   grid-column: 1 / -1;
   margin: 0;
   color: var(--muted);

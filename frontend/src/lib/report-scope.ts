@@ -175,10 +175,18 @@ function mergeDaysAsOneRow(
   weekStart: string,
   days: readonly DayAggregate[],
 ): DayAggregate {
+  type SegmentCounts = {
+    total: number;
+    ai_first: number;
+    transferred: number;
+    reopen: number;
+    ai_end_to_end: number;
+    direct_cs: number;
+  };
   const dimensionBuckets = {
-    skill: new Map<string, { total: number; ai_first: number; transferred: number; reopen: number }>(),
-    app: new Map<string, { total: number; ai_first: number; transferred: number; reopen: number }>(),
-    issue_category: new Map<string, { total: number; ai_first: number; transferred: number; reopen: number }>(),
+    skill: new Map<string, SegmentCounts>(),
+    app: new Map<string, SegmentCounts>(),
+    issue_category: new Map<string, SegmentCounts>(),
   };
   for (const current of days) {
     for (const dimension of ["skill", "app", "issue_category"] as const) {
@@ -189,12 +197,16 @@ function mergeDaysAsOneRow(
           ai_first: 0,
           transferred: 0,
           reopen: 0,
+          ai_end_to_end: 0,
+          direct_cs: 0,
         };
         buckets.set(label, {
           total: bucket.total + counts.total,
           ai_first: bucket.ai_first + counts.ai_first,
           transferred: bucket.transferred + counts.transferred,
           reopen: bucket.reopen + counts.reopen,
+          ai_end_to_end: bucket.ai_end_to_end + counts.ai_end_to_end,
+          direct_cs: bucket.direct_cs + counts.direct_cs,
         });
       }
     }
@@ -303,7 +315,14 @@ function aggregateSegments(details: readonly WeekDetail[]): Segments {
     SEGMENT_DIMENSIONS.map((dimension) => {
       const buckets = new Map<
         string,
-        { total: number; ai_first: number; transferred: number; reopen: number }
+        {
+          total: number;
+          ai_first: number;
+          transferred: number;
+          reopen: number;
+          ai_end_to_end: number;
+          direct_cs: number;
+        }
       >();
       for (const detail of details) {
         for (const [label, row] of Object.entries(detail.segments[dimension])) {
@@ -312,12 +331,16 @@ function aggregateSegments(details: readonly WeekDetail[]): Segments {
             ai_first: 0,
             transferred: 0,
             reopen: 0,
+            ai_end_to_end: 0,
+            direct_cs: 0,
           };
           buckets.set(label, {
             total: current.total + row.total,
             ai_first: current.ai_first + row.ai_first,
             transferred: current.transferred + row.transferred,
             reopen: current.reopen + row.reopen,
+            ai_end_to_end: current.ai_end_to_end + row.ai_end_to_end,
+            direct_cs: current.direct_cs + row.direct_cs,
           });
         }
       }

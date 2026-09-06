@@ -190,7 +190,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={onWeekSelect}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -248,7 +248,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -300,7 +300,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -335,7 +335,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -360,7 +360,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -400,7 +400,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -418,7 +418,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -437,7 +437,7 @@ describe("trend chart data gaps", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
       />,
@@ -487,7 +487,7 @@ describe("trend chart day mode", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
         dayRange={{
@@ -568,7 +568,7 @@ describe("transfer diagnostics day mode note", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
         dayRange={{
@@ -611,7 +611,7 @@ describe("transfer diagnostics day mode note", () => {
         activeWeek=""
         onWeekSelect={() => {}}
         onSegmentSelect={() => {}}
-        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "" }}
+        activeCsatBreakdownFilters={{ outcome: "", skill: "", issue_category: "", app: "" }}
         onCsatBreakdownSelect={() => {}}
         onCsatBreakdownGroupingChange={() => {}}
         dayRange={{

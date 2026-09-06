@@ -11,10 +11,7 @@ import logoWhite from "../../../assets/brand/logos/zalopay-logo-white.png";
 import zMarkDark from "../../../assets/brand/graphics/zalopay-z-dark.png";
 import zMarkLight from "../../../assets/brand/graphics/zalopay-z-light.png";
 import type { DashboardSnapshot, WeekDefinition } from "../lib/dashboard-schema";
-import type {
-  ActiveFilterChip,
-  TicketFilterKey,
-} from "../lib/dashboard-filters";
+import type { ActiveFilterChip } from "../lib/dashboard-filters";
 import {
   DATA_STALE_DISPLAY_MS,
   calculateDataQualityScore,
@@ -83,7 +80,6 @@ export interface AppShellProps {
   readonly reportRange?: { readonly from: string; readonly to: string } | null;
   readonly onReportRangeChange?: (from: string, to: string) => void;
   readonly activeFilters: readonly ActiveFilterChip[];
-  readonly onRemoveFilter: (key: TicketFilterKey) => void;
   readonly onResetFilters: () => void;
   readonly freshdeskCookieState?: "ok" | "expired" | "missing" | null;
   readonly onOpenFreshdeskCookieDialog?: () => void;
@@ -113,7 +109,6 @@ export function AppShell({
   reportRange = null,
   onReportRangeChange = () => {},
   activeFilters,
-  onRemoveFilter,
   onResetFilters,
   freshdeskCookieState = null,
   onOpenFreshdeskCookieDialog = () => {},
@@ -446,28 +441,6 @@ export function AppShell({
             </button>
           </div>
         </nav>
-
-        {activeFilters.length === 0 ? null : (
-          <div
-            id="activeFilterChips"
-            className={styles.filterChips}
-            role="region"
-            aria-label="Bộ lọc đang áp dụng"
-          >
-            {activeFilters.map((filter) => (
-              <span key={filter.key} className={styles.filterChip}>
-                {filter.label}
-                <button
-                  type="button"
-                  aria-label={`Bỏ lọc ${filter.label}`}
-                  onClick={() => onRemoveFilter(filter.key)}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
 
         {helpOpen ? (
           <aside

@@ -138,7 +138,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 26
+    assert snapshot.storage_dict()["schema_version"] == 28
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -188,7 +188,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 26
+    value["schema_version"] = 28
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -1259,7 +1259,7 @@ def test_transfer_reasons_keep_exact_tpe_grain_and_distinct_guardrails_without_c
         "guardrail": [],
         "escalation_guard_blocked": {"count": 0, "denominator": 0},
     }
-    zero_bucket = {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0}
+    zero_bucket = {"total": 0, "ai_first": 0, "transferred": 0, "reopen": 0, "ai_end_to_end": 0, "direct_cs": 0}
     assert all(
         buckets == {("Chưa ghi nhận" if dimension == "skill" else "Không xác định"): zero_bucket}
         for dimension, buckets in empty_week["segments"].items()
@@ -1611,6 +1611,8 @@ def test_storage_rejects_segment_weekly_rollup_drift_even_when_closure_holds():
         "ai_first": 1,
         "transferred": 0,
         "reopen": 0,
+        "ai_end_to_end": 0,
+        "direct_cs": 0,
     }
 
     with pytest.raises(ValueError, match="segment weekly rows do not reconcile"):
@@ -2542,6 +2544,7 @@ def test_storage_rejects_unsafe_intent_even_when_five_ticket_rows_and_segment_to
         bucket = dict(view["segments"]["intent"]["Không xác định"])
         view["segments"]["intent"]["Không xác định"] = {
             "total": 0, "ai_first": 0, "transferred": 0, "reopen": 0,
+            "ai_end_to_end": 0, "direct_cs": 0,
         }
         view["segments"]["intent"][unsafe] = bucket
     with pytest.raises(ValueError, match="intent"):
@@ -2642,6 +2645,24 @@ def test_ticket_page_filters_one_tool_error_pair_across_multi_pair_tickets():
         ticket_page(snapshot, tool_error_codes="get_telco_order_status:NOT_FOUND")
 
 
+def test_has_value_sentinel_selects_only_tickets_carrying_a_real_value():
+    """C6: "Chỉ ticket có lỗi" must not require enumerating every allowlisted pair."""
+    snapshot = _snapshot_with_tool_errors()
+
+    has_value = ticket_page(snapshot, tool_error_codes="__has_value__")
+    assert {item["ticket_id"] for item in has_value["items"]} == {
+        "145666",
+        "145667",
+    }
+
+    plain_snapshot = _snapshot()
+    has_skill = ticket_page(plain_snapshot, skill="__has_value__")
+    assert has_skill["total"] == 0  # fixture tickets are all "Chưa ghi nhận" (no skill)
+
+    has_issue_category = ticket_page(plain_snapshot, issue_category="__has_value__")
+    assert has_issue_category["total"] == 3
+
+
 def test_error_free_tickets_sort_last_in_both_directions_on_tool_error_codes():
     snapshot = _snapshot_with_tool_errors()
 
@@ -2679,3 +2700,32 @@ def test_no_tool_error_message_text_can_reach_a_serialized_snapshot():
 
     assert "0912345678" not in serialized
     assert "message" not in serialized
+
+
+def test_csat_and_ai_review_group_by_app_alongside_skill_and_category():
+    """F6: "Nhóm theo" offers App, so the payload must carry that dimension.
+
+    App is already a first-class segment dimension elsewhere on the page; it
+    was missing here only because these two payloads seeded two buckets. Both
+    subsections share one `CsatGrouping` union, so both must carry it.
+    """
+    csat_week = (
+        _csat_v11_snapshot()
+        .dashboard_dict()["views"]["mon_fri"]["csat"]["by_week"]["2026-07-20"]
+    )
+    review_week = (
+        _ai_review_snapshot()
+        .dashboard_dict()["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
+    )
+
+    # Same denominator as the dimensions that already work, or the new bucket
+    # is dropping tickets on the floor.
+    assert sum(
+        row["ticket_count"] for row in csat_week["by_dimension"]["app"]
+    ) == csat_week["ticket_count"]
+    assert sum(
+        row["ticket_count"] for row in csat_week["response_by_dimension"]["app"]
+    ) == csat_week["response_count"]
+    assert sum(
+        row["reviewed_ticket_count"] for row in review_week["by_dimension"]["app"]
+    ) == review_week["reviewed_ticket_count"]
