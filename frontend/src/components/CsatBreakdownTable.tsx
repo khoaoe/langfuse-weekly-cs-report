@@ -3,7 +3,17 @@ import { useEffect, useMemo, useState } from "react";
 import type { CsatWeek, Outcome } from "../lib/dashboard-schema";
 import { OUTCOME_FILTER_LABELS } from "../lib/dashboard-filters";
 import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate, share } from "../lib/format";
+import {
+  type SortDirection,
+  type SortValue,
+  type TableSort,
+  stableSortRows,
+  toggleTableSort,
+} from "../lib/table-sort";
+import { CSAT_BUCKETS, SplitBar, guardedRate } from "./CsatCharts";
+import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
+import chartStyles from "./csat-charts.module.css";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
 import satisfactionStyles from "./satisfaction-badge.module.css";
@@ -114,11 +124,111 @@ export function csatResponseTotals(data: CsatWeek): CsatTotals {
   );
 }
 
-function ratingCell(count: number, denominator: number) {
-  return denominator >= PERCENTAGE_SAMPLE_MINIMUM
-    ? `${formatCount(count)} · ${formatRate(count / denominator)}`
-    : formatCount(count);
+const SMALL_SAMPLE_TITLE = `Mẫu dưới ${PERCENTAGE_SAMPLE_MINIMUM} phản hồi — chỉ hiện số đếm, không suy ra tỉ lệ.`;
+
+function rateCell(count: number, denominator: number) {
+  return denominator >= PERCENTAGE_SAMPLE_MINIMUM ? (
+    formatRate(count / denominator)
+  ) : (
+    <span title={SMALL_SAMPLE_TITLE}>—</span>
+  );
 }
+
+/** Bar `aria-label`: all three bucket labels, each with its count and share. */
+function csatBarLabel(row: BreakdownRow): string {
+  return `${row.label}: ${CSAT_BUCKETS.map(
+    (bucket) =>
+      `${bucket.label} ${formatCount(row[bucket.key])} (${guardedRate(row[bucket.key], row.ticket_count)})`,
+  ).join(", ")}`;
+}
+
+type CsatSortKey =
+  | "label"
+  | "rate"
+  | "ticket_count"
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "negative_rate";
+
+interface CsatSortColumn {
+  readonly key: CsatSortKey;
+  readonly label: string;
+  readonly sortable: boolean;
+  readonly initialDirection: SortDirection;
+  readonly className?: string | undefined;
+  readonly value: (row: BreakdownRow) => SortValue;
+}
+
+/**
+ * Default sort ("Rất tệ (%)" descending) reproduces the exact ranking the
+ * deleted ranking-panel chart used: `stableSortRows` sinks a `null` value to
+ * the bottom regardless of direction, so a small sample always lands last;
+ * ties keep the source order, which `rowsFor` already breaks by ticket count.
+ */
+function csatSortColumns(groupingLabel: string): readonly CsatSortColumn[] {
+  return [
+    {
+      key: "label",
+      label: groupingLabel,
+      sortable: true,
+      initialDirection: "asc",
+      value: (row) => row.label,
+    },
+    {
+      key: "rate",
+      label: "Tỉ lệ",
+      sortable: false,
+      initialDirection: "desc",
+      value: () => null,
+    },
+    {
+      key: "ticket_count",
+      label: "Phản hồi có đánh giá",
+      sortable: true,
+      initialDirection: "desc",
+      className: styles.numeric,
+      value: (row) => row.ticket_count,
+    },
+    {
+      key: "positive",
+      label: "Rất hài lòng",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.positive}`,
+      value: (row) => row.positive,
+    },
+    {
+      key: "neutral",
+      label: "Bình thường",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.neutral}`,
+      value: (row) => row.neutral,
+    },
+    {
+      key: "negative",
+      label: "Rất tệ",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.negative}`,
+      value: (row) => row.negative,
+    },
+    {
+      key: "negative_rate",
+      label: "Rất tệ (%)",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.negative}`,
+      value: (row) =>
+        row.ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.negative, row.ticket_count)
+          : null,
+    },
+  ];
+}
+
+const DEFAULT_CSAT_SORT: TableSort<CsatSortKey> = { key: "negative_rate", direction: "desc" };
 
 /**
  * The grouping control, lifted out of the table because it now steers the
@@ -163,18 +273,29 @@ export function CsatBreakdownTable({
   onValueSelect,
 }: CsatBreakdownTableProps) {
   const [expanded, setExpanded] = useState(false);
+  const [sort, setSort] = useState<TableSort<CsatSortKey>>(DEFAULT_CSAT_SORT);
   const rows = useMemo(() => rowsFor(data, grouping), [data, grouping]);
   const responseTotals = csatResponseTotals(data);
+  const groupingLabel = csatGroupingLabel(grouping);
+  const sortable = grouping !== "outcome";
+  const columns = useMemo(() => csatSortColumns(groupingLabel), [groupingLabel]);
   useEffect(() => setExpanded(false), [grouping, scopeKey]);
+  useEffect(() => setSort(DEFAULT_CSAT_SORT), [grouping, scopeKey]);
+  // `rows` already carries the default rank (see `sortBreakdownRows`); a
+  // column click re-sorts it, `outcome` keeps its fixed pipeline-stage order.
+  const sortedRows = useMemo(() => {
+    if (!sortable) {
+      return rows;
+    }
+    const column = columns.find((item) => item.key === sort.key) ?? columns[0];
+    return stableSortRows(rows, (row) => column?.value(row), sort.direction);
+  }, [columns, rows, sort, sortable]);
   const showAll = expanded;
-  const visibleRows = grouping === "outcome" || showAll ? rows : rows.slice(0, GROUP_LIMIT);
-  const canExpand = grouping !== "outcome" && rows.length > GROUP_LIMIT;
+  const visibleRows = !sortable || showAll ? sortedRows : sortedRows.slice(0, GROUP_LIMIT);
+  const canExpand = sortable && sortedRows.length > GROUP_LIMIT;
 
   return (
     <div className={csatStyles.breakdown}>
-      <p id="csat-breakdown-caption" className={styles.sectionNote}>
-        Mỗi phản hồi survey được tính một lần.
-      </p>
       <div className={`${styles.tableScroll} ${csatStyles.tableScroll}`}>
         <table
           id="csat-breakdown-table"
@@ -183,43 +304,61 @@ export function CsatBreakdownTable({
         >
           <thead>
             <tr>
-              <th scope="col">{csatGroupingLabel(grouping)}</th>
-              <th scope="col" className={styles.numeric}>Phản hồi có đánh giá</th>
-              <th
-                scope="col"
-                className={`${styles.numeric} ${satisfactionStyles.positive}`}
-              >
-                Rất hài lòng
-              </th>
-              <th
-                scope="col"
-                className={`${styles.numeric} ${satisfactionStyles.neutral}`}
-              >
-                Bình thường
-              </th>
-              <th
-                scope="col"
-                className={`${styles.numeric} ${satisfactionStyles.negative}`}
-              >
-                Rất tệ
-              </th>
+              {columns.map((column, index) => {
+                const active = sortable && column.sortable && sort.key === column.key;
+                return (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    className={index === 0 ? styles.stickyColumn : column.className}
+                    aria-sort={
+                      !column.sortable
+                        ? undefined
+                        : active
+                          ? sort.direction === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                    }
+                  >
+                    {sortable && column.sortable ? (
+                      <DataTableSortButton
+                        label={column.label}
+                        active={active}
+                        direction={sort.direction}
+                        align={index === 0 ? "start" : "end"}
+                        onClick={() =>
+                          setSort((current) => toggleTableSort(current, column.key, column.initialDirection))
+                        }
+                      />
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             <tr className={csatStyles.totalRow}>
               <th scope="row" className={styles.stickyColumn}>Tổng</th>
+              <td className={chartStyles.tableBar}>
+                <SplitBar
+                  buckets={CSAT_BUCKETS}
+                  counts={responseTotals}
+                  total={responseTotals.ticket_count}
+                  label={csatBarLabel({ ...responseTotals, value: "Tổng", label: "Tổng" })}
+                />
+              </td>
               <td className={styles.numeric}>
                 <strong>{`${formatCount(responseTotals.ticket_count)} phản hồi`}</strong>
                 <span className={csatStyles.totalSupport}>{`${formatCount(data.ticket_count)} ticket`}</span>
               </td>
+              <td className={styles.numeric}>{formatCount(responseTotals.positive)}</td>
+              <td className={styles.numeric}>{formatCount(responseTotals.neutral)}</td>
+              <td className={styles.numeric}>{formatCount(responseTotals.negative)}</td>
               <td className={styles.numeric}>
-                {ratingCell(responseTotals.positive, responseTotals.ticket_count)}
-              </td>
-              <td className={styles.numeric}>
-                {ratingCell(responseTotals.neutral, responseTotals.ticket_count)}
-              </td>
-              <td className={styles.numeric}>
-                {ratingCell(responseTotals.negative, responseTotals.ticket_count)}
+                {rateCell(responseTotals.negative, responseTotals.ticket_count)}
               </td>
             </tr>
             {visibleRows.map((row) => (
@@ -227,25 +366,28 @@ export function CsatBreakdownTable({
                 <th scope="row" className={styles.stickyColumn}>
                   <FilterValueButton
                     label={row.label}
-                    filterLabel={csatGroupingLabel(grouping)}
+                    filterLabel={groupingLabel}
                     onClick={() => onValueSelect(grouping, row.value)}
                   />
                 </th>
+                <td className={chartStyles.tableBar}>
+                  <SplitBar
+                    buckets={CSAT_BUCKETS}
+                    counts={row}
+                    total={row.ticket_count}
+                    label={csatBarLabel(row)}
+                  />
+                </td>
                 <td className={styles.numeric}>
                   {formatCount(row.ticket_count)}
                   {row.ticket_count < PERCENTAGE_SAMPLE_MINIMUM ? (
                     <span className={csatStyles.sampleLabel}>Mẫu nhỏ</span>
                   ) : null}
                 </td>
-                <td className={styles.numeric}>
-                  {ratingCell(row.positive, row.ticket_count)}
-                </td>
-                <td className={styles.numeric}>
-                  {ratingCell(row.neutral, row.ticket_count)}
-                </td>
-                <td className={styles.numeric}>
-                  {ratingCell(row.negative, row.ticket_count)}
-                </td>
+                <td className={styles.numeric}>{formatCount(row.positive)}</td>
+                <td className={styles.numeric}>{formatCount(row.neutral)}</td>
+                <td className={styles.numeric}>{formatCount(row.negative)}</td>
+                <td className={styles.numeric}>{rateCell(row.negative, row.ticket_count)}</td>
               </tr>
             ))}
           </tbody>
@@ -258,7 +400,7 @@ export function CsatBreakdownTable({
           aria-controls="csat-breakdown-table"
           onClick={() => setExpanded((current) => !current)}
         >
-          {showAll ? "Thu gọn" : `Xem tất cả ${formatCount(rows.length)} nhóm`}
+          {showAll ? "Thu gọn" : `Xem tất cả ${formatCount(sortedRows.length)} nhóm`}
         </button>
       ) : null}
     </div>

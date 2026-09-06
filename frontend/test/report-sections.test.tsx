@@ -322,7 +322,7 @@ describe("Weekly Report", () => {
     const table = screen.getByRole("table", { name: /Báo cáo tuần/ });
     expect(
       screen.getByRole("region", {
-        name: /Báo cáo tuần T2–CN · cập nhật/,
+        name: "Báo cáo tuần T2–CN",
       }),
     ).toBeVisible();
     const firstResponseGroup = within(table).getByRole("columnheader", {
@@ -976,15 +976,17 @@ describe("Below-fold analysis", () => {
     expect(grouping).toHaveValue("outcome");
     expect(within(section).getAllByRole("columnheader").map((header) => header.textContent)).toEqual([
       "Kết quả xử lý",
+      "Tỉ lệ",
       "Phản hồi có đánh giá",
       "Rất hài lòng",
       "Bình thường",
       "Rất tệ",
+      "Rất tệ (%)",
     ]);
     const totalRow = within(section).getByRole("row", { name: /Tổng/ });
     expect(within(totalRow).getByText("20 ticket")).toBeVisible();
     expect(within(totalRow).getByText("23 phản hồi")).toBeVisible();
-    expect(within(totalRow).getByText("12 · 52,2%")).toBeVisible();
+    expect(within(totalRow).getByText("13,0%")).toBeVisible();
     const smallRow = within(section).getByRole("row", { name: /AI xử lý trọn/ });
     expect(
       within(smallRow).getByRole("button", {
@@ -1054,12 +1056,16 @@ describe("Below-fold analysis", () => {
       const totalRow = within(section).getByRole("row", { name: /Tổng/ });
       expect(within(totalRow).getAllByRole("cell").map(
         (cell) => cell.textContent,
-      )).toEqual(["12 phản hồi12 ticket", "7", "3", "2"]);
+      )).toEqual(["", "12 phản hồi12 ticket", "7", "3", "2", "—"]);
       const outcomeRow = within(section).getByRole("row", { name: /AI xử lý trọn/ });
       expect(within(outcomeRow).getAllByRole("cell").map(
         (cell) => cell.textContent,
-      )).toEqual(["12Mẫu nhỏ", "7", "3", "2"]);
-      expect(section).not.toHaveTextContent("%");
+      )).toEqual(["", "12Mẫu nhỏ", "7", "3", "2", "—"]);
+      // Below the sample floor every rate cell is a dash, not a number -- the
+      // "(%)" column header is a static label, not a rendered percentage.
+      for (const row of [totalRow, outcomeRow]) {
+        expect(within(row).queryByText(/\d%/)).toBeNull();
+      }
       const source = document.getElementById("csat-source");
       expect(source).toHaveTextContent(
         /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+\.$/,
@@ -1198,13 +1204,15 @@ describe("Below-fold analysis", () => {
         .map((header) => header.textContent),
     ).toEqual([
       "Kết quả xử lý",
+      "Tỉ lệ",
       "Phản hồi có đánh giá",
       "Rất hài lòng",
       "Bình thường",
       "Rất tệ",
+      "Rất tệ (%)",
     ]);
     expect(within(section).getByRole("row", { name: /Tổng/ })).toHaveTextContent(
-      "20 ticket14 · 70,0%3 · 15,0%3 · 15,0%",
+      "20 ticket14",
     );
     expect(
       within(section).getByRole("columnheader", { name: "Bình thường" }),
@@ -1224,9 +1232,7 @@ describe("Below-fold analysis", () => {
 
     expect(
       within(allPeriodSection).getByRole("row", { name: /Tổng/ }),
-    ).toHaveTextContent(
-      "29 ticket19 · 65,5%5 · 17,2%5 · 17,2%",
-    );
+    ).toHaveTextContent("29 ticket195517,2%");
     expect(
       within(allPeriodSection).getByRole("button", {
         name: "Xem 2 nội dung phản hồi",

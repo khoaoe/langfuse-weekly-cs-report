@@ -11,12 +11,7 @@ import {
   formatWeekStart,
   share,
 } from "../lib/format";
-import {
-  csatGroupingLabel,
-  csatResponseTotals,
-  rowsFor,
-  type CsatGrouping,
-} from "./CsatBreakdownTable";
+import { csatResponseTotals } from "./CsatBreakdownTable";
 import chartStyles from "./csat-charts.module.css";
 
 /**
@@ -24,18 +19,19 @@ import chartStyles from "./csat-charts.module.css";
  * in this order so the segment a reader acts on always sits against the same
  * edge — the left edge of a bar, the baseline of a column — which is the only
  * position in a stack whose length can be compared accurately by eye.
+ *
+ * Exported: `CsatBreakdownTable`'s inline `Tỉ lệ` column draws the same bar.
  */
-const BUCKETS = [
+export const CSAT_BUCKETS = [
   { key: "negative", label: "Rất tệ", className: chartStyles.negative },
   { key: "neutral", label: "Bình thường", className: chartStyles.neutral },
   { key: "positive", label: "Rất hài lòng", className: chartStyles.positive },
 ] as const;
 
-type BucketKey = (typeof BUCKETS)[number]["key"];
+type BucketKey = (typeof CSAT_BUCKETS)[number]["key"];
 
 const TIME_CHART_HEIGHT = 208;
 const TIME_CHART_PADDING = { top: 8, right: 4, bottom: 26, left: 44 };
-const GROUP_ROW_LIMIT = 8;
 
 /**
  * One stacked-bar segment definition, worst-first (see `BUCKETS` above).
@@ -228,7 +224,6 @@ export interface CsatChartsProps {
   readonly data: CsatWeek;
   /** The scope's own buckets, in key order — the trend, already scoped. */
   readonly buckets: readonly (readonly [string, CsatWeek])[];
-  readonly grouping: CsatGrouping;
   readonly dayGrain: boolean;
   readonly weekDefinition: WeekDefinition;
   /**
@@ -244,7 +239,6 @@ export function CsatCharts({
   scopeTickets = null,
   data,
   buckets,
-  grouping,
   dayGrain,
   weekDefinition,
 }: CsatChartsProps) {
@@ -256,12 +250,6 @@ export function CsatCharts({
         .map(([key, bucket]) => [key, csatResponseTotals(bucket)] as const)
         .filter(([, counts]) => counts.ticket_count > 0),
     [buckets],
-  );
-  // rowsFor already returns rows worst-first, small-sample-last (see
-  // sortBreakdownRows in CsatBreakdownTable.tsx); this panel just caps them.
-  const groupRows = useMemo(
-    () => rowsFor(data, grouping).slice(0, GROUP_ROW_LIMIT),
-    [data, grouping],
   );
 
   if (totals.ticket_count === 0) {
@@ -282,24 +270,25 @@ export function CsatCharts({
             of the scope it covers. A share above 100% would mean the two
             sources disagree about the population, so it is dropped rather
             than printed. */}
-        <p className={chartStyles.headlineSupport}>
+        <p id="csat-breakdown-caption" className={chartStyles.headlineSupport}>
           {`${formatCount(totals.ticket_count)} phản hồi từ ${formatCount(data.ticket_count)} ticket`}
           {scopeTickets == null ||
           scopeTickets === 0 ||
           data.ticket_count > scopeTickets
             ? null
             : ` · ${formatRate(data.ticket_count / scopeTickets)} ticket trong phạm vi có đánh giá`}
+          {" · Mỗi phản hồi survey được tính một lần."}
         </p>
         <SplitBar
-          buckets={BUCKETS}
+          buckets={CSAT_BUCKETS}
           counts={totals}
           total={totals.ticket_count}
-          label={BUCKETS.map(
+          label={CSAT_BUCKETS.map(
             (bucket) =>
               `${bucket.label} ${formatCount(totals[bucket.key as BucketKey])}`,
           ).join(", ")}
         />
-        <Legend buckets={BUCKETS} counts={totals} total={totals.ticket_count} />
+        <Legend buckets={CSAT_BUCKETS} counts={totals} total={totals.ticket_count} />
       </div>
 
       {timeBuckets.length > 1 ? (
@@ -312,7 +301,7 @@ export function CsatCharts({
           </p>
           <TimeChart
             series={timeBuckets}
-            buckets={BUCKETS}
+            buckets={CSAT_BUCKETS}
             dayGrain={dayGrain}
             weekDefinition={weekDefinition}
             regionLabel="Phản hồi theo thời gian"
@@ -323,38 +312,6 @@ export function CsatCharts({
               `${formatCount(total)} phản hồi · Rất tệ ${formatCount(counts.negative)}`
             }
           />
-        </div>
-      ) : null}
-
-      {groupRows.length > 0 ? (
-        <div className={chartStyles.panel}>
-          <h3 className={chartStyles.panelTitle}>
-            {`${csatGroupingLabel(grouping)} nào bị chấm “Rất tệ” nhiều nhất`}
-          </h3>
-          <p className={chartStyles.panelNote}>
-            Mỗi thanh là toàn bộ phản hồi của nhóm, xếp từ tệ nhất bên trái. Bảng bên
-            dưới có số chính xác và nút lọc.
-          </p>
-          <div className={chartStyles.groupList}>
-            {groupRows.map((row) => (
-              <div key={`${grouping}:${row.value}`} className={chartStyles.groupRow}>
-                <span className={chartStyles.groupLabel}>{row.label}</span>
-                <SplitBar
-                  buckets={BUCKETS}
-                  counts={row}
-                  total={row.ticket_count}
-                  label={`${row.label}: ${BUCKETS.map(
-                    (bucket) => `${bucket.label} ${formatCount(row[bucket.key as BucketKey])}`,
-                  ).join(", ")}`}
-                />
-                <span className={chartStyles.groupValue}>
-                  {row.ticket_count < PERCENTAGE_SAMPLE_MINIMUM
-                    ? `${formatCount(row.ticket_count)} phản hồi · mẫu nhỏ`
-                    : `${formatRate(row.negative / row.ticket_count)} · ${formatCount(row.ticket_count)} phản hồi`}
-                </span>
-              </div>
-            ))}
-          </div>
         </div>
       ) : null}
     </div>

@@ -378,14 +378,6 @@ describe("trend chart data gaps", () => {
     expect(
       screen.getByText("Mọi tuần đều cắt tới thứ Năm để so cùng kỳ."),
     ).toBeVisible();
-    expect(
-      screen.getByText(/Tuần gần nhất có dữ liệu 20\/07–26\/07: 4 ticket/),
-    ).toBeVisible();
-    expect(
-      screen.getByText(
-        "Tuần gần nhất có dữ liệu: AI First 75,0%, reopen 25,0%.",
-      ),
-    ).toBeVisible();
 
     rerender(
       <BelowFold

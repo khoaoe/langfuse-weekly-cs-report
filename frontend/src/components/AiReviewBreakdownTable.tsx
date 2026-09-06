@@ -3,8 +3,19 @@ import { useEffect, useMemo, useState } from "react";
 import type { AiReviewBucket } from "../lib/dashboard-schema";
 import { OUTCOME_FILTER_LABELS } from "../lib/dashboard-filters";
 import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate, share } from "../lib/format";
+import {
+  type SortDirection,
+  type SortValue,
+  type TableSort,
+  stableSortRows,
+  toggleTableSort,
+} from "../lib/table-sort";
+import { SplitBar, guardedRate } from "./CsatCharts";
+import { AI_REVIEW_BUCKETS } from "./AiReviewCharts";
+import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
 import { OUTCOME_ORDER, type CsatGrouping } from "./CsatBreakdownTable";
+import chartStyles from "./csat-charts.module.css";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
 import satisfactionStyles from "./satisfaction-badge.module.css";
@@ -66,6 +77,105 @@ function rateCell(count: number, denominator: number) {
   );
 }
 
+/** Bar `aria-label`: all three bucket labels, each with its count and share. */
+function aiReviewBarLabel(row: AiReviewBreakdownRow): string {
+  return `${row.label}: ${AI_REVIEW_BUCKETS.map(
+    (bucket) =>
+      `${bucket.label} ${formatCount(row[bucket.key])} (${guardedRate(row[bucket.key], row.rated_ticket_count)})`,
+  ).join(", ")}`;
+}
+
+type AiReviewSortKey =
+  | "label"
+  | "rate"
+  | "reviewed_ticket_count"
+  | "rated_ticket_count"
+  | "satisfied_count"
+  | "satisfied_with_edit_count"
+  | "needs_edit_rate";
+
+interface AiReviewSortColumn {
+  readonly key: AiReviewSortKey;
+  readonly label: string;
+  readonly sortable: boolean;
+  readonly initialDirection: SortDirection;
+  readonly className?: string | undefined;
+  readonly value: (row: AiReviewBreakdownRow) => SortValue;
+}
+
+/**
+ * Default sort ("Cần sửa (%)" descending) reproduces the exact ranking the
+ * deleted ranking-panel chart used: `stableSortRows` sinks a `null` value to
+ * the bottom regardless of direction, so a small sample always lands last;
+ * ties keep the source order, which `aiReviewRowsFor` already breaks by count.
+ */
+function aiReviewSortColumns(groupingLabel: string): readonly AiReviewSortColumn[] {
+  return [
+    {
+      key: "label",
+      label: groupingLabel,
+      sortable: true,
+      initialDirection: "asc",
+      value: (row) => row.label,
+    },
+    {
+      key: "rate",
+      label: "Tỉ lệ",
+      sortable: false,
+      initialDirection: "desc",
+      value: () => null,
+    },
+    {
+      key: "reviewed_ticket_count",
+      label: "Đã hậu kiểm",
+      sortable: true,
+      initialDirection: "desc",
+      className: styles.numeric,
+      value: (row) => row.reviewed_ticket_count,
+    },
+    {
+      key: "rated_ticket_count",
+      label: "Có nhãn",
+      sortable: true,
+      initialDirection: "desc",
+      className: styles.numeric,
+      value: (row) => row.rated_ticket_count,
+    },
+    {
+      key: "satisfied_count",
+      label: "Đạt (n)",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.positive}`,
+      value: (row) => row.satisfied_count,
+    },
+    {
+      key: "satisfied_with_edit_count",
+      label: "Đạt, có sửa (n)",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.neutral}`,
+      value: (row) => row.satisfied_with_edit_count,
+    },
+    {
+      key: "needs_edit_rate",
+      label: "Cần sửa (%)",
+      sortable: true,
+      initialDirection: "desc",
+      className: `${styles.numeric} ${satisfactionStyles.negative}`,
+      value: (row) =>
+        row.rated_ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.needs_edit_count, row.rated_ticket_count)
+          : null,
+    },
+  ];
+}
+
+const DEFAULT_AI_REVIEW_SORT: TableSort<AiReviewSortKey> = {
+  key: "needs_edit_rate",
+  direction: "desc",
+};
+
 export interface AiReviewBreakdownTableProps {
   readonly data: AiReviewBucket;
   readonly grouping: CsatGrouping;
@@ -91,50 +201,95 @@ export function AiReviewBreakdownTable({
   groupingLabel,
 }: AiReviewBreakdownTableProps) {
   const [expanded, setExpanded] = useState(false);
+  const [sort, setSort] = useState<TableSort<AiReviewSortKey>>(DEFAULT_AI_REVIEW_SORT);
   const rows = useMemo(() => aiReviewRowsFor(data, grouping), [data, grouping]);
+  const sortable = grouping !== "outcome";
+  const columns = useMemo(() => aiReviewSortColumns(groupingLabel), [groupingLabel]);
   useEffect(() => setExpanded(false), [grouping, scopeKey]);
+  useEffect(() => setSort(DEFAULT_AI_REVIEW_SORT), [grouping, scopeKey]);
+  // `rows` already carries the default rank (see `aiReviewRowsFor`); a column
+  // click re-sorts it, `outcome` keeps its fixed pipeline-stage order.
+  const sortedRows = useMemo(() => {
+    if (!sortable) {
+      return rows;
+    }
+    const column = columns.find((item) => item.key === sort.key) ?? columns[0];
+    return stableSortRows(rows, (row) => column?.value(row), sort.direction);
+  }, [columns, rows, sort, sortable]);
   const showAll = expanded;
-  const visibleRows = grouping === "outcome" || showAll ? rows : rows.slice(0, GROUP_LIMIT);
-  const canExpand = grouping !== "outcome" && rows.length > GROUP_LIMIT;
+  const visibleRows = !sortable || showAll ? sortedRows : sortedRows.slice(0, GROUP_LIMIT);
+  const canExpand = sortable && sortedRows.length > GROUP_LIMIT;
 
   return (
     <div className={csatStyles.breakdown}>
-      <p id="ai-review-breakdown-caption" className={styles.sectionNote}>
-        Mẫu số tỉ lệ là ticket có nhãn hậu kiểm (`rated_ticket_count`), khác mẫu số cột đếm.
-      </p>
       <div className={`${styles.tableScroll} ${csatStyles.tableScroll}`}>
         <table
           id="ai-review-breakdown-table"
           className={`${styles.table} ${csatStyles.table}`}
-          aria-describedby="ai-review-scope ai-review-breakdown-caption ai-review-source"
+          aria-describedby="ai-review-scope ai-review-source"
         >
           <thead>
             <tr>
-              <th scope="col">{groupingLabel}</th>
-              <th scope="col" className={styles.numeric}>Đã hậu kiểm</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.positive}`}>Đạt (n)</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.positive}`}>Đạt (%)</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.neutral}`}>Đạt, có sửa (n)</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.neutral}`}>Đạt, có sửa (%)</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.negative}`}>Cần sửa (n)</th>
-              <th scope="col" className={`${styles.numeric} ${satisfactionStyles.negative}`}>Cần sửa (%)</th>
+              {columns.map((column, index) => {
+                const active = sortable && column.sortable && sort.key === column.key;
+                return (
+                  <th
+                    key={column.key}
+                    scope="col"
+                    className={index === 0 ? styles.stickyColumn : column.className}
+                    aria-sort={
+                      !column.sortable
+                        ? undefined
+                        : active
+                          ? sort.direction === "asc"
+                            ? "ascending"
+                            : "descending"
+                          : "none"
+                    }
+                  >
+                    {sortable && column.sortable ? (
+                      <DataTableSortButton
+                        label={column.label}
+                        active={active}
+                        direction={sort.direction}
+                        align={index === 0 ? "start" : "end"}
+                        onClick={() =>
+                          setSort((current) => toggleTableSort(current, column.key, column.initialDirection))
+                        }
+                      />
+                    ) : (
+                      column.label
+                    )}
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             <tr className={csatStyles.totalRow}>
               <th scope="row" className={styles.stickyColumn}>Tổng</th>
+              <td className={chartStyles.tableBar}>
+                <SplitBar
+                  buckets={AI_REVIEW_BUCKETS}
+                  counts={data}
+                  total={data.rated_ticket_count}
+                  label={aiReviewBarLabel({
+                    value: "Tổng",
+                    label: "Tổng",
+                    reviewed_ticket_count: data.reviewed_ticket_count,
+                    rated_ticket_count: data.rated_ticket_count,
+                    satisfied_count: data.satisfied_count,
+                    satisfied_with_edit_count: data.satisfied_with_edit_count,
+                    needs_edit_count: data.needs_edit_count,
+                  })}
+                />
+              </td>
               <td className={styles.numeric}>
                 <strong>{`${formatCount(data.reviewed_ticket_count)} ticket`}</strong>
               </td>
+              <td className={styles.numeric}>{formatCount(data.rated_ticket_count)}</td>
               <td className={styles.numeric}>{formatCount(data.satisfied_count)}</td>
-              <td className={styles.numeric}>
-                {rateCell(data.satisfied_count, data.rated_ticket_count)}
-              </td>
               <td className={styles.numeric}>{formatCount(data.satisfied_with_edit_count)}</td>
-              <td className={styles.numeric}>
-                {rateCell(data.satisfied_with_edit_count, data.rated_ticket_count)}
-              </td>
-              <td className={styles.numeric}>{formatCount(data.needs_edit_count)}</td>
               <td className={styles.numeric}>
                 {rateCell(data.needs_edit_count, data.rated_ticket_count)}
               </td>
@@ -148,21 +303,23 @@ export function AiReviewBreakdownTable({
                     onClick={() => onValueSelect(grouping, row.value)}
                   />
                 </th>
+                <td className={chartStyles.tableBar}>
+                  <SplitBar
+                    buckets={AI_REVIEW_BUCKETS}
+                    counts={row}
+                    total={row.rated_ticket_count}
+                    label={aiReviewBarLabel(row)}
+                  />
+                </td>
                 <td className={styles.numeric}>
                   {formatCount(row.reviewed_ticket_count)}
                   {row.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM ? (
                     <span className={csatStyles.sampleLabel}>Mẫu nhỏ</span>
                   ) : null}
                 </td>
+                <td className={styles.numeric}>{formatCount(row.rated_ticket_count)}</td>
                 <td className={styles.numeric}>{formatCount(row.satisfied_count)}</td>
-                <td className={styles.numeric}>
-                  {rateCell(row.satisfied_count, row.rated_ticket_count)}
-                </td>
                 <td className={styles.numeric}>{formatCount(row.satisfied_with_edit_count)}</td>
-                <td className={styles.numeric}>
-                  {rateCell(row.satisfied_with_edit_count, row.rated_ticket_count)}
-                </td>
-                <td className={styles.numeric}>{formatCount(row.needs_edit_count)}</td>
                 <td className={styles.numeric}>
                   {rateCell(row.needs_edit_count, row.rated_ticket_count)}
                 </td>

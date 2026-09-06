@@ -85,9 +85,9 @@ describe("AiReviewBreakdownTable", () => {
     );
     const row = screen.getByRole("button", { name: /interbank-fund-transfer/ }).closest("tr");
     expect(row).not.toBeNull();
-    // 20/20 satisfied is an exact, counted 100% (no decimal noise) -- and no
+    // 0/20 needs-edit is an exact, counted 0% (no decimal noise) -- and no
     // dash cell anywhere in the row, since n=20 clears PERCENTAGE_SAMPLE_MINIMUM.
-    expect(row!.textContent).toContain("100%");
+    expect(row!.textContent).toContain("0%");
     expect(row!.querySelectorAll('td span[title]').length).toBe(0);
   });
 });

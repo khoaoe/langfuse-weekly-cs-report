@@ -842,9 +842,6 @@ export function TicketExplorer({
       <details id="ticketColumnChooser" className={ticketStyles.columnPicker}>
         <summary>Chọn cột hiển thị</summary>
         <div id="ticketColumnOptions" className={ticketStyles.columnList}>
-          <p className={ticketStyles.columnPickerNote}>
-            Cột đang hiện cũng quyết định ô lọc nào xuất hiện.
-          </p>
           {TICKET_COLUMNS.filter((column) => column.key !== "ticket_id").map((column) => (
             <label
               key={column.key}

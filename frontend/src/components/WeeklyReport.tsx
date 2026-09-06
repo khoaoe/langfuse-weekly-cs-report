@@ -369,22 +369,6 @@ export function WeeklyReport({
       </div>
 
       {/*
-        The caption is the table's accessible name, so it says what the table is
-        and how fresh it is. Column count is visible by looking, the WTD marker
-        and empty-week label are visible in the rows, and the sort state is
-        already carried by `aria-sort` on every header. None is repeated here.
-      */}
-      <p
-        id="weekly-caption"
-        className={styles.tableCaption}
-        aria-live="polite"
-      >
-        {isDayRange
-          ? `Báo cáo theo khoảng ngày ${dayRangeLabel ?? ""} · cập nhật ${updatedAt}`
-          : `Báo cáo tuần ${cohortLabel} · cập nhật ${updatedAt}`}
-      </p>
-
-      {/*
         Sorting the view does not reorder the export. Worth saying at the moment
         it becomes true, and silence otherwise.
       */}
@@ -398,11 +382,11 @@ export function WeeklyReport({
         className={styles.tableScroll}
         tabIndex={0}
         role="region"
-        aria-labelledby="weekly-caption"
+        aria-label="Bảng báo cáo tuần, cuộn ngang khi cần"
       >
         <table
           className={`${styles.table} ${allColumns ? styles.allColumns : ""}`}
-          aria-labelledby="weekly-caption"
+          aria-labelledby="weekly-title"
         >
           <thead>
             <tr className={styles.weeklyGroupRow}>

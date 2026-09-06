@@ -28,7 +28,6 @@ const renderCharts = (scopeTickets: number | null) =>
     <CsatCharts
       data={week}
       buckets={[["2026-08-31", week]]}
-      grouping="outcome"
       dayGrain={false}
       weekDefinition="mon_sun"
       scopeTickets={scopeTickets}
@@ -46,7 +45,9 @@ describe("CSAT participation share", () => {
 
   it("prints only the counts when no denominator is available", () => {
     renderCharts(null);
-    expect(screen.getByText(/44 phản hồi từ 40 ticket$/)).toBeVisible();
+    const support = screen.getByText(/44 phản hồi từ 40 ticket/);
+    expect(support).toBeVisible();
+    expect(support).not.toHaveTextContent("trong phạm vi có đánh giá");
   });
 
   it("drops the share when the two sources disagree about the population", () => {

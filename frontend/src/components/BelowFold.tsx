@@ -181,8 +181,6 @@ interface TrendCopy {
   readonly rateAriaTitle: string;
   readonly rateAriaDesc: (rateCeiling: string) => string;
   readonly tooltipRangePrefix: string;
-  readonly volumeCaption: (rangeLabel: string, total: string, aiFirst: string) => string;
-  readonly rateCaption: (aiFirstRate: string, reopenRate: string) => string;
   readonly emptyMessage: (minPoints: number, observedCount: string) => string;
   readonly wtdSuffix: string;
   /**
@@ -207,10 +205,6 @@ const WEEK_TREND_COPY: TrendCopy = {
       "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
     ].join(" "),
   tooltipRangePrefix: "Tuần",
-  volumeCaption: (rangeLabel, total, aiFirst) =>
-    `Tuần gần nhất có dữ liệu ${rangeLabel}: ${total} ticket, trong đó ${aiFirst} ticket AI First.`,
-  rateCaption: (aiFirstRate, reopenRate) =>
-    `Tuần gần nhất có dữ liệu: AI First ${aiFirstRate}, reopen ${reopenRate}.`,
   emptyMessage: (minPoints, observedCount) =>
     `Cần ít nhất ${minPoints} tuần có dữ liệu mới vẽ được xu hướng. Hiện có ${observedCount} tuần.`,
   wtdSuffix: " · WTD",
@@ -231,10 +225,6 @@ const DAY_TREND_COPY: TrendCopy = {
       "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
     ].join(" "),
   tooltipRangePrefix: "Ngày",
-  volumeCaption: (rangeLabel, total, aiFirst) =>
-    `Ngày gần nhất có dữ liệu ${rangeLabel}: ${total} ticket, trong đó ${aiFirst} ticket AI First.`,
-  rateCaption: (aiFirstRate, reopenRate) =>
-    `Ngày gần nhất có dữ liệu: AI First ${aiFirstRate} (TB động 7 ngày), reopen ${reopenRate} (TB động 7 ngày).`,
   emptyMessage: (minPoints, observedCount) =>
     `Cần ít nhất ${minPoints} ngày có dữ liệu mới vẽ được xu hướng. Hiện có ${observedCount} ngày.`,
   wtdSuffix: "",
@@ -510,8 +500,6 @@ function TrendPanels({
       ) : null,
     );
 
-  const latest = observed.at(-1);
-
   return (
     <div className={trendStyles.trendPanels}>
       {subtitle === null ? null : (
@@ -599,15 +587,6 @@ function TrendPanels({
             <span className={trendStyles.swatchSecondary} /> Ticket AI First
           </span>
         </div>
-        <p id="trendCaption" className={styles.caption}>
-          {latest === undefined
-            ? "—"
-            : copy.volumeCaption(
-                latest.rangeLabel,
-                formatCount(latest.total_tickets),
-                formatCount(latest.ai_first_count),
-              )}
-        </p>
         </figure>
 
         <figure className={trendStyles.chart}>
@@ -681,14 +660,6 @@ function TrendPanels({
             <span className={trendStyles.swatchSecondary} /> Tỷ lệ reopen sau AI First
           </span>
         </div>
-        <p className={styles.caption}>
-          {latest === undefined
-            ? "—"
-            : copy.rateCaption(
-                formatRate(latest.ai_first_rate),
-                formatRate(latest.reopen_lifetime_rate),
-              )}
-        </p>
         </figure>
       </div>
     </div>

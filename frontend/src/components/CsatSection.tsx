@@ -795,7 +795,6 @@ export function CsatSection({
               scopeTickets={scopeTickets}
               data={data}
               buckets={scopedBuckets}
-              grouping={grouping}
               dayGrain={dayGrain}
               weekDefinition={weekDefinition}
             />
@@ -893,7 +892,6 @@ export function CsatSection({
             <AiReviewCharts
               data={aiReviewData}
               buckets={aiReviewScopedBuckets}
-              grouping={grouping}
               dayGrain={aiReviewDayGrain}
               weekDefinition={weekDefinition}
             />
