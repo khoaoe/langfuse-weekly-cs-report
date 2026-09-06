@@ -9,6 +9,7 @@ import {
   formatRate,
   formatWeekRange,
   formatWeekStart,
+  share,
 } from "../lib/format";
 import {
   csatGroupingLabel,
@@ -47,9 +48,7 @@ export interface BucketDef<K extends string> {
   readonly className: string | undefined;
 }
 
-export function share(count: number, total: number): number {
-  return total === 0 ? 0 : count / total;
-}
+export { share };
 
 /** A rate only where the sample supports one, matching the table's own rule. */
 export function guardedRate(count: number, total: number): string {
@@ -258,25 +257,12 @@ export function CsatCharts({
         .filter(([, counts]) => counts.ticket_count > 0),
     [buckets],
   );
-  const groupRows = useMemo(() => {
-    const rows = rowsFor(data, grouping).filter((row) => row.ticket_count > 0);
-    // Sorted by what the reader is hunting for. Groups too small to carry a
-    // rate sink below the ranked ones rather than topping it on one bad rating.
-    return [...rows]
-      .sort((left, right) => {
-        const leftSmall = left.ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
-        const rightSmall = right.ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
-        if (leftSmall !== rightSmall) {
-          return leftSmall ? 1 : -1;
-        }
-        return (
-          share(right.negative, right.ticket_count) -
-            share(left.negative, left.ticket_count) ||
-          right.ticket_count - left.ticket_count
-        );
-      })
-      .slice(0, GROUP_ROW_LIMIT);
-  }, [data, grouping]);
+  // rowsFor already returns rows worst-first, small-sample-last (see
+  // sortBreakdownRows in CsatBreakdownTable.tsx); this panel just caps them.
+  const groupRows = useMemo(
+    () => rowsFor(data, grouping).slice(0, GROUP_ROW_LIMIT),
+    [data, grouping],
+  );
 
   if (totals.ticket_count === 0) {
     return null;

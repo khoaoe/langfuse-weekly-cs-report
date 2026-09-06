@@ -4,7 +4,7 @@ import type { AiReviewBucket, WeekDefinition } from "../lib/dashboard-schema";
 import { PERCENTAGE_SAMPLE_MINIMUM, formatCount } from "../lib/format";
 import { aiReviewRowsFor } from "./AiReviewBreakdownTable";
 import { csatGroupingLabel, type CsatGrouping } from "./CsatBreakdownTable";
-import { Legend, SplitBar, TimeChart, guardedRate, share, type BucketDef } from "./CsatCharts";
+import { Legend, SplitBar, TimeChart, guardedRate, type BucketDef } from "./CsatCharts";
 import chartStyles from "./csat-charts.module.css";
 
 type AiReviewRatingKey = "needs_edit_count" | "satisfied_with_edit_count" | "satisfied_count";
@@ -41,25 +41,12 @@ export function AiReviewCharts({
         .filter(([, bucket]) => bucket.reviewed_ticket_count > 0),
     [buckets],
   );
-  const groupRows = useMemo(() => {
-    const rows = aiReviewRowsFor(data, grouping);
-    // Sorted by what the reader is hunting for. Groups too small to carry a
-    // rate sink below the ranked ones rather than topping it on one bad rating.
-    return [...rows]
-      .sort((left, right) => {
-        const leftSmall = left.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
-        const rightSmall = right.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
-        if (leftSmall !== rightSmall) {
-          return leftSmall ? 1 : -1;
-        }
-        return (
-          share(right.needs_edit_count, right.rated_ticket_count) -
-            share(left.needs_edit_count, left.rated_ticket_count) ||
-          right.reviewed_ticket_count - left.reviewed_ticket_count
-        );
-      })
-      .slice(0, GROUP_ROW_LIMIT);
-  }, [data, grouping]);
+  // aiReviewRowsFor already returns rows worst-first, small-sample-last; this
+  // panel just caps them.
+  const groupRows = useMemo(
+    () => aiReviewRowsFor(data, grouping).slice(0, GROUP_ROW_LIMIT),
+    [data, grouping],
+  );
 
   if (data.reviewed_ticket_count === 0) {
     return null;

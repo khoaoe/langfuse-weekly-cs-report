@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { AiReviewBucket } from "../lib/dashboard-schema";
 import { OUTCOME_FILTER_LABELS } from "../lib/dashboard-filters";
-import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate } from "../lib/format";
+import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate, share } from "../lib/format";
 import { FilterValueButton } from "./FilterValueButton";
 import { OUTCOME_ORDER, type CsatGrouping } from "./CsatBreakdownTable";
 import csatStyles from "./csat-section.module.css";
@@ -38,9 +38,24 @@ export function aiReviewRowsFor(
         : [{ value: outcome, label: OUTCOME_FILTER_LABELS[outcome] ?? outcome, ...counts }];
     });
   }
-  return data.by_dimension[grouping]
+  const rows = data.by_dimension[grouping]
     .filter((row) => row.reviewed_ticket_count > 0)
     .map((row) => ({ ...row, label: row.value }));
+  // Worst-first, same convention as CSAT's `sortBreakdownRows`: groups too
+  // small to carry a rate sink below the ranked ones rather than topping the
+  // ranking on one bad rating from a handful of tickets.
+  return [...rows].sort((left, right) => {
+    const leftSmall = left.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
+    const rightSmall = right.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
+    if (leftSmall !== rightSmall) {
+      return leftSmall ? 1 : -1;
+    }
+    return (
+      share(right.needs_edit_count, right.rated_ticket_count) -
+        share(left.needs_edit_count, left.rated_ticket_count) ||
+      right.reviewed_ticket_count - left.reviewed_ticket_count
+    );
+  });
 }
 
 function rateCell(count: number, denominator: number) {

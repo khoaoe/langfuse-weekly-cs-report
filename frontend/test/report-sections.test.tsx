@@ -1007,12 +1007,17 @@ describe("Below-fold analysis", () => {
     expect(within(section).getByRole("columnheader", { name: "Skill" })).toBeVisible();
     expect(within(section).getByRole("rowheader", { name: "interbank-fund-transfer" })).toBeVisible();
     expect(within(section).queryByRole("button", { name: "AI xử lý trọn" })).toBeNull();
-    expect(within(section).queryByRole("rowheader", { name: "skill-11" })).toBeNull();
+    // Rows are worst-first (100% negative for its one ticket), so skill-11
+    // ranks ahead of the GROUP_LIMIT cut even though it's a small sample;
+    // skill-10 (tied at zero negatives, last in insertion order) is what
+    // actually falls past the limit.
+    expect(within(section).getByRole("rowheader", { name: "skill-11" })).toBeVisible();
+    expect(within(section).queryByRole("rowheader", { name: "skill-10" })).toBeNull();
     expect(within(section).queryByRole("rowheader", { name: "Chưa ghi nhận" })).toBeNull();
     await user.click(within(section).getByRole("button", { name: "Xem tất cả 11 nhóm" }));
-    expect(within(section).getByRole("rowheader", { name: "skill-11" })).toBeVisible();
+    expect(within(section).getByRole("rowheader", { name: "skill-10" })).toBeVisible();
     await user.click(within(section).getByRole("button", { name: "Thu gọn" }));
-    expect(within(section).queryByRole("rowheader", { name: "skill-11" })).toBeNull();
+    expect(within(section).queryByRole("rowheader", { name: "skill-10" })).toBeNull();
 
     await user.selectOptions(grouping, "issue_category");
     expect(within(section).getByRole("columnheader", { name: "Category" })).toBeVisible();

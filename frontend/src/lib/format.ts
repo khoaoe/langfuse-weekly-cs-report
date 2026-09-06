@@ -56,6 +56,10 @@ export function formatRateAxis(value: number): string {
  */
 export const PERCENTAGE_SAMPLE_MINIMUM = 20;
 
+export function share(count: number, total: number): number {
+  return total === 0 ? 0 : count / total;
+}
+
 /**
  * Renders "count · rate" when the denominator clears the small-sample
  * threshold, or just the raw count when it doesn't.

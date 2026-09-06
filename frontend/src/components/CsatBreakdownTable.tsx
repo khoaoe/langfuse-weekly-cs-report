@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { CsatWeek, Outcome } from "../lib/dashboard-schema";
 import { OUTCOME_FILTER_LABELS } from "../lib/dashboard-filters";
-import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate } from "../lib/format";
+import { PERCENTAGE_SAMPLE_MINIMUM, formatCount, formatRate, share } from "../lib/format";
 import { FilterValueButton } from "./FilterValueButton";
 import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
@@ -34,6 +34,27 @@ export function csatGroupingLabel(grouping: CsatGrouping): string {
 }
 
 /**
+ * Worst-first ranking shared by every breakdown table/chart: groups too small
+ * to carry a rate sink below the ranked ones rather than topping the ranking
+ * on one bad rating from a handful of tickets.
+ */
+export function sortBreakdownRows<
+  R extends { readonly ticket_count: number; readonly negative: number },
+>(rows: readonly R[]): R[] {
+  return [...rows].sort((left, right) => {
+    const leftSmall = left.ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
+    const rightSmall = right.ticket_count < PERCENTAGE_SAMPLE_MINIMUM;
+    if (leftSmall !== rightSmall) {
+      return leftSmall ? 1 : -1;
+    }
+    return (
+      share(right.negative, right.ticket_count) - share(left.negative, left.ticket_count) ||
+      right.ticket_count - left.ticket_count
+    );
+  });
+}
+
+/**
  * The rows behind one grouping, at response grain wherever the payload carries
  * it. Exported so the chart above the table and the table itself read from one
  * implementation and can never disagree about a group's numbers.
@@ -47,9 +68,10 @@ export function rowsFor(data: CsatWeek, grouping: CsatGrouping): BreakdownRow[] 
         : [{ value: outcome, label: OUTCOME_FILTER_LABELS[outcome] ?? outcome, ...counts }];
     });
   }
-  return (data.response_by_dimension ?? data.by_dimension)[grouping]
+  const rows = (data.response_by_dimension ?? data.by_dimension)[grouping]
     .filter((row) => row.ticket_count > 0)
     .map((row) => ({ ...row, label: row.value }));
+  return sortBreakdownRows(rows);
 }
 
 export function csatBreakdownOptions(
