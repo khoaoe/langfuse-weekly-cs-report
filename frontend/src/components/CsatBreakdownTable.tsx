@@ -192,7 +192,7 @@ function csatSortColumns(groupingLabel: string): readonly CsatSortColumn[] {
     },
     {
       key: "positive",
-      label: "Rất hài lòng",
+      label: "Rất hài lòng (n)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.positive}`,
@@ -200,7 +200,7 @@ function csatSortColumns(groupingLabel: string): readonly CsatSortColumn[] {
     },
     {
       key: "neutral",
-      label: "Bình thường",
+      label: "Bình thường (n)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.neutral}`,
@@ -208,7 +208,7 @@ function csatSortColumns(groupingLabel: string): readonly CsatSortColumn[] {
     },
     {
       key: "negative",
-      label: "Rất tệ",
+      label: "Rất tệ (n)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.negative}`,

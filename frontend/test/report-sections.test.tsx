@@ -978,9 +978,9 @@ describe("Below-fold analysis", () => {
       "Kết quả xử lý",
       "Tỉ lệ",
       "Phản hồi có đánh giá",
-      "Rất hài lòng",
-      "Bình thường",
-      "Rất tệ",
+      "Rất hài lòng (n)",
+      "Bình thường (n)",
+      "Rất tệ (n)",
       "Rất tệ (%)",
     ]);
     const totalRow = within(section).getByRole("row", { name: /Tổng/ });
@@ -1206,16 +1206,16 @@ describe("Below-fold analysis", () => {
       "Kết quả xử lý",
       "Tỉ lệ",
       "Phản hồi có đánh giá",
-      "Rất hài lòng",
-      "Bình thường",
-      "Rất tệ",
+      "Rất hài lòng (n)",
+      "Bình thường (n)",
+      "Rất tệ (n)",
       "Rất tệ (%)",
     ]);
     expect(within(section).getByRole("row", { name: /Tổng/ })).toHaveTextContent(
       "20 ticket14",
     );
     expect(
-      within(section).getByRole("columnheader", { name: "Bình thường" }),
+      within(section).getByRole("columnheader", { name: "Bình thường (n)" }),
     ).toBeVisible();
     expect(
       within(section).getByRole("button", {
