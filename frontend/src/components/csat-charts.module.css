@@ -168,18 +168,16 @@
 
 .groupList {
   display: grid;
-  gap: var(--space-3);
+  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 2.6fr) max-content;
+  gap: var(--space-3) var(--space-3);
+  align-items: center;
   margin: var(--space-2) 0 0;
   padding: 0;
   list-style: none;
 }
 
 .groupRow {
-  display: grid;
-  grid-template-columns: minmax(120px, 1.1fr) minmax(140px, 2.6fr) auto;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
+  display: contents;
 }
 
 .groupRow .bar {
@@ -201,8 +199,14 @@
 }
 
 @media (max-width: 700px) {
+  .groupList {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .groupRow {
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
   }
 
   .groupRow .bar {
