@@ -165,10 +165,17 @@ _SPA_ROOT = _STATIC_ROOT / "spa"
 _SPA_ASSET_DIRECTORY = "assets"
 _ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+\Z")
 _FRONTEND_MODES = frozenset({"spa", "legacy"})
-_REFRESH_DEADLINE_ENV = "DASHBOARD_REFRESH_DEADLINE_SECONDS"
+# Renamed from DASHBOARD_REFRESH_DEADLINE_SECONDS on 2026-09-08. A measured
+# refresh needs ~790s (2,767 Langfuse pages against a ~3.5 pages/s server
+# ceiling), so the deployed 300s could never finish and the dashboard never
+# left "loading". The budget belongs in the image (see Dockerfile), not in a
+# hand-set Agent Base variable that silently overrides it -- renaming is what
+# makes the stale 300s inert. Delete that variable on Agent Base when
+# convenient; nothing reads it any more.
+_REFRESH_DEADLINE_ENV = "DASHBOARD_REFRESH_BUDGET_SECONDS"
 _TRACE_PAGE_LIMIT_ENV = "DASHBOARD_MAX_TRACE_PAGES"
 _BACKGROUND_REFRESH_ENV = "DASHBOARD_BACKGROUND_REFRESH"
-_REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400"
+_REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_BUDGET_SECONDS must be between 30 and 2400"
 _TRACE_PAGE_LIMIT_ERROR = "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500"
 
 # Hashed build output is immutable for its lifetime, but it is only ever served

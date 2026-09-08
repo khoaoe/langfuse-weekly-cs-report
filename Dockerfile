@@ -34,10 +34,17 @@ RUN UV_PROJECT_ENVIRONMENT=/opt/venv uv sync --locked --no-dev --compile-bytecod
 
 FROM python:3.11.15-slim-bookworm@sha256:b18992999dbe963a45a8a4da40ac2b1975be1a776d939d098c647482bcad5cba AS runtime
 
+# DASHBOARD_REFRESH_BUDGET_SECONDS is a ceiling, not a duration -- a refresh
+# exits when it finishes. One measured 12-week refresh fetches 2,767 Langfuse
+# pages against a ~3.5 pages/s server ceiling (~790s), and the single lane
+# `skill_guardrail_checked` alone pages 516 times strictly sequentially, so a
+# contended run can approach ~1000s. 1800 leaves real headroom; the old 300
+# aborted every run mid-crawl.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DASHBOARD_RUNTIME_DIR=/app/runtime \
     DASHBOARD_FRONTEND_MODE=spa \
+    DASHBOARD_REFRESH_BUDGET_SECONDS=1800 \
     PATH=/opt/venv/bin:$PATH
 
 WORKDIR /app

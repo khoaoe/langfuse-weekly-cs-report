@@ -1893,7 +1893,7 @@ def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch)
     monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
     monkeypatch.setenv("DASHBOARD_IDENTITY_HEADER", IDENTITY_HEADER)
     monkeypatch.setenv("DASHBOARD_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setenv("DASHBOARD_REFRESH_DEADLINE_SECONDS", "2400")
+    monkeypatch.setenv("DASHBOARD_REFRESH_BUDGET_SECONDS", "2400")
     monkeypatch.setenv("DASHBOARD_MAX_TRACE_PAGES", "7")
 
     assert main([]) == 0
@@ -1906,14 +1906,14 @@ def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch)
     ("name", "value", "message"),
     [
         (
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS",
+            "DASHBOARD_REFRESH_BUDGET_SECONDS",
             "29",
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400",
+            "DASHBOARD_REFRESH_BUDGET_SECONDS must be between 30 and 2400",
         ),
         (
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS",
+            "DASHBOARD_REFRESH_BUDGET_SECONDS",
             "2401",
-            "DASHBOARD_REFRESH_DEADLINE_SECONDS must be between 30 and 2400",
+            "DASHBOARD_REFRESH_BUDGET_SECONDS must be between 30 and 2400",
         ),
         (
             "DASHBOARD_MAX_TRACE_PAGES",
