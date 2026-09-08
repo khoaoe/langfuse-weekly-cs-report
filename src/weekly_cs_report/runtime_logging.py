@@ -17,6 +17,16 @@ _EVENT_FIELDS = {
     "service_start": frozenset(),
     "service_stop": frozenset(),
     "snapshot_load_ignored": frozenset({"code"}),
+    "csat_cache_load_ignored": frozenset({"code"}),
+    "outcome_reconciliation_cache_load_ignored": frozenset({"code"}),
+    "entry_coverage_cache_load_ignored": frozenset({"code"}),
+    "ai_review_cache_load_ignored": frozenset({"code"}),
+    "ab_test_cache_load_ignored": frozenset({"code"}),
+    "ab_test_cache_write_ignored": frozenset({"code"}),
+    "model_list_cache_load_ignored": frozenset({"code"}),
+    "model_list_cache_write_ignored": frozenset({"code"}),
+    "model_seen_cache_load_ignored": frozenset({"code"}),
+    "model_seen_cache_write_ignored": frozenset({"code"}),
     "enrichment_incomplete": frozenset({"failed_lanes", "observation_count"}),
     "refresh_start": frozenset({"has_snapshot"}),
     "refresh_success": frozenset(
@@ -44,6 +54,16 @@ _FIXED_CODES = {
     "snapshot_load_ignored": frozenset(
         {"invalid_snapshot", "incomplete_enrichment"}
     ),
+    "csat_cache_load_ignored": frozenset({"invalid_cache"}),
+    "outcome_reconciliation_cache_load_ignored": frozenset({"invalid_cache"}),
+    "entry_coverage_cache_load_ignored": frozenset({"invalid_cache"}),
+    "ai_review_cache_load_ignored": frozenset({"invalid_cache"}),
+    "ab_test_cache_load_ignored": frozenset({"invalid_cache"}),
+    "ab_test_cache_write_ignored": frozenset({"write_failed"}),
+    "model_list_cache_load_ignored": frozenset({"invalid_cache"}),
+    "model_list_cache_write_ignored": frozenset({"write_failed"}),
+    "model_seen_cache_load_ignored": frozenset({"invalid_cache"}),
+    "model_seen_cache_write_ignored": frozenset({"write_failed"}),
     "refresh_failure": frozenset(
         {"langfuse_unavailable", "data_validation_failed", "refresh_failed"}
     ),
