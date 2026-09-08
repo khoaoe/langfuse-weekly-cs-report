@@ -34,7 +34,10 @@ class AIReviewLabelConfig:
     def slug_for(self, raw_label: str) -> str:
         slug = self.rating_labels.get(raw_label)
         if slug is None:
-            raise AIReviewError("Freshdesk AI review rating label is not approved")
+            raise AIReviewError(
+                "Freshdesk AI review rating label is not approved: "
+                f"{_quoted(raw_label)}"
+            )
         return slug
 
 
@@ -138,6 +141,14 @@ def load_ai_review_label_config(path: Path) -> AIReviewLabelConfig:
     return AIReviewLabelConfig(rating_labels=dict(raw_labels))
 
 
+def _quoted(raw: object) -> str:
+    # These are Freshdesk dropdown labels, not free text, so naming the
+    # offending value is safe and is the only way a fail-closed abort is
+    # diagnosable. Truncated in case the field ever carries something longer.
+    text = raw if isinstance(raw, str) else repr(raw)
+    return f"{text[:60]!r}"
+
+
 def parse_reopen_status(raw: str) -> tuple[bool, int | None]:
     if raw == _REOPEN_NOT_REPLIED:
         return False, None
@@ -145,10 +156,10 @@ def parse_reopen_status(raw: str) -> tuple[bool, int | None]:
         return True, None
     match = _REOPEN_REPLIED_N.fullmatch(raw)
     if match is None:
-        raise AIReviewError("Freshdesk AI reopen status is invalid")
+        raise AIReviewError(f"Freshdesk AI reopen status is invalid: {_quoted(raw)}")
     count = int(match.group(1))
     if not 1 <= count <= 20:
-        raise AIReviewError("Freshdesk AI reopen status is invalid")
+        raise AIReviewError(f"Freshdesk AI reopen status is invalid: {_quoted(raw)}")
     return True, count
 
 
@@ -157,7 +168,9 @@ def parse_user_replied(raw: str) -> bool:
         return True
     if raw == _USER_NOT_REPLIED:
         return False
-    raise AIReviewError("Freshdesk AI user-replied status is invalid")
+    raise AIReviewError(
+        f"Freshdesk AI user-replied status is invalid: {_quoted(raw)}"
+    )
 
 
 def build_ai_review_record(
@@ -172,7 +185,10 @@ def build_ai_review_record(
     review_count = None
     if ticket.ai_review_count_raw is not None:
         if not ticket.ai_review_count_raw.isdigit():
-            raise AIReviewError("Freshdesk AI review count is invalid")
+            raise AIReviewError(
+                "Freshdesk AI review count is invalid: "
+                f"{_quoted(ticket.ai_review_count_raw)}"
+            )
         review_count = int(ticket.ai_review_count_raw)
     reopen_replied: bool | None = None
     reopen_reply_count: int | None = None
