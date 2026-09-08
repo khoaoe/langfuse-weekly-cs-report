@@ -28,6 +28,8 @@ function csatWeek(overrides: Partial<CsatWeek> = {}): CsatWeek {
 const emptyAiCounts = {
   reviewed_ticket_count: 0,
   rated_ticket_count: 0,
+  evaluated_ticket_count: 0,
+  unrated_reviewed_ticket_count: 0,
   satisfied_count: 0,
   satisfied_with_edit_count: 0,
   needs_edit_count: 0,
@@ -74,9 +76,9 @@ describe("AI review aiReviewRowsFor sort order", () => {
     const data = aiReviewBucket({
       by_dimension: {
         skill: [
-          { value: "skill-a", ...emptyAiCounts, reviewed_ticket_count: 30, rated_ticket_count: 30, needs_edit_count: 6 },
-          { value: "skill-b", ...emptyAiCounts, reviewed_ticket_count: 25, rated_ticket_count: 25, needs_edit_count: 15 },
-          { value: "skill-c", ...emptyAiCounts, reviewed_ticket_count: 5, rated_ticket_count: 5, needs_edit_count: 5 },
+          { value: "skill-a", ...emptyAiCounts, reviewed_ticket_count: 30, rated_ticket_count: 30, evaluated_ticket_count: 30, needs_edit_count: 6 },
+          { value: "skill-b", ...emptyAiCounts, reviewed_ticket_count: 25, rated_ticket_count: 25, evaluated_ticket_count: 25, needs_edit_count: 15 },
+          { value: "skill-c", ...emptyAiCounts, reviewed_ticket_count: 5, rated_ticket_count: 5, evaluated_ticket_count: 5, needs_edit_count: 5 },
         ],
         issue_category: [],
         app: [],

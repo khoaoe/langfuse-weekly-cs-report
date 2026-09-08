@@ -19,7 +19,7 @@ import stat
 import tempfile
 
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 _CACHE_KEYS = {"schema_version", "generated_at", "arms_key", "payload"}
 
 

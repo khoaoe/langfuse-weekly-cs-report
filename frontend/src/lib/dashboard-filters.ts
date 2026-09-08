@@ -71,7 +71,7 @@ const FILTER_LABELS: Readonly<
   >
 > = {
   ticket_id: "Ticket ID",
-  csat_satisfaction: "CSAT",
+  csat_satisfaction: "Khách hàng đánh giá",
   issue_category: "Category",
   app: "App",
   product_code: "Product Code",

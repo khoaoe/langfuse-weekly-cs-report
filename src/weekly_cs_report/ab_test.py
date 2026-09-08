@@ -75,6 +75,10 @@ class ArmMetrics:
     csat_response_count: int
     csat_positive_count: int
     csat_negative_count: int
+    ai_review_rated_count: int
+    ai_review_satisfied_count: int
+    ai_review_satisfied_with_edit_count: int
+    ai_review_needs_edit_count: int
 
 
 @dataclass(frozen=True)
@@ -359,6 +363,7 @@ def aggregate_ab_snapshot(
     llm_rows: Sequence[Mapping[str, object]] = (),
     llm_daily_rows: Sequence[Mapping[str, object]] = (),
     csat_by_ticket: Mapping[str, str] | None = None,
+    ai_review_by_ticket: Mapping[str, str] | None = None,
     trace_enrichment: Mapping[str, TraceEnrichment] = MappingProxyType({}),
     arms: Sequence[str] | None = None,
 ) -> AbTestSnapshot:
@@ -407,6 +412,15 @@ def aggregate_ab_snapshot(
             if csat_by_ticket
             else []
         )
+        ai_review_ratings = (
+            [
+                ai_review_by_ticket[row.ticket_id]
+                for row in rows
+                if row.ticket_id in ai_review_by_ticket
+            ]
+            if ai_review_by_ticket
+            else []
+        )
         result_arms.append(
             ArmMetrics(
                 arm=arm,
@@ -436,6 +450,16 @@ def aggregate_ab_snapshot(
                 ),
                 csat_negative_count=sum(
                     bucket == "negative" for bucket in csat_buckets
+                ),
+                ai_review_rated_count=len(ai_review_ratings),
+                ai_review_satisfied_count=sum(
+                    rating == "satisfied" for rating in ai_review_ratings
+                ),
+                ai_review_satisfied_with_edit_count=sum(
+                    rating == "satisfied_with_edit" for rating in ai_review_ratings
+                ),
+                ai_review_needs_edit_count=sum(
+                    rating == "needs_edit" for rating in ai_review_ratings
                 ),
             )
         )
@@ -570,6 +594,7 @@ def compute_ab_test(
     taxonomy: Taxonomy,
     *,
     csat_by_ticket: Mapping[str, str] | None = None,
+    ai_review_by_ticket: Mapping[str, str] | None = None,
     deadline: float | None = None,
     arms: Sequence[str] | None = None,
 ) -> AbTestSnapshot:
@@ -619,6 +644,7 @@ def compute_ab_test(
         llm_rows=llm_rows,
         llm_daily_rows=llm_daily_rows,
         csat_by_ticket=csat_by_ticket,
+        ai_review_by_ticket=ai_review_by_ticket,
         trace_enrichment=trace_enrichment,
         arms=arms,
     )

@@ -8,10 +8,6 @@ import httpx
 import pytest
 
 from weekly_cs_report.dashboard_schema import TicketRow
-from weekly_cs_report.entry_coverage_cache import (
-    EntryCoverageCache,
-    EntryCoverageRecord,
-)
 from weekly_cs_report.freshdesk_csat import (
     FreshdeskCSATError,
     FreshdeskClient,
@@ -22,7 +18,6 @@ from weekly_cs_report.freshdesk_entry_coverage import (
     FreshdeskEntryCoverageError,
     FreshdeskTicketMetadata,
     classify_entry_coverage,
-    fetch_entry_coverage_population,
 )
 from weekly_cs_report.outcome_reconciliation import (
     ConversationMetadata,
@@ -125,39 +120,12 @@ def test_matched_langfuse_ticket_states_stay_distinct(
     assert result.human_replied is human_replied
 
 
-@pytest.mark.parametrize(
-    ("conversations", "expected", "human_replied"),
-    [
-        ((_conversation(1, HUMAN),), "not_observed_invoked", True),
-        ((), "not_observed_invoked", False),
-        ((_conversation(1, BOT),), "unresolved", None),
-        ((_conversation(1, UNKNOWN),), "unresolved", None),
-        ((_conversation(1, EXCLUDED),), "not_observed_invoked", False),
-        ((_conversation(1, HUMAN, incoming=True),), "not_observed_invoked", False),
-        ((_conversation(1, HUMAN, private=True),), "not_observed_invoked", False),
-        ((_conversation(1, HUMAN, source=6),), "not_observed_invoked", False),
-    ],
-)
-def test_unmatched_ticket_states_do_not_merge_invoked_no_result(
-    conversations: tuple[ConversationMetadata, ...],
-    expected: EntryCoverageStatus,
-    human_replied: bool | None,
-):
-    result = classify_entry_coverage(_freshdesk_ticket(), None, conversations, _config())
-    assert result.status == expected
-    assert result.human_replied is human_replied
+def test_classify_entry_coverage_requires_a_known_langfuse_ticket():
+    """Population is Langfuse-scoped now (PO, 2026-09-07); a ticket the
+    caller can't attach a `TicketRow` to is a caller bug, not a status."""
 
-
-@pytest.mark.parametrize("category", [1, 2, 5, 7])
-def test_non_agent_conversation_categories_do_not_count_as_public_replies(category: int):
-    result = classify_entry_coverage(
-        _freshdesk_ticket(),
-        None,
-        (_conversation(1, HUMAN, category=category),),
-        _config(),
-    )
-    assert result.status == "not_observed_invoked"
-    assert result.human_replied is False
+    with pytest.raises(FreshdeskEntryCoverageError):
+        classify_entry_coverage(_freshdesk_ticket(), None, (), _config())
 
 
 def test_matched_invoked_no_result_unknown_outgoing_stays_matched():
@@ -318,79 +286,3 @@ def test_list_ticket_metadata_resumes_past_prior_call_page_budget():
 
     assert requests == ["301"]
     assert [item.ticket_id for item in result] == ["1301"]
-
-
-def test_incremental_entry_coverage_skips_records_already_checkpointed():
-    tickets = (
-        FreshdeskTicketMetadata("123", "2026-07-06T01:00:00Z"),
-        FreshdeskTicketMetadata("456", "2026-07-06T02:00:00Z"),
-    )
-    resumed = EntryCoverageRecord(
-        ticket_id="123",
-        opened_at="2026-07-06T01:00:00Z",
-        cohort_week="2026-07-06",
-        status="invoked_no_result",
-        human_replied=False,
-    )
-    calls: list[str] = []
-
-    class Client:
-        def get_conversation_metadata(self, ticket_id: str, *, should_stop=None):
-            calls.append(ticket_id)
-            return (_conversation(1, HUMAN),)
-
-    result = fetch_entry_coverage_population(
-        Client(),
-        tickets,
-        {},
-        ("2026-07-06",),
-        _config(),
-        existing=EntryCoverageCache(fetched_weeks={}, records=()),
-        resume_records=(resumed,),
-        resume_week="2026-07-06",
-        resume_index=1,
-        as_of=datetime(2026, 8, 4, 12, tzinfo=timezone.utc),
-        max_workers=1,
-    )
-
-    assert result.complete is True
-    assert calls == ["456"]
-    assert {item.ticket_id for item in result.cache.records} == {"123", "456"}
-
-
-def test_incremental_entry_coverage_refetches_recent_week_and_keeps_old_week():
-    current = FreshdeskTicketMetadata("123", "2026-08-03T01:00:00Z")
-    old = EntryCoverageRecord(
-        ticket_id="999",
-        opened_at="2026-07-13T01:00:00Z",
-        cohort_week="2026-07-13",
-        status="not_observed_invoked",
-        human_replied=False,
-    )
-    existing = EntryCoverageCache(
-        fetched_weeks={"2026-07-13": "2026-08-03T01:00:00Z"},
-        records=(old,),
-    )
-    calls: list[str] = []
-
-    class Client:
-        def get_conversation_metadata(self, ticket_id: str, *, should_stop=None):
-            calls.append(ticket_id)
-            return (_conversation(1, HUMAN),)
-
-    result = fetch_entry_coverage_population(
-        Client(),
-        (current,),
-        {},
-        ("2026-07-13", "2026-08-03"),
-        _config(),
-        existing=existing,
-        as_of=datetime(2026, 8, 4, 12, tzinfo=timezone.utc),
-        max_workers=1,
-    )
-
-    assert result.complete is True
-    assert result.completed_weeks == ("2026-08-03",)
-    assert calls == ["123"]
-    assert set(result.cache.fetched_weeks) == {"2026-07-13", "2026-08-03"}
-    assert {item.ticket_id for item in result.cache.records} == {"123", "999"}

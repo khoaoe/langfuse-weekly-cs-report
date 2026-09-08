@@ -26,6 +26,10 @@ const ArmMetricsSchema = z
     csat_response_count: z.number().int().nonnegative(),
     csat_positive_count: z.number().int().nonnegative(),
     csat_negative_count: z.number().int().nonnegative(),
+    ai_review_rated_count: z.number().int().nonnegative(),
+    ai_review_satisfied_count: z.number().int().nonnegative(),
+    ai_review_satisfied_with_edit_count: z.number().int().nonnegative(),
+    ai_review_needs_edit_count: z.number().int().nonnegative(),
   })
   .strict();
 

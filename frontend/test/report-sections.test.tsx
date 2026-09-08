@@ -220,11 +220,7 @@ function coverageBucket(
     ai_replied_only: 1,
     ai_replied_then_transferred: 0,
     transferred_without_ai_reply: 0,
-    invoked_no_result: 1,
-    not_observed_invoked: 2,
-    not_observed_human_replied: 1,
-    not_observed_no_human_reply: 1,
-    unresolved: 0,
+    invoked_no_result: 3,
     ...overrides,
   };
 }
@@ -442,6 +438,12 @@ describe("Weekly Report", () => {
       "1,23",
       "17",
       "19",
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
+      "—",
     ]);
   });
 
@@ -538,7 +540,7 @@ describe("Below-fold analysis", () => {
               ticket_id: "7043723",
               opened_at: "2026-07-21T02:00:00Z",
               cohort_week: "2026-07-20",
-              status: "not_observed_invoked",
+              status: "invoked_no_result",
               human_replied: true,
             },
           ],
@@ -554,13 +556,11 @@ describe("Below-fold analysis", () => {
     const section = screen.getByRole("region", {
       name: "Độ phủ xử lý từ Freshdesk",
     });
-    expect(within(section).getByText("Không thấy lần gọi CS-agent")).toBeVisible();
     expect(within(section).getByText("Đã gọi nhưng không có phản hồi/chuyển CS")).toBeVisible();
-    expect(within(section).getByText("CS người đã phản hồi trực tiếp: 1")).toBeVisible();
-    expect(within(section).getAllByRole("button", { name: "Xem ticket" })).toHaveLength(3);
+    expect(within(section).getAllByRole("button", { name: "Xem ticket" })).toHaveLength(1);
 
     await user.click(
-      within(section).getAllByRole("button", { name: "Xem ticket" })[1]!,
+      within(section).getAllByRole("button", { name: "Xem ticket" })[0]!,
     );
     expect(await within(section).findByRole("table")).toHaveTextContent("7043723");
     expect(within(section).getByText("Trang 1 · 1 ticket")).toBeVisible();
@@ -978,9 +978,8 @@ describe("Below-fold analysis", () => {
       "Kết quả xử lý",
       "Tỉ lệ",
       "Phản hồi có đánh giá",
-      "Rất hài lòng (n)",
-      "Bình thường (n)",
-      "Rất tệ (n)",
+      "Rất hài lòng (%)",
+      "Bình thường (%)",
       "Rất tệ (%)",
     ]);
     const totalRow = within(section).getByRole("row", { name: /Tổng/ });
@@ -1056,11 +1055,11 @@ describe("Below-fold analysis", () => {
       const totalRow = within(section).getByRole("row", { name: /Tổng/ });
       expect(within(totalRow).getAllByRole("cell").map(
         (cell) => cell.textContent,
-      )).toEqual(["", "12 phản hồi12 ticket", "7", "3", "2", "—"]);
+      )).toEqual(["", "12 phản hồi12 ticket", "—", "—", "—"]);
       const outcomeRow = within(section).getByRole("row", { name: /AI xử lý trọn/ });
       expect(within(outcomeRow).getAllByRole("cell").map(
         (cell) => cell.textContent,
-      )).toEqual(["", "12Mẫu nhỏ", "7", "3", "2", "—"]);
+      )).toEqual(["", "12Mẫu nhỏ", "—", "—", "—"]);
       // Below the sample floor every rate cell is a dash, not a number -- the
       // "(%)" column header is a static label, not a rendered percentage.
       for (const row of [totalRow, outcomeRow]) {
@@ -1206,16 +1205,15 @@ describe("Below-fold analysis", () => {
       "Kết quả xử lý",
       "Tỉ lệ",
       "Phản hồi có đánh giá",
-      "Rất hài lòng (n)",
-      "Bình thường (n)",
-      "Rất tệ (n)",
+      "Rất hài lòng (%)",
+      "Bình thường (%)",
       "Rất tệ (%)",
     ]);
     expect(within(section).getByRole("row", { name: /Tổng/ })).toHaveTextContent(
-      "20 ticket14",
+      "20 ticket70,0%",
     );
     expect(
-      within(section).getByRole("columnheader", { name: "Bình thường (n)" }),
+      within(section).getByRole("columnheader", { name: "Bình thường (%)" }),
     ).toBeVisible();
     expect(
       within(section).getByRole("button", {
@@ -1232,7 +1230,7 @@ describe("Below-fold analysis", () => {
 
     expect(
       within(allPeriodSection).getByRole("row", { name: /Tổng/ }),
-    ).toHaveTextContent("29 ticket195517,2%");
+    ).toHaveTextContent("29 ticket65,5%17,2%17,2%");
     expect(
       within(allPeriodSection).getByRole("button", {
         name: "Xem 2 nội dung phản hồi",
@@ -2037,6 +2035,7 @@ describe("Ticket Explorer", () => {
       data_quality: "valid" as const,
       model_core: null,
       tool_error_codes: [],
+      ai_review_rating: null,
     };
     const tickets = states.map((state, index) => ({
       ...baseTicket,
@@ -2074,7 +2073,7 @@ describe("Ticket Explorer", () => {
       screen.getByRole("region", { name: "5 ticket khớp bộ lọc." }),
     ).toBeVisible();
     const headers = within(table).getAllByRole("columnheader").map((header) => header.textContent);
-    expect(headers.indexOf("CSAT")).toBe(headers.indexOf("Kết quả") + 1);
+    expect(headers.indexOf("Khách hàng đánh giá")).toBe(headers.indexOf("Kết quả") + 1);
     for (const label of labels.filter((item) => item !== "—")) {
       expect(within(table).getByText(label)).toBeVisible();
     }
@@ -2092,7 +2091,7 @@ describe("Ticket Explorer", () => {
       user,
       document.body,
       "csatSatisfactionInput",
-      "CSAT",
+      "Khách hàng đánh giá",
       "Rất tệ",
     );
     await waitFor(() => {
@@ -2100,7 +2099,7 @@ describe("Ticket Explorer", () => {
     });
     expect(screen.getByRole("region", {
       name: "Bộ lọc đang áp dụng trong Ticket Explorer",
-    })).toHaveTextContent("CSAT: Rất tệ");
+    })).toHaveTextContent("Khách hàng đánh giá: Rất tệ");
     expect(await within(table).findByText("Rất tệ")).toBeVisible();
     expect(within(table).queryByText("Rất hài lòng")).toBeNull();
 
@@ -2108,10 +2107,10 @@ describe("Ticket Explorer", () => {
       user,
       document.body,
       "csatSatisfactionInput",
-      "CSAT",
+      "Khách hàng đánh giá",
       "Rất tệ",
     );
-    expect(multiSelectSummaryText(document.body, "CSAT")).toBe("Tất cả");
+    expect(multiSelectSummaryText(document.body, "Khách hàng đánh giá")).toBe("Tất cả");
     await waitFor(() => expect(within(table).getByText("Rất hài lòng")).toBeVisible());
 
     await toggleMultiSelectOption(
@@ -2180,6 +2179,7 @@ describe("Ticket Explorer", () => {
               data_quality: "valid",
               model_core: null,
               tool_error_codes: [],
+              ai_review_rating: null,
             },
           ],
           page: 1,
@@ -2454,6 +2454,7 @@ describe("Ticket Explorer", () => {
               data_quality: "missing_turn0",
               model_core: null,
               tool_error_codes: [],
+              ai_review_rating: null,
             },
           ],
           page: 1,

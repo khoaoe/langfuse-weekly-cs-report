@@ -360,13 +360,16 @@ class SnapshotManager:
                 error_code = "refresh_failed"
         except Exception as error:
             error_code = _error_code(error)
+            error_detail = _error_detail(error)
             if persistence_attempted and candidate_snapshot is not None:
                 failure_snapshot, restored = self._rollback_or_align_persisted_snapshot(
                     previous_snapshot
                 )
                 if not restored:
                     error_code = "refresh_failed"
-            if not _emit_event_safely("refresh_failure", code=error_code):
+            if not _emit_event_safely(
+                "refresh_failure", code=error_code, detail=error_detail
+            ):
                 error_code = "refresh_failed"
         else:
             try:
@@ -487,6 +490,17 @@ def _error_code(error: Exception) -> str:
     if isinstance(error, (ValueError, InvariantError)):
         return "data_validation_failed"
     return "refresh_failed"
+
+
+def _error_detail(error: Exception) -> str:
+    """Non-sensitive diagnostic string: exception type plus Langfuse call info."""
+
+    if isinstance(error, LangfuseAPIError):
+        return (
+            f"{type(error).__name__} status={error.status_code} "
+            f"method={error.method} path={error.path}"
+        )
+    return type(error).__name__
 
 
 def _emit_event_safely(event: str, **fields: object) -> bool:

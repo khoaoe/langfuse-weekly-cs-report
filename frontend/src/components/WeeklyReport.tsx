@@ -11,7 +11,9 @@ import type {
   WeekDefinition,
   WeeklyReportRow,
 } from "../lib/dashboard-schema";
-import { formatUpdatedAt } from "../lib/format";
+import { AI_REVIEW_RATING_LABELS } from "../lib/ai-review-labels";
+import { CSAT_SATISFACTION_LABELS } from "../lib/csat-labels";
+import { formatRate, formatUpdatedAt, share } from "../lib/format";
 import { COHORT_LABELS, selectView, selectWeekly } from "../lib/selectors";
 import {
   stableSortRows,
@@ -35,9 +37,72 @@ interface WeeklyTableRow {
   readonly cells: readonly string[];
   readonly isCurrentWeek: boolean;
   readonly source: WeeklyReportRow;
+  readonly ratings: RatingRates;
 }
 
 const columnHelper = createColumnHelper<WeeklyTableRow>();
+
+/** Screen-only percentage columns, kept out of the frozen export contract. */
+interface RatingRates {
+  readonly csat_positive: string;
+  readonly csat_neutral: string;
+  readonly csat_negative: string;
+  readonly ai_review_satisfied: string;
+  readonly ai_review_satisfied_with_edit: string;
+  readonly ai_review_needs_edit: string;
+}
+
+interface RatingColumn {
+  readonly key: keyof RatingRates;
+  readonly label: string;
+}
+
+const RATING_COLUMNS: readonly RatingColumn[] = [
+  { key: "csat_positive", label: CSAT_SATISFACTION_LABELS.positive },
+  { key: "csat_neutral", label: CSAT_SATISFACTION_LABELS.neutral },
+  { key: "csat_negative", label: CSAT_SATISFACTION_LABELS.negative },
+  { key: "ai_review_satisfied", label: AI_REVIEW_RATING_LABELS.satisfied },
+  {
+    key: "ai_review_satisfied_with_edit",
+    label: AI_REVIEW_RATING_LABELS.satisfied_with_edit,
+  },
+  { key: "ai_review_needs_edit", label: AI_REVIEW_RATING_LABELS.needs_edit },
+];
+
+function ratingShare(count: number, denominator: number): string {
+  return denominator === 0 ? "—" : formatRate(share(count, denominator));
+}
+
+function weeklyRatings(
+  row: WeeklyReportRow,
+  view: ReturnType<typeof selectView>,
+): RatingRates {
+  const csat = view.csat?.by_week[row.cohort_week];
+  const aiReview = view.ai_review?.by_week[row.cohort_week];
+  return {
+    csat_positive:
+      csat === undefined ? "—" : ratingShare(csat.positive, csat.response_count),
+    csat_neutral:
+      csat === undefined ? "—" : ratingShare(csat.neutral, csat.response_count),
+    csat_negative:
+      csat === undefined ? "—" : ratingShare(csat.negative, csat.response_count),
+    ai_review_satisfied:
+      aiReview === undefined
+        ? "—"
+        : ratingShare(aiReview.satisfied_count, aiReview.rated_ticket_count),
+    ai_review_satisfied_with_edit:
+      aiReview === undefined
+        ? "—"
+        : ratingShare(
+            aiReview.satisfied_with_edit_count,
+            aiReview.rated_ticket_count,
+          ),
+    ai_review_needs_edit:
+      aiReview === undefined
+        ? "—"
+        : ratingShare(aiReview.needs_edit_count, aiReview.rated_ticket_count),
+  };
+}
 
 type WeeklySortKey =
   | "cohort_week"
@@ -179,6 +244,8 @@ const WEEKLY_COLUMN_GROUPS = [
   { label: "Phản hồi đầu tiên", span: 3 },
   { label: "Sau AI First", span: 2 },
   { label: "Kết quả xử lý", span: 6 },
+  { label: "Khách hàng đánh giá", span: 3 },
+  { label: "CS hậu kiểm", span: 3 },
 ] as const;
 
 const DEFAULT_WEEKLY_SORT: TableSort<WeeklySortKey> = {
@@ -248,8 +315,9 @@ export function WeeklyReport({
         ),
         isCurrentWeek: row.cohort_week === currentWeek,
         source: row,
+        ratings: weeklyRatings(row, view),
       })),
-    [currentWeek, weekly, weekDefinition, dayRangeWeekLabels],
+    [currentWeek, weekly, weekDefinition, dayRangeWeekLabels, view],
   );
 
   const rows = useMemo(() => {
@@ -269,13 +337,20 @@ export function WeeklyReport({
   }, [sort, sourceRows]);
 
   const columns = useMemo(
-    () =>
-      WEEKLY_SORT_COLUMNS.map((column) =>
+    () => [
+      ...WEEKLY_SORT_COLUMNS.map((column) =>
         columnHelper.accessor((row) => row.cells[column.exportIndex] ?? "—", {
           id: column.key,
           header: column.label,
         }),
       ),
+      ...RATING_COLUMNS.map((column) =>
+        columnHelper.accessor((row) => row.ratings[column.key], {
+          id: column.key,
+          header: column.label,
+        }),
+      ),
+    ],
     [],
   );
 

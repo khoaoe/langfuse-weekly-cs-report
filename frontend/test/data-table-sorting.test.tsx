@@ -217,6 +217,7 @@ describe("sorting bảng dữ liệu", () => {
               data_quality: "valid",
               model_core: null,
               tool_error_codes: [],
+              ai_review_rating: null,
             },
           ],
           page: 1,
@@ -276,7 +277,7 @@ describe("sorting bảng dữ liệu", () => {
     );
 
     await user.click(await screen.findByRole("button", {
-      name: /Sắp xếp theo CSAT/,
+      name: /Sắp xếp theo Khách hàng đánh giá/,
     }));
     await waitFor(() => expect(requestedSorts.at(-1)).toBe("csat_satisfaction"));
   });

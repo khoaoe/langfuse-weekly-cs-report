@@ -879,7 +879,11 @@ def test_loader_failure_logs_only_a_fixed_code(tmp_path: Path, caplog):
         for record in caplog.records
         if record.name == "weekly_cs_report.runtime"
     ]
-    assert {"event": "refresh_failure", "code": "refresh_failed"} in events
+    assert {
+        "event": "refresh_failure",
+        "code": "refresh_failed",
+        "detail": "RuntimeError",
+    } in events
     assert secret not in caplog.text
     assert "0901234567" not in caplog.text
     assert "trace-abc" not in caplog.text
@@ -903,7 +907,7 @@ def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path
     success = next(event for event in events if event["event"] == "refresh_success")
     assert success.items() >= {
         "event": "refresh_success",
-        "schema_version": 28,
+        "schema_version": 30,
         "ticket_count": 0,
         "trace_count": 0,
         "observation_count": 0,

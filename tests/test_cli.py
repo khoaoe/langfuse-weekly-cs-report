@@ -252,9 +252,9 @@ def test_entry_coverage_population_is_fixed_to_start_week(monkeypatch, tmp_path:
 
     monkeypatch.setattr("weekly_cs_report.dashboard_cache.ProtectedSnapshotStore", Store)
 
-    weeks, tickets = cli_module._entry_coverage_population(tmp_path / "runtime", 13)
+    population, tickets = cli_module._entry_coverage_population(tmp_path / "runtime", 13)
 
-    assert weeks == ("2026-07-06", "2026-07-13")
+    assert set(population) == {"2026-07-06", "2026-07-13"}
     assert tickets == {}
 
 
@@ -301,139 +301,8 @@ def test_csat_population_loads_the_protected_snapshot_store(monkeypatch, tmp_pat
     }
 
 
-def test_entry_coverage_command_publishes_only_after_inventory_and_coverage_complete(
-    monkeypatch, tmp_path: Path
-):
-    from weekly_cs_report import cli as cli_module
-    from weekly_cs_report.entry_coverage_cache import load_entry_coverage_cache
-    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
-    from weekly_cs_report.outcome_reconciliation import ReconciliationAgentConfig
-
-    runtime = tmp_path / "runtime"
-    selected_ticket = FreshdeskTicketMetadata("123", "2026-07-06T01:00:00Z")
-    monkeypatch.setattr(
-        cli_module,
-        "_entry_coverage_population",
-        lambda *_args: (("2026-07-06",), {}),
-    )
-    monkeypatch.setattr(cli_module, "_freshdesk_settings", lambda: object())
-    monkeypatch.setattr(
-        "weekly_cs_report.outcome_reconciliation.load_reconciliation_agent_config",
-        lambda *_args, **_kwargs: ReconciliationAgentConfig(
-            approved_by="PO",
-            approved_at="2026-08-03",
-            bot_agent_ids=frozenset({1}),
-            human_agent_ids=frozenset({2}),
-            excluded_agent_ids=frozenset({3}),
-            source_hash="sha256:" + "1" * 64,
-        ),
-    )
-
-    class FakeFreshdeskClient:
-        def __init__(self, _settings):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def list_ticket_metadata(self, **kwargs):
-            kwargs["on_page"]((selected_ticket,), 2, True)
-            return (selected_ticket,)
-
-        def get_conversation_metadata(self, _ticket_id, *, should_stop=None):
-            return ()
-
-    monkeypatch.setattr("weekly_cs_report.freshdesk_csat.FreshdeskClient", FakeFreshdeskClient)
-
-    result = cli_module._run_fetch_freshdesk_entry_coverage_command(
-        build_parser().parse_args(
-            [
-                "fetch-freshdesk-entry-coverage",
-                "--runtime-dir",
-                str(runtime),
-                "--weeks",
-                "13",
-                "--max-duration",
-                "60",
-                "--auth",
-                "rest",
-            ]
-        )
-    )
-
-    assert result["status"] == "complete"
-    cache = load_entry_coverage_cache(runtime / "entry_coverage_cache.json")
-    assert cache is not None
-    assert [record.ticket_id for record in cache.records] == ["123"]
-    checkpoint_dir = tmp_path / "artifacts" / "freshdesk_entry_coverage"
-    assert not (checkpoint_dir / "inventory_checkpoint.json").exists()
-    assert not (checkpoint_dir / "coverage_checkpoint.json").exists()
-
-
-def test_entry_coverage_command_resumes_inventory_after_rate_limit_checkpoint(
-    monkeypatch, tmp_path: Path
-):
-    from weekly_cs_report import cli as cli_module
-    from weekly_cs_report.entry_coverage_cache import load_entry_coverage_cache
-    from weekly_cs_report.freshdesk_csat import FreshdeskFetchDeadline
-    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
-    from weekly_cs_report.outcome_reconciliation import ReconciliationAgentConfig
-
-    runtime = tmp_path / "runtime"
-    first_ticket = FreshdeskTicketMetadata("123", "2026-07-06T01:00:00Z")
-    second_ticket = FreshdeskTicketMetadata("456", "2026-07-06T02:00:00Z")
-    monkeypatch.setattr(
-        cli_module,
-        "_entry_coverage_population",
-        lambda *_args: (("2026-07-06",), {}),
-    )
-    monkeypatch.setattr(cli_module, "_freshdesk_settings", lambda: object())
-    monkeypatch.setattr(
-        "weekly_cs_report.outcome_reconciliation.load_reconciliation_agent_config",
-        lambda *_args, **_kwargs: ReconciliationAgentConfig(
-            approved_by="PO",
-            approved_at="2026-08-03",
-            bot_agent_ids=frozenset({1}),
-            human_agent_ids=frozenset({2}),
-            excluded_agent_ids=frozenset({3}),
-            source_hash="sha256:" + "1" * 64,
-        ),
-    )
-
-    class ResumingFreshdeskClient:
-        attempts = 0
-        starts: list[int] = []
-
-        def __init__(self, _settings):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def list_ticket_metadata(self, **kwargs):
-            type(self).attempts += 1
-            type(self).starts.append(kwargs["start_page"])
-            if type(self).attempts == 1:
-                kwargs["on_page"]((first_ticket,), 2, False)
-                raise FreshdeskFetchDeadline("resume")
-            assert kwargs["existing"] == (first_ticket,)
-            kwargs["on_page"]((first_ticket, second_ticket), 3, True)
-            return (first_ticket, second_ticket)
-
-        def get_conversation_metadata(self, _ticket_id, *, should_stop=None):
-            return ()
-
-    monkeypatch.setattr(
-        "weekly_cs_report.freshdesk_csat.FreshdeskClient",
-        ResumingFreshdeskClient,
-    )
-    args = build_parser().parse_args(
+def _entry_coverage_args(runtime: Path, max_duration: str = "60"):
+    return build_parser().parse_args(
         [
             "fetch-freshdesk-entry-coverage",
             "--runtime-dir",
@@ -441,21 +310,190 @@ def test_entry_coverage_command_resumes_inventory_after_rate_limit_checkpoint(
             "--weeks",
             "13",
             "--max-duration",
-            "60",
+            max_duration,
             "--auth",
             "rest",
         ]
     )
 
-    first_result = cli_module._run_fetch_freshdesk_entry_coverage_command(args)
-    second_result = cli_module._run_fetch_freshdesk_entry_coverage_command(args)
 
-    assert first_result["status"] == "duration_limit_reached"
-    assert second_result["status"] == "complete"
-    assert ResumingFreshdeskClient.starts == [1, 2]
+def _entry_coverage_ticket_row(
+    ticket_id: str, cohort_week: str, *, ai_first: bool, transferred: bool
+):
+    from weekly_cs_report.dashboard_schema import TicketRow
+
+    return TicketRow(
+        ticket_id=ticket_id,
+        opened_at=f"{cohort_week}T01:00:00Z",
+        cohort_week=cohort_week,
+        cohort_status="wtd",
+        is_weekend_start=False,
+        outcome="ai_end_to_end" if ai_first and not transferred else "direct_cs",
+        ai_first=ai_first,
+        transferred=transferred,
+        reopen_lifetime=0,
+        reopen_within_7d=0,
+        ai_reply_count=1 if ai_first else 0,
+        turn_count=1,
+        gt4_turn=False,
+        issue_category="Thanh toán-IBFT",
+        app="241 - Chuyển Tiền ATM",
+        product_code="TF007 - IBFT",
+        skill=None,
+        intent=None,
+        tpe_code=None,
+        tpe_status=None,
+        guardrail_rule=None,
+        transfer_reason=None,
+        escalation_guard_blocked=False,
+        csat_satisfaction=None,
+        data_quality="valid",
+    )
+
+
+def _entry_coverage_agent_config():
+    from weekly_cs_report.outcome_reconciliation import ReconciliationAgentConfig
+
+    return ReconciliationAgentConfig(
+        approved_by="PO",
+        approved_at="2026-08-03",
+        bot_agent_ids=frozenset({1}),
+        human_agent_ids=frozenset({2}),
+        excluded_agent_ids=frozenset({3}),
+        source_hash="sha256:" + "1" * 64,
+    )
+
+
+def test_entry_coverage_command_fetches_the_population_by_ticket_id(
+    monkeypatch, tmp_path: Path
+):
+    """Population is Langfuse-scoped (PO, 2026-09-07): the job asks Freshdesk
+    only about tickets it already knows, never a search."""
+
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.entry_coverage_cache import load_entry_coverage_cache
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    tickets = {
+        "101": _entry_coverage_ticket_row(
+            "101", "2026-07-06", ai_first=True, transferred=False
+        ),
+        "102": _entry_coverage_ticket_row(
+            "102", "2026-07-06", ai_first=False, transferred=False
+        ),
+    }
+    monkeypatch.setattr(
+        cli_module,
+        "_entry_coverage_population",
+        lambda *_args: ({"2026-07-06": ("101", "102")}, tickets),
+    )
+    monkeypatch.setattr(
+        "weekly_cs_report.outcome_reconciliation.load_reconciliation_agent_config",
+        lambda *_args, **_kwargs: _entry_coverage_agent_config(),
+    )
+    asked: list[str] = []
+    conversations_asked: list[str] = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_ticket_metadata(self, ticket_id):
+            asked.append(ticket_id)
+            return FreshdeskTicketMetadata(ticket_id, "2026-07-06T01:00:00Z")
+
+        def get_conversation_metadata(self, ticket_id, *, should_stop=None):
+            conversations_asked.append(ticket_id)
+            return ()
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
+
+    result = cli_module._run_fetch_freshdesk_entry_coverage_command(
+        _entry_coverage_args(runtime)
+    )
+
+    assert result["status"] == "complete"
+    assert asked == ["101", "102"]
+    # ai_first-and-not-transferred already has its answer; only the
+    # "invoked, no outcome yet" ticket needs a conversation lookup.
+    assert conversations_asked == ["102"]
     cache = load_entry_coverage_cache(runtime / "entry_coverage_cache.json")
     assert cache is not None
-    assert {record.ticket_id for record in cache.records} == {"123", "456"}
+    assert {record.ticket_id for record in cache.records} == {"101", "102"}
+    assert set(cache.fetched_weeks) == {"2026-07-06"}
+    checkpoint_dir = tmp_path / "artifacts" / "freshdesk_entry_coverage"
+    assert not (checkpoint_dir / "inventory_checkpoint.json").exists()
+
+
+def test_entry_coverage_command_restarts_a_half_fetched_week_on_resume(
+    monkeypatch, tmp_path: Path
+):
+    """Resume is week-level only: an interruption partway through a week
+    must not publish any of that week's tickets, so the next run restarts
+    the whole week from its first ticket rather than picking up mid-week."""
+
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.entry_coverage_cache import load_entry_coverage_cache
+    from weekly_cs_report.freshdesk_csat import FreshdeskFetchDeadline
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    tickets = {
+        "101": _entry_coverage_ticket_row(
+            "101", "2026-07-06", ai_first=True, transferred=False
+        ),
+        "102": _entry_coverage_ticket_row(
+            "102", "2026-07-06", ai_first=True, transferred=False
+        ),
+    }
+    monkeypatch.setattr(
+        cli_module,
+        "_entry_coverage_population",
+        lambda *_args: ({"2026-07-06": ("101", "102")}, tickets),
+    )
+    monkeypatch.setattr(
+        "weekly_cs_report.outcome_reconciliation.load_reconciliation_agent_config",
+        lambda *_args, **_kwargs: _entry_coverage_agent_config(),
+    )
+
+    class InterruptingClient:
+        failed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_ticket_metadata(self, ticket_id):
+            if ticket_id == "102" and not type(self).failed:
+                type(self).failed = True
+                raise FreshdeskFetchDeadline("resume")
+            return FreshdeskTicketMetadata(ticket_id, "2026-07-06T01:00:00Z")
+
+        def get_conversation_metadata(self, ticket_id, *, should_stop=None):
+            return ()
+
+    monkeypatch.setattr(
+        cli_module, "_freshdesk_client", lambda *_args: InterruptingClient()
+    )
+    args = _entry_coverage_args(runtime)
+
+    first_result = cli_module._run_fetch_freshdesk_entry_coverage_command(args)
+
+    assert first_result["status"] == "duration_limit_reached"
+    assert load_entry_coverage_cache(runtime / "entry_coverage_cache.json") is None
+
+    second_result = cli_module._run_fetch_freshdesk_entry_coverage_command(args)
+
+    assert second_result["status"] == "complete"
+    cache = load_entry_coverage_cache(runtime / "entry_coverage_cache.json")
+    assert cache is not None
+    assert {record.ticket_id for record in cache.records} == {"101", "102"}
 
 
 def _ai_review_args(runtime: Path, max_duration: str = "60"):

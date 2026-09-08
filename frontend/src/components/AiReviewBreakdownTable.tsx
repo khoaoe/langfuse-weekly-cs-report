@@ -28,6 +28,8 @@ export interface AiReviewBreakdownRow {
   readonly label: string;
   readonly reviewed_ticket_count: number;
   readonly rated_ticket_count: number;
+  readonly evaluated_ticket_count: number;
+  readonly unrated_reviewed_ticket_count: number;
   readonly satisfied_count: number;
   readonly satisfied_with_edit_count: number;
   readonly needs_edit_count: number;
@@ -36,6 +38,10 @@ export interface AiReviewBreakdownRow {
 /**
  * The rows behind one grouping. Exported so the ranking chart and the table
  * read from one implementation and can never disagree about a group's numbers.
+ *
+ * Gated on `evaluated_ticket_count` (rated OR reviewed>=1), not
+ * `reviewed_ticket_count` (rated AND reviewed) -- a group can be all
+ * "Chưa đánh giá lại" tickets and still deserve a row.
  */
 export function aiReviewRowsFor(
   data: AiReviewBucket,
@@ -44,13 +50,13 @@ export function aiReviewRowsFor(
   if (grouping === "outcome") {
     return OUTCOME_ORDER.flatMap((outcome) => {
       const counts = data.by_outcome[outcome];
-      return counts.reviewed_ticket_count === 0
+      return counts.evaluated_ticket_count === 0
         ? []
         : [{ value: outcome, label: OUTCOME_FILTER_LABELS[outcome] ?? outcome, ...counts }];
     });
   }
   const rows = data.by_dimension[grouping]
-    .filter((row) => row.reviewed_ticket_count > 0)
+    .filter((row) => row.evaluated_ticket_count > 0)
     .map((row) => ({ ...row, label: row.value }));
   // Worst-first, same convention as CSAT's `sortBreakdownRows`: groups too
   // small to carry a rate sink below the ranked ones rather than topping the
@@ -89,9 +95,9 @@ type AiReviewSortKey =
   | "label"
   | "rate"
   | "reviewed_ticket_count"
-  | "rated_ticket_count"
-  | "satisfied_count"
-  | "satisfied_with_edit_count"
+  | "evaluated_ticket_count"
+  | "satisfied_rate"
+  | "satisfied_with_edit_rate"
   | "needs_edit_rate";
 
 interface AiReviewSortColumn {
@@ -127,35 +133,41 @@ function aiReviewSortColumns(groupingLabel: string): readonly AiReviewSortColumn
     },
     {
       key: "reviewed_ticket_count",
-      label: "Đã hậu kiểm",
+      label: "Số lần hậu kiểm",
       sortable: true,
       initialDirection: "desc",
       className: styles.numeric,
       value: (row) => row.reviewed_ticket_count,
     },
     {
-      key: "rated_ticket_count",
-      label: "Có nhãn",
+      key: "evaluated_ticket_count",
+      label: "Đã đánh giá",
       sortable: true,
       initialDirection: "desc",
       className: styles.numeric,
-      value: (row) => row.rated_ticket_count,
+      value: (row) => row.evaluated_ticket_count,
     },
     {
-      key: "satisfied_count",
-      label: "Đạt (n)",
+      key: "satisfied_rate",
+      label: "Đạt (%)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.positive}`,
-      value: (row) => row.satisfied_count,
+      value: (row) =>
+        row.rated_ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.satisfied_count, row.rated_ticket_count)
+          : null,
     },
     {
-      key: "satisfied_with_edit_count",
-      label: "Đạt, có sửa (n)",
+      key: "satisfied_with_edit_rate",
+      label: "Đạt, có sửa (%)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.neutral}`,
-      value: (row) => row.satisfied_with_edit_count,
+      value: (row) =>
+        row.rated_ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.satisfied_with_edit_count, row.rated_ticket_count)
+          : null,
     },
     {
       key: "needs_edit_rate",
@@ -278,6 +290,8 @@ export function AiReviewBreakdownTable({
                     label: "Tổng",
                     reviewed_ticket_count: data.reviewed_ticket_count,
                     rated_ticket_count: data.rated_ticket_count,
+                    evaluated_ticket_count: data.evaluated_ticket_count,
+                    unrated_reviewed_ticket_count: data.unrated_reviewed_ticket_count,
                     satisfied_count: data.satisfied_count,
                     satisfied_with_edit_count: data.satisfied_with_edit_count,
                     needs_edit_count: data.needs_edit_count,
@@ -285,11 +299,15 @@ export function AiReviewBreakdownTable({
                 />
               </td>
               <td className={styles.numeric}>
-                <strong>{`${formatCount(data.reviewed_ticket_count)} ticket`}</strong>
+                <strong>{`${formatCount(data.reviewed_ticket_count)} lần`}</strong>
               </td>
-              <td className={styles.numeric}>{formatCount(data.rated_ticket_count)}</td>
-              <td className={styles.numeric}>{formatCount(data.satisfied_count)}</td>
-              <td className={styles.numeric}>{formatCount(data.satisfied_with_edit_count)}</td>
+              <td className={styles.numeric}>{formatCount(data.evaluated_ticket_count)}</td>
+              <td className={styles.numeric}>
+                {rateCell(data.satisfied_count, data.rated_ticket_count)}
+              </td>
+              <td className={styles.numeric}>
+                {rateCell(data.satisfied_with_edit_count, data.rated_ticket_count)}
+              </td>
               <td className={styles.numeric}>
                 {rateCell(data.needs_edit_count, data.rated_ticket_count)}
               </td>
@@ -312,14 +330,18 @@ export function AiReviewBreakdownTable({
                   />
                 </td>
                 <td className={styles.numeric}>
-                  {formatCount(row.reviewed_ticket_count)}
+                  {`${formatCount(row.reviewed_ticket_count)} lần`}
                   {row.rated_ticket_count < PERCENTAGE_SAMPLE_MINIMUM ? (
                     <span className={csatStyles.sampleLabel}>Mẫu nhỏ</span>
                   ) : null}
                 </td>
-                <td className={styles.numeric}>{formatCount(row.rated_ticket_count)}</td>
-                <td className={styles.numeric}>{formatCount(row.satisfied_count)}</td>
-                <td className={styles.numeric}>{formatCount(row.satisfied_with_edit_count)}</td>
+                <td className={styles.numeric}>{formatCount(row.evaluated_ticket_count)}</td>
+                <td className={styles.numeric}>
+                  {rateCell(row.satisfied_count, row.rated_ticket_count)}
+                </td>
+                <td className={styles.numeric}>
+                  {rateCell(row.satisfied_with_edit_count, row.rated_ticket_count)}
+                </td>
                 <td className={styles.numeric}>
                   {rateCell(row.needs_edit_count, row.rated_ticket_count)}
                 </td>

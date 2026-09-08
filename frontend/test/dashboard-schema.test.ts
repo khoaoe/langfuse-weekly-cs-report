@@ -377,11 +377,7 @@ describe("dashboard API envelope", () => {
           ai_replied_only: 4,
           ai_replied_then_transferred: 2,
           transferred_without_ai_reply: 1,
-          invoked_no_result: 1,
-          not_observed_invoked: 2,
-          not_observed_human_replied: 1,
-          not_observed_no_human_reply: 1,
-          unresolved: 0,
+          invoked_no_result: 3,
         },
       },
     };
@@ -421,10 +417,6 @@ describe("dashboard API envelope", () => {
           ai_replied_then_transferred: 0,
           transferred_without_ai_reply: 0,
           invoked_no_result: 0,
-          not_observed_invoked: 0,
-          not_observed_human_replied: 0,
-          not_observed_no_human_reply: 0,
-          unresolved: 0,
           ...invalidCounts,
         },
       },
@@ -1116,6 +1108,7 @@ describe("dashboard API envelope", () => {
       data_quality: "valid",
       model_core: null,
       tool_error_codes: [],
+      ai_review_rating: null,
     };
 
     expect(TicketRowSchema.safeParse(row).success).toBe(false);
@@ -1231,6 +1224,8 @@ describe("dashboard API envelope", () => {
   const aiReviewCounts = {
     reviewed_ticket_count: 5,
     rated_ticket_count: 3,
+    evaluated_ticket_count: 3,
+    unrated_reviewed_ticket_count: 0,
     satisfied_count: 2,
     satisfied_with_edit_count: 1,
     needs_edit_count: 0,
@@ -1238,6 +1233,8 @@ describe("dashboard API envelope", () => {
   const emptyAiReviewCounts = {
     reviewed_ticket_count: 0,
     rated_ticket_count: 0,
+    evaluated_ticket_count: 0,
+    unrated_reviewed_ticket_count: 0,
     satisfied_count: 0,
     satisfied_with_edit_count: 0,
     needs_edit_count: 0,

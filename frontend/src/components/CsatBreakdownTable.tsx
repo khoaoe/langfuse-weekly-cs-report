@@ -146,9 +146,8 @@ type CsatSortKey =
   | "label"
   | "rate"
   | "ticket_count"
-  | "positive"
-  | "neutral"
-  | "negative"
+  | "positive_rate"
+  | "neutral_rate"
   | "negative_rate";
 
 interface CsatSortColumn {
@@ -191,28 +190,26 @@ function csatSortColumns(groupingLabel: string): readonly CsatSortColumn[] {
       value: (row) => row.ticket_count,
     },
     {
-      key: "positive",
-      label: "Rất hài lòng (n)",
+      key: "positive_rate",
+      label: "Rất hài lòng (%)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.positive}`,
-      value: (row) => row.positive,
+      value: (row) =>
+        row.ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.positive, row.ticket_count)
+          : null,
     },
     {
-      key: "neutral",
-      label: "Bình thường (n)",
+      key: "neutral_rate",
+      label: "Bình thường (%)",
       sortable: true,
       initialDirection: "desc",
       className: `${styles.numeric} ${satisfactionStyles.neutral}`,
-      value: (row) => row.neutral,
-    },
-    {
-      key: "negative",
-      label: "Rất tệ (n)",
-      sortable: true,
-      initialDirection: "desc",
-      className: `${styles.numeric} ${satisfactionStyles.negative}`,
-      value: (row) => row.negative,
+      value: (row) =>
+        row.ticket_count >= PERCENTAGE_SAMPLE_MINIMUM
+          ? share(row.neutral, row.ticket_count)
+          : null,
     },
     {
       key: "negative_rate",
@@ -354,9 +351,12 @@ export function CsatBreakdownTable({
                 <strong>{`${formatCount(responseTotals.ticket_count)} phản hồi`}</strong>
                 <span className={csatStyles.totalSupport}>{`${formatCount(data.ticket_count)} ticket`}</span>
               </td>
-              <td className={styles.numeric}>{formatCount(responseTotals.positive)}</td>
-              <td className={styles.numeric}>{formatCount(responseTotals.neutral)}</td>
-              <td className={styles.numeric}>{formatCount(responseTotals.negative)}</td>
+              <td className={styles.numeric}>
+                {rateCell(responseTotals.positive, responseTotals.ticket_count)}
+              </td>
+              <td className={styles.numeric}>
+                {rateCell(responseTotals.neutral, responseTotals.ticket_count)}
+              </td>
               <td className={styles.numeric}>
                 {rateCell(responseTotals.negative, responseTotals.ticket_count)}
               </td>
@@ -384,9 +384,8 @@ export function CsatBreakdownTable({
                     <span className={csatStyles.sampleLabel}>Mẫu nhỏ</span>
                   ) : null}
                 </td>
-                <td className={styles.numeric}>{formatCount(row.positive)}</td>
-                <td className={styles.numeric}>{formatCount(row.neutral)}</td>
-                <td className={styles.numeric}>{formatCount(row.negative)}</td>
+                <td className={styles.numeric}>{rateCell(row.positive, row.ticket_count)}</td>
+                <td className={styles.numeric}>{rateCell(row.neutral, row.ticket_count)}</td>
                 <td className={styles.numeric}>{rateCell(row.negative, row.ticket_count)}</td>
               </tr>
             ))}

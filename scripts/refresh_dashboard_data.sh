@@ -20,7 +20,7 @@ cd "$project_root"
 
 ready=false
 for (( attempt = 1; attempt <= 180; attempt += 1 )); do
-  if curl -fsS --max-time 5 "${dashboard_url}/api/dashboard" \
+  if curl -fsS --max-time 30 "${dashboard_url}/api/dashboard" \
     | jq -e '.snapshot != null' >/dev/null; then
     ready=true
     break
@@ -33,7 +33,7 @@ if [[ "$ready" != "true" ]]; then
 fi
 
 before_generated_at="$(
-  curl -fsS --max-time 5 "${dashboard_url}/api/dashboard" \
+  curl -fsS --max-time 30 "${dashboard_url}/api/dashboard" \
     | jq -r '.snapshot.generated_at'
 )"
 
@@ -88,7 +88,7 @@ curl -fsS --max-time 10 -X POST \
 refreshed=false
 for (( attempt = 1; attempt <= 180; attempt += 1 )); do
   after_generated_at="$(
-    curl -fsS --max-time 5 "${dashboard_url}/api/dashboard" \
+    curl -fsS --max-time 30 "${dashboard_url}/api/dashboard" \
       | jq -r '.snapshot.generated_at // empty'
   )"
   if [[ -n "$after_generated_at" && "$after_generated_at" != "$before_generated_at" ]]; then

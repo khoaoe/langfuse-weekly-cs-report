@@ -14,6 +14,7 @@ import {
   CSAT_SATISFACTION_OPTIONS,
   csatSatisfactionLabel,
 } from "../lib/csat-labels";
+import { aiReviewRatingLabel } from "../lib/ai-review-labels";
 import {
   EMPTY_TICKET_FILTERS,
   OUTCOME_FILTER_LABELS,
@@ -37,6 +38,7 @@ import { DateRangeField } from "./DateRangeField";
 import { MultiSelectField } from "./MultiSelectField";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
+import { AiReviewBadge } from "./AiReviewBadge";
 import { WhyDrawer } from "./WhyDrawer";
 import {
   FreshdeskTicketLink,
@@ -184,6 +186,9 @@ function cellText(row: TicketRow, key: TicketColumnKey): string {
   }
   if (key === "csat_satisfaction") {
     return csatSatisfactionLabel(row.csat_satisfaction);
+  }
+  if (key === "ai_review_rating") {
+    return aiReviewRatingLabel(row.ai_review_rating);
   }
   if (key === "transfer_reason" && row.transfer_reason !== null) {
     return transferReasonLabel(row.transfer_reason);
@@ -568,7 +573,7 @@ export function TicketExplorer({
         filters.csat_satisfaction !== "" ? (
           <MultiSelectField
             id="csatSatisfactionInput"
-            label="CSAT"
+            label="Khách hàng đánh giá"
             options={multiSelectOptions.csat_satisfaction}
             value={filters.csat_satisfaction}
             onChange={(value) => update({ csat_satisfaction: value })}
@@ -814,6 +819,13 @@ export function TicketExplorer({
                       className={index === 0 ? styles.stickyColumn : ""}
                     >
                       <SatisfactionBadge value={row.csat_satisfaction} />
+                    </td>
+                  ) : column.key === "ai_review_rating" ? (
+                    <td
+                      key={column.key}
+                      className={index === 0 ? styles.stickyColumn : ""}
+                    >
+                      <AiReviewBadge value={row.ai_review_rating} />
                     </td>
                   ) : (
                     <td

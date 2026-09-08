@@ -33,7 +33,7 @@ _EVENT_FIELDS = {
             "coverage_skill",
         }
     ),
-    "refresh_failure": frozenset({"code"}),
+    "refresh_failure": frozenset({"code", "detail"}),
     "refresh_cancelled": frozenset({"code"}),
     "ab_test_background_refresh_success": frozenset(),
     "ab_test_background_refresh_failure": frozenset(),
@@ -50,7 +50,7 @@ _FIXED_CODES = {
     "refresh_cancelled": frozenset({"cancelled"}),
 }
 _BOOLEAN_FIELDS = frozenset({"has_snapshot"})
-_STRING_FIELDS = frozenset({"failed_lanes"})
+_STRING_FIELDS = frozenset({"failed_lanes", "detail"})
 _INTEGER_FIELDS = frozenset(
     {"duration_ms", "schema_version", "ticket_count", "trace_count", "observation_count"}
 )

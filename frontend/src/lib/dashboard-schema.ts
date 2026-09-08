@@ -1052,8 +1052,6 @@ export const EntryCoverageStatusSchema = z.enum([
   "ai_replied_then_transferred",
   "transferred_without_ai_reply",
   "invoked_no_result",
-  "not_observed_invoked",
-  "unresolved",
 ]);
 export type EntryCoverageStatus = z.infer<typeof EntryCoverageStatusSchema>;
 
@@ -1064,10 +1062,6 @@ const EntryCoverageWeekSchema = z
     ai_replied_then_transferred: nonNegativeInteger,
     transferred_without_ai_reply: nonNegativeInteger,
     invoked_no_result: nonNegativeInteger,
-    not_observed_invoked: nonNegativeInteger,
-    not_observed_human_replied: nonNegativeInteger,
-    not_observed_no_human_reply: nonNegativeInteger,
-    unresolved: nonNegativeInteger,
   })
   .strict()
   .superRefine((value, context) => {
@@ -1075,24 +1069,12 @@ const EntryCoverageWeekSchema = z
       value.ai_replied_only +
       value.ai_replied_then_transferred +
       value.transferred_without_ai_reply +
-      value.invoked_no_result +
-      value.not_observed_invoked +
-      value.unresolved;
+      value.invoked_no_result;
     if (statusTotal !== value.freshdesk_ticket_count) {
       context.addIssue({
         code: "custom",
         path: ["freshdesk_ticket_count"],
         message: "Freshdesk entry statuses must reconcile.",
-      });
-    }
-    if (
-      value.not_observed_invoked !==
-      value.not_observed_human_replied + value.not_observed_no_human_reply
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["not_observed_invoked"],
-        message: "Freshdesk no-call subcounts must reconcile.",
       });
     }
   });
@@ -1118,6 +1100,8 @@ export type EntryCoverage = z.infer<typeof EntryCoverageSchema>;
 const AI_REVIEW_COUNT_KEYS = [
   "reviewed_ticket_count",
   "rated_ticket_count",
+  "evaluated_ticket_count",
+  "unrated_reviewed_ticket_count",
   "satisfied_count",
   "satisfied_with_edit_count",
   "needs_edit_count",
@@ -1126,17 +1110,23 @@ const AI_REVIEW_COUNT_KEYS = [
 function aiReviewRatingsReconcile(value: {
   reviewed_ticket_count: number;
   rated_ticket_count: number;
+  evaluated_ticket_count: number;
+  unrated_reviewed_ticket_count: number;
   satisfied_count: number;
   satisfied_with_edit_count: number;
   needs_edit_count: number;
 }): boolean {
-  // Only the rating buckets reconcile. `rated` does NOT nest inside
-  // `reviewed`: CS fills `cf_rating_ai` and `cf_s_ln_hu_kim_ai`
+  // Only the rating buckets reconcile against `rated`. `rated` does NOT nest
+  // inside `reviewed`: CS fills `cf_rating_ai` and `cf_s_ln_hu_kim_ai`
   // independently, and every week before 2026-07-27 has ratings with no
-  // review count at all.
+  // review count at all. `evaluated` is the union of rated OR
+  // reviewed>=1 tickets, which -- since rated and unrated-reviewed are
+  // disjoint -- is just their sum.
   return (
     value.rated_ticket_count ===
-    value.satisfied_count + value.satisfied_with_edit_count + value.needs_edit_count
+      value.satisfied_count + value.satisfied_with_edit_count + value.needs_edit_count &&
+    value.evaluated_ticket_count ===
+      value.rated_ticket_count + value.unrated_reviewed_ticket_count
   );
 }
 
@@ -1145,6 +1135,8 @@ const AiReviewCountsSchema = z
   .object({
     reviewed_ticket_count: nonNegativeInteger,
     rated_ticket_count: nonNegativeInteger,
+    evaluated_ticket_count: nonNegativeInteger,
+    unrated_reviewed_ticket_count: nonNegativeInteger,
     satisfied_count: nonNegativeInteger,
     satisfied_with_edit_count: nonNegativeInteger,
     needs_edit_count: nonNegativeInteger,
@@ -1159,6 +1151,8 @@ const AiReviewDimensionCountsSchema = z
     value: safeLabel,
     reviewed_ticket_count: nonNegativeInteger,
     rated_ticket_count: nonNegativeInteger,
+    evaluated_ticket_count: nonNegativeInteger,
+    unrated_reviewed_ticket_count: nonNegativeInteger,
     satisfied_count: nonNegativeInteger,
     satisfied_with_edit_count: nonNegativeInteger,
     needs_edit_count: nonNegativeInteger,
@@ -1173,6 +1167,8 @@ const AiReviewCountByReviewCountSchema = z
     value: z.string().regex(/^\d+$/),
     reviewed_ticket_count: nonNegativeInteger,
     rated_ticket_count: nonNegativeInteger,
+    evaluated_ticket_count: nonNegativeInteger,
+    unrated_reviewed_ticket_count: nonNegativeInteger,
     satisfied_count: nonNegativeInteger,
     satisfied_with_edit_count: nonNegativeInteger,
     needs_edit_count: nonNegativeInteger,
@@ -1186,6 +1182,8 @@ export const AiReviewBucketSchema = z
   .object({
     reviewed_ticket_count: nonNegativeInteger,
     rated_ticket_count: nonNegativeInteger,
+    evaluated_ticket_count: nonNegativeInteger,
+    unrated_reviewed_ticket_count: nonNegativeInteger,
     satisfied_count: nonNegativeInteger,
     satisfied_with_edit_count: nonNegativeInteger,
     needs_edit_count: nonNegativeInteger,
@@ -1575,6 +1573,9 @@ export const TicketRowSchema = z
      * the tool identity that surfaces a rate like `get_zalopay_id_by_phone`'s
      * 93.1%. */
     tool_error_codes: z.array(toolErrorToken),
+    ai_review_rating: z
+      .enum(["satisfied", "satisfied_with_edit", "needs_edit"])
+      .nullable(),
   })
   .strict()
   .superRefine((row, context) => {

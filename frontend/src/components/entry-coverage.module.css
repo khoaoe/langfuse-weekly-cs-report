@@ -66,15 +66,6 @@
   cursor: not-allowed;
 }
 
-.subcounts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  margin-top: var(--space-3);
-  color: var(--muted);
-  font-size: 13px;
-}
-
 .detail {
   margin-top: var(--space-5);
   padding-top: var(--space-4);

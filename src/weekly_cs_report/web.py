@@ -792,6 +792,7 @@ def create_app(
                 window_end,
                 _trace_explain_taxonomy(),
                 csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
+                ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
                 deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
                 arms=arms,
             )
@@ -1227,6 +1228,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     manager: SnapshotManager | None = None
     app: FastAPI | None = None
     refresh_cancel_event = threading.Event()
+    # The three background jobs below (main snapshot, AB-test default window,
+    # model list) share one LangfuseClient and were observed racing each
+    # other against the live API, inflating the main refresh from an isolated
+    # ~180s to 240-360s and blowing the deadline. Serializing their Langfuse
+    # calls through one lock removes that self-inflicted contention.
+    langfuse_fetch_lock = threading.Lock()
+
+    def _serialized(loader):
+        def _call():
+            with langfuse_fetch_lock:
+                return loader()
+
+        return _call
+
     try:
         vietnam = ZoneInfo("Asia/Ho_Chi_Minh")
 
@@ -1297,7 +1312,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         manager = SnapshotManager(
-            load_snapshot,
+            _serialized(load_snapshot),
             ProtectedSnapshotStore(
                 runtime_directory,
                 require_complete_enrichment=True,
@@ -1350,13 +1365,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 window_end,
                 _trace_explain_taxonomy(),
                 csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
+                ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
                 deadline=deadline,
                 arms=arms,
             )
             return _ab_test_payload(snapshot)
 
         ab_test_background = _AbTestBackgroundCache(
-            load_ab_test_default,
+            _serialized(load_ab_test_default),
             cache_path=runtime_directory / _AB_TEST_CACHE_FILENAME,
         )
         ab_test_background.start()
@@ -1370,7 +1386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
 
         model_list_background = _ModelListBackgroundCache(
-            load_recent_models,
+            _serialized(load_recent_models),
             cache_path=runtime_directory / _MODEL_LIST_CACHE_FILENAME,
         )
         model_list_background.start()
@@ -1635,6 +1651,31 @@ def _csat_buckets_by_ticket(
     }
 
 
+def _ai_review_ratings_by_ticket(
+    runtime_directory: Path | None,
+) -> dict[str, str] | None:
+    """Latest CS post-inspection rating per ticket, or None when no cache exists."""
+    if runtime_directory is None:
+        return None
+    try:
+        cache = load_ai_review_cache(runtime_directory / _AI_REVIEW_CACHE_FILENAME)
+    except AIReviewCacheError:
+        return None
+    if cache is None:
+        return None
+    latest: dict[str, tuple[str, str]] = {}
+    for record in cache.records:
+        if record.rating is None:
+            continue
+        review_date = record.review_date or ""
+        previous = latest.get(record.ticket_id)
+        if previous is None or review_date >= previous[0]:
+            latest[record.ticket_id] = (review_date, record.rating)
+    return {
+        ticket_id: rating for ticket_id, (_at, rating) in latest.items()
+    }
+
+
 def _ab_test_payload(snapshot: AbTestSnapshot) -> dict[str, object]:
     return {
         "window_start": _utc_iso(snapshot.window_start),
@@ -1668,6 +1709,10 @@ def _ab_test_payload(snapshot: AbTestSnapshot) -> dict[str, object]:
                 "csat_response_count": arm.csat_response_count,
                 "csat_positive_count": arm.csat_positive_count,
                 "csat_negative_count": arm.csat_negative_count,
+                "ai_review_rated_count": arm.ai_review_rated_count,
+                "ai_review_satisfied_count": arm.ai_review_satisfied_count,
+                "ai_review_satisfied_with_edit_count": arm.ai_review_satisfied_with_edit_count,
+                "ai_review_needs_edit_count": arm.ai_review_needs_edit_count,
             }
             for arm in snapshot.arms
         ],

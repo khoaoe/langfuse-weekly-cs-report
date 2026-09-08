@@ -477,6 +477,7 @@ function ticketRow(overrides: Partial<TicketRow>): TicketRow {
     data_quality: "valid",
     model_core: null,
     tool_error_codes: [],
+    ai_review_rating: null,
     ...overrides,
     transferred,
     transfer_reason: overrides.transfer_reason ?? (transferred ? "unknown" : null),

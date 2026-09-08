@@ -111,7 +111,7 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
     {
       key: "csat_positive",
       label: "Rất hài lòng",
-      group: "CSAT",
+      group: "Khách hàng đánh giá",
       kind: "rate",
       direction: "higher",
       values: map((arm) =>
@@ -123,7 +123,7 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
     {
       key: "csat_neutral",
       label: "Bình thường",
-      group: "CSAT",
+      group: "Khách hàng đánh giá",
       kind: "rate",
       direction: "neutral",
       values: map((arm) =>
@@ -139,13 +139,50 @@ export function buildMetricRows(arms: readonly ArmMetrics[]): MetricRow[] {
     {
       key: "csat_negative",
       label: "Rất tệ",
-      group: "CSAT",
+      group: "Khách hàng đánh giá",
       kind: "rate",
       direction: "lower",
       values: map((arm) =>
         rate(arm.csat_negative_count, arm.csat_response_count),
       ),
       denominators: map((arm) => arm.csat_response_count),
+    },
+    {
+      key: "ai_review_satisfied",
+      label: "Đạt",
+      group: "CS hậu kiểm",
+      kind: "rate",
+      direction: "higher",
+      values: map((arm) =>
+        rate(arm.ai_review_satisfied_count, arm.ai_review_rated_count),
+      ),
+      denominators: map((arm) => arm.ai_review_rated_count),
+      hint: "Mẫu số là số ticket đã được CS hậu kiểm chấm.",
+    },
+    {
+      key: "ai_review_satisfied_with_edit",
+      label: "Đạt, có sửa",
+      group: "CS hậu kiểm",
+      kind: "rate",
+      direction: "neutral",
+      values: map((arm) =>
+        rate(
+          arm.ai_review_satisfied_with_edit_count,
+          arm.ai_review_rated_count,
+        ),
+      ),
+      denominators: map((arm) => arm.ai_review_rated_count),
+    },
+    {
+      key: "ai_review_needs_edit",
+      label: "Cần sửa",
+      group: "CS hậu kiểm",
+      kind: "rate",
+      direction: "lower",
+      values: map((arm) =>
+        rate(arm.ai_review_needs_edit_count, arm.ai_review_rated_count),
+      ),
+      denominators: map((arm) => arm.ai_review_rated_count),
     },
     {
       key: "latency_p50",

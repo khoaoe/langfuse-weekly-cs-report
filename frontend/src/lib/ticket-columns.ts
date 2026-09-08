@@ -24,9 +24,10 @@ export const TICKET_COLUMNS = [
   { key: "outcome", label: "Kết quả", core: true },
   {
     key: "csat_satisfaction",
-    label: "CSAT",
+    label: "Khách hàng đánh giá",
     core: true,
   },
+  { key: "ai_review_rating", label: "CS hậu kiểm", core: false },
   { key: "ai_first", label: "AI First", core: false },
   { key: "transferred", label: "Đã chuyển CS", core: true },
   { key: "transfer_reason", label: "Lý do chuyển CS", core: true },

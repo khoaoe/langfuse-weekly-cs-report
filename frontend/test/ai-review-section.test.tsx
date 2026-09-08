@@ -8,6 +8,8 @@ import type { AiReview, AiReviewBucket } from "../src/lib/dashboard-schema";
 const emptyAiCounts = {
   reviewed_ticket_count: 0,
   rated_ticket_count: 0,
+  evaluated_ticket_count: 0,
+  unrated_reviewed_ticket_count: 0,
   satisfied_count: 0,
   satisfied_with_edit_count: 0,
   needs_edit_count: 0,
@@ -33,9 +35,10 @@ describe("AiReviewBreakdownTable", () => {
     const data = aiReviewBucket({
       reviewed_ticket_count: 3,
       rated_ticket_count: 3,
+      evaluated_ticket_count: 3,
       satisfied_count: 3,
       by_dimension: {
-        skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 3, rated_ticket_count: 3, satisfied_count: 3 }],
+        skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 3, rated_ticket_count: 3, evaluated_ticket_count: 3, satisfied_count: 3 }],
         issue_category: [],
         app: [],
       },
@@ -67,9 +70,10 @@ describe("AiReviewBreakdownTable", () => {
     const data = aiReviewBucket({
       reviewed_ticket_count: 20,
       rated_ticket_count: 20,
+      evaluated_ticket_count: 20,
       satisfied_count: 20,
       by_dimension: {
-        skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 20, rated_ticket_count: 20, satisfied_count: 20 }],
+        skill: [{ value: "interbank-fund-transfer", ...emptyAiCounts, reviewed_ticket_count: 20, rated_ticket_count: 20, evaluated_ticket_count: 20, satisfied_count: 20 }],
         issue_category: [],
         app: [],
       },

@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import Literal
 
 
-_CACHE_SCHEMA_VERSION = 1
+_CACHE_SCHEMA_VERSION = 2
 ENTRY_COVERAGE_START_WEEK = "2026-07-06"
 _CACHE_KEYS = frozenset({"schema_version", "fetched_weeks", "records"})
 _RECORD_KEYS = frozenset(
@@ -29,8 +29,6 @@ _ENTRY_STATUSES = frozenset(
         "ai_replied_then_transferred",
         "transferred_without_ai_reply",
         "invoked_no_result",
-        "not_observed_invoked",
-        "unresolved",
     }
 )
 EntryCoverageStatus = Literal[
@@ -38,8 +36,6 @@ EntryCoverageStatus = Literal[
     "ai_replied_then_transferred",
     "transferred_without_ai_reply",
     "invoked_no_result",
-    "not_observed_invoked",
-    "unresolved",
 ]
 
 

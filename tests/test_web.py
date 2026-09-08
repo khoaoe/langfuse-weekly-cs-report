@@ -152,21 +152,21 @@ def _entry_coverage_snapshot() -> DashboardSnapshot:
             ticket_id="701",
             opened_at="2026-07-21T02:00:00Z",
             cohort_week="2026-07-20",
-            status="not_observed_invoked",
+            status="invoked_no_result",
             human_replied=True,
         ),
         EntryCoverageRecord(
             ticket_id="702",
             opened_at="2026-07-24T18:00:00Z",
             cohort_week="2026-07-20",
-            status="not_observed_invoked",
+            status="invoked_no_result",
             human_replied=False,
         ),
         EntryCoverageRecord(
             ticket_id="703",
             opened_at="2026-07-28T02:00:00Z",
             cohort_week="2026-07-27",
-            status="unresolved",
+            status="invoked_no_result",
             human_replied=None,
         ),
     )
@@ -178,32 +178,20 @@ def _entry_coverage_snapshot() -> DashboardSnapshot:
             "ai_replied_then_transferred": 0,
             "transferred_without_ai_reply": 0,
             "invoked_no_result": 0,
-            "not_observed_invoked": 0,
-            "not_observed_human_replied": 0,
-            "not_observed_no_human_reply": 0,
-            "unresolved": 0,
         },
         "2026-07-20": {
             "freshdesk_ticket_count": 2,
             "ai_replied_only": 0,
             "ai_replied_then_transferred": 0,
             "transferred_without_ai_reply": 0,
-            "invoked_no_result": 0,
-            "not_observed_invoked": 2,
-            "not_observed_human_replied": 1,
-            "not_observed_no_human_reply": 1,
-            "unresolved": 0,
+            "invoked_no_result": 2,
         },
         "2026-07-27": {
             "freshdesk_ticket_count": 1,
             "ai_replied_only": 0,
             "ai_replied_then_transferred": 0,
             "transferred_without_ai_reply": 0,
-            "invoked_no_result": 0,
-            "not_observed_invoked": 0,
-            "not_observed_human_replied": 0,
-            "not_observed_no_human_reply": 0,
-            "unresolved": 1,
+            "invoked_no_result": 1,
         },
     }
     for view in dashboard["views"].values():
@@ -705,7 +693,7 @@ def test_entry_coverage_endpoint_filters_status_paginates_and_excludes_weekend_f
             "/api/freshdesk-entry-coverage/tickets",
             params={
                 "cohort_weeks": "2026-07-20",
-                "status": "not_observed_invoked",
+                "status": "invoked_no_result",
                 "sort_by": "ticket_id",
                 "sort_dir": "asc",
                 "page": 1,
@@ -717,7 +705,7 @@ def test_entry_coverage_endpoint_filters_status_paginates_and_excludes_weekend_f
             params={
                 "week_definition": "mon_fri",
                 "cohort_weeks": "2026-07-20",
-                "status": "not_observed_invoked",
+                "status": "invoked_no_result",
             },
         )
 

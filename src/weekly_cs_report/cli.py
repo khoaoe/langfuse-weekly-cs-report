@@ -1155,10 +1155,20 @@ def _reconciliation_population(runtime_directory: Path, weeks: int):
     }
 
 
-def _entry_coverage_population(runtime_directory: Path, weeks: int):
+def _entry_coverage_population(
+    runtime_directory: Path, weeks: int
+) -> tuple[dict[str, tuple[str, ...]], dict[str, TicketRow]]:
+    """Week -> the Langfuse ticket IDs to ask Freshdesk about, plus their rows.
+
+    Same reasoning as `_ai_review_population`: entry coverage only monitors
+    tickets Langfuse already knows about (PO scope, 2026-09-07), so naming
+    them up front makes Freshdesk's 300-page search cap unreachable.
+    """
+
     from .entry_coverage_cache import ENTRY_COVERAGE_START_WEEK
-    from .freshdesk_entry_coverage import FreshdeskEntryCoverageError, _cohort_week
+    from .freshdesk_entry_coverage import FreshdeskEntryCoverageError
     from .dashboard_cache import ProtectedSnapshotStore
+    from .dashboard_schema import TicketRow
 
     runtime_directory = Path(runtime_directory)
     if not runtime_directory.is_absolute() or not 1 <= weeks <= 52:
@@ -1178,9 +1188,22 @@ def _entry_coverage_population(runtime_directory: Path, weeks: int):
     langfuse_tickets = {
         ticket.ticket_id: ticket
         for ticket in snapshot.tickets
-        if ticket.cohort_week in selected
+        if ticket.cohort_week in selected and str(ticket.ticket_id).isdigit()
     }
-    return selected_weeks, langfuse_tickets
+    population = {
+        week: tuple(
+            sorted(
+                (
+                    ticket_id
+                    for ticket_id, ticket in langfuse_tickets.items()
+                    if ticket.cohort_week == week
+                ),
+                key=int,
+            )
+        )
+        for week in selected_weeks
+    }
+    return population, langfuse_tickets
 
 
 def _ai_review_population(
@@ -1369,36 +1392,21 @@ def _ai_review_command_result(
 def _run_fetch_freshdesk_entry_coverage_command(
     args: argparse.Namespace,
 ) -> dict[str, object]:
-    from .cohort import VIETNAM_TIMEZONE
-    from .dashboard_cache import ProtectedSnapshotStore
     from .entry_coverage_cache import (
-        ENTRY_COVERAGE_START_WEEK,
-        EntryCoverageCacheError,
         EntryCoverageCache,
+        EntryCoverageCacheError,
         load_entry_coverage_cache,
         write_entry_coverage_cache,
     )
-    from .entry_coverage_checkpoint import (
-        CoverageCheckpoint,
-        EntryCoverageCheckpointError,
-        InventoryCheckpoint,
-        inventory_fingerprint,
-        load_coverage_checkpoint,
-        load_inventory_checkpoint,
-        write_coverage_checkpoint,
-        write_inventory_checkpoint,
-    )
     from .freshdesk_entry_coverage import (
         FreshdeskEntryCoverageError,
-        IncrementalEntryCoverageResult,
-        fetch_entry_coverage_population,
-        _cohort_week,
+        classify_entry_coverage,
     )
     from .freshdesk_csat import (
         FreshdeskCookieExpired,
         FreshdeskFetchDeadline,
-        FreshdeskPageLimitReached,
         FreshdeskRateLimitExhausted,
+        _week_needs_fetch,
         mark_cookie_expired,
         mark_cookie_verified,
     )
@@ -1406,310 +1414,120 @@ def _run_fetch_freshdesk_entry_coverage_command(
     import time as monotonic_time
 
     runtime_directory = Path(args.runtime_dir)
-    selected_weeks, langfuse_tickets = _entry_coverage_population(
+    population, langfuse_tickets = _entry_coverage_population(
         runtime_directory, args.weeks
     )
+    selected_weeks = tuple(sorted(population))
     if not selected_weeks:
         raise FreshdeskEntryCoverageError("Entry coverage has no report weeks")
-    checkpoint_path = (
-        runtime_directory.parent
-        / "artifacts"
-        / "freshdesk_entry_coverage"
-        / "coverage_checkpoint.json"
+    selected = frozenset(selected_weeks)
+    # Checkpoints from the crawl era (pre-2026-09-07) are anchored to a search
+    # cursor / ticket-index that no longer exists; population is now a list of
+    # Langfuse-known ticket IDs resumed per week, so no cross-run page or
+    # mid-week checkpoint is needed at all.
+    artifacts_directory = (
+        runtime_directory.parent / "artifacts" / "freshdesk_entry_coverage"
     )
-    inventory_checkpoint_path = checkpoint_path.parent / "inventory_checkpoint.json"
+    (artifacts_directory / "coverage_checkpoint.json").unlink(missing_ok=True)
+    (artifacts_directory / "inventory_checkpoint.json").unlink(missing_ok=True)
+
     try:
         config = load_reconciliation_agent_config(
             FRESHDESK_RECONCILIATION_CONFIG_PATH,
             source_path=FRESHDESK_RECONCILIATION_SOURCE_PATH,
         )
-        try:
-            published = load_entry_coverage_cache(
-                runtime_directory / "entry_coverage_cache.json"
-            )
-        except EntryCoverageCacheError:
-            # A cache from the pre-06/07 scope is not reusable, but it must not
-            # block rebuilding a fresh private cache.
-            published = None
-        coverage_checkpoint = load_coverage_checkpoint(checkpoint_path)
-        inventory_checkpoint = load_inventory_checkpoint(inventory_checkpoint_path)
-    except (EntryCoverageCacheError, EntryCoverageCheckpointError, OSError) as error:
+        published = load_entry_coverage_cache(
+            runtime_directory / "entry_coverage_cache.json"
+        )
+    except EntryCoverageCacheError as error:
         raise FreshdeskEntryCoverageError(
             "Freshdesk entry coverage private state is invalid"
         ) from error
 
-    if published is not None and any(
-        item.cohort_week < ENTRY_COVERAGE_START_WEEK for item in published.records
-    ):
-        published = None
+    as_of = datetime.now(timezone.utc)
+    base_weeks = dict(published.fetched_weeks) if published is not None else {}
+    base_records: dict[str, object] = {
+        item.ticket_id: item for item in (published.records if published is not None else ())
+    }
+    target_weeks = tuple(
+        week for week in sorted(selected) if _week_needs_fetch(week, base_weeks, as_of)
+    )
 
     started = monotonic_time.monotonic()
     deadline = started + args.max_duration
-    updated_since = datetime.combine(
-        date.fromisoformat(ENTRY_COVERAGE_START_WEEK),
-        time.min,
-        tzinfo=VIETNAM_TIMEZONE,
-    )
-    updated_since_utc = updated_since.astimezone(timezone.utc)
-    source_start_week = ENTRY_COVERAGE_START_WEEK
-    inventory_tickets: tuple[object, ...] = ()
-    inventory_complete = False
 
     def should_stop() -> bool:
         return monotonic_time.monotonic() >= deadline
 
-    def write_inventory_page(tickets, next_page: int, complete: bool) -> None:
-        nonlocal inventory_tickets, inventory_complete
-        inventory_tickets = tuple(tickets)
-        inventory_complete = complete
-        try:
-            write_inventory_checkpoint(
-                inventory_checkpoint_path,
-                InventoryCheckpoint(
-                    source_start_week=source_start_week,
-                    updated_since=_utc_iso(updated_since_utc),
-                    page_size=50,
-                    next_page=next_page,
-                    complete=complete,
-                    tickets=inventory_tickets,
-                    fingerprint=inventory_fingerprint(inventory_tickets),
-                ),
-            )
-        except EntryCoverageCheckpointError as error:
-            raise FreshdeskEntryCoverageError(
-                "Freshdesk inventory checkpoint could not be written"
-            ) from error
-
-    if inventory_checkpoint is not None and (
-        inventory_checkpoint.source_start_week == source_start_week
-        and inventory_checkpoint.updated_since == _utc_iso(updated_since_utc)
-        and inventory_checkpoint.complete
-    ):
-        inventory_tickets = inventory_checkpoint.tickets
-        inventory_complete = True
-    else:
-        existing_inventory = (
-            inventory_checkpoint.tickets
-            if inventory_checkpoint is not None
-            and inventory_checkpoint.source_start_week == source_start_week
-            and inventory_checkpoint.updated_since == _utc_iso(updated_since_utc)
-            and not inventory_checkpoint.complete
-            else ()
-        )
-        start_page = (
-            inventory_checkpoint.next_page
-            if existing_inventory and inventory_checkpoint is not None
-            else 1
-        )
-        try:
-            with _freshdesk_client(args.auth, runtime_directory) as client:
-                client.list_ticket_metadata(
-                    updated_since=updated_since,
-                    start_page=start_page,
-                    existing=existing_inventory,
-                    on_page=write_inventory_page,
-                    should_stop=should_stop,
-                )
-        except FreshdeskCookieExpired:
-            if args.auth == "cookie":
-                mark_cookie_expired(runtime_directory)
-            raise
-        except (
-            FreshdeskFetchDeadline,
-            FreshdeskRateLimitExhausted,
-            FreshdeskPageLimitReached,
-        ):
-            pass
-        else:
-            if args.auth == "cookie":
-                mark_cookie_verified(runtime_directory)
-        if not inventory_complete:
-            selected_records = tuple(
-                item
-                for item in (published.records if published is not None else ())
-                if item.cohort_week in selected_weeks
-            )
-            return _entry_coverage_command_result(
-                "duration_limit_reached",
-                selected_weeks,
-                selected_records,
-            )
-
-    if should_stop():
-        selected_records = tuple(
-            item
-            for item in (published.records if published is not None else ())
-            if item.cohort_week in selected_weeks
-        )
-        return _entry_coverage_command_result(
-            "duration_limit_reached",
-            selected_weeks,
-            selected_records,
-        )
-
-    from .freshdesk_entry_coverage import FreshdeskTicketMetadata
-
-    filtered_inventory = tuple(
-        item
-        for item in inventory_tickets
-        if isinstance(item, FreshdeskTicketMetadata)
-        and item.created_at >= _utc_iso(updated_since_utc)
-        and _cohort_week(item.created_at) in selected_weeks
-    )
-    fingerprint = inventory_fingerprint(tuple(inventory_tickets))
-    resume_is_usable = coverage_checkpoint is not None and (
-        coverage_checkpoint.source_start_week == source_start_week
-        and coverage_checkpoint.inventory_fingerprint == fingerprint
-        and coverage_checkpoint.target_weeks == tuple(selected_weeks)
-    )
-    resume_records = coverage_checkpoint.records if resume_is_usable else ()
-    resume_week = coverage_checkpoint.active_week if resume_is_usable else None
-    resume_index = coverage_checkpoint.next_ticket_index if resume_is_usable else 0
-    completed_from_checkpoint = (
-        coverage_checkpoint.completed_weeks if resume_is_usable else ()
-    )
-    checkpoint_as_of = _utc_iso(datetime.now(timezone.utc))
-    checkpoint_fetched_weeks = {
-        week: checkpoint_as_of for week in completed_from_checkpoint
-    }
-    checkpoint_records = tuple(resume_records)
-    existing_candidates = tuple(
-        cache
-        for cache in (
-            published,
-            EntryCoverageCache(
-                fetched_weeks=checkpoint_fetched_weeks,
-                records=checkpoint_records,
-            ),
-        )
-        if cache is not None
-    )
-    existing = max(
-        existing_candidates,
-        key=lambda cache: (cache.fetched_at or "", len(cache.fetched_weeks), len(cache.records)),
-        default=None,
-    )
-    progress_state = {
-        "week": resume_week or (selected_weeks[0] if selected_weeks else None),
-        "index": resume_index,
-    }
-    last_checkpoint_write = monotonic_time.monotonic()
-
-    def write_coverage_state(cache, week: str | None, index: int, *, force: bool = False) -> None:
-        nonlocal last_checkpoint_write
-        now = monotonic_time.monotonic()
-        if not force and index % 25 != 0 and now - last_checkpoint_write < 30:
-            return
-        completed = tuple(sorted(set(cache.fetched_weeks).intersection(selected_weeks)))
-        active = None if week in completed else week
-        progress_state["week"] = active
-        progress_state["index"] = 0 if active is None else index
-        try:
-            write_coverage_checkpoint(
-                checkpoint_path,
-                CoverageCheckpoint(
-                    source_start_week=source_start_week,
-                    inventory_fingerprint=fingerprint,
-                    target_weeks=tuple(selected_weeks),
-                    active_week=progress_state["week"],
-                    next_ticket_index=progress_state["index"],
-                    completed_weeks=completed,
-                    records=cache.records,
-                ),
-            )
-        except EntryCoverageCheckpointError as error:
-            raise FreshdeskEntryCoverageError(
-                "Freshdesk coverage checkpoint could not be written"
-            ) from error
-        last_checkpoint_write = now
-
+    status = "complete"
+    answered = False
     try:
         with _freshdesk_client(args.auth, runtime_directory) as client:
-            result = fetch_entry_coverage_population(
-                client,
-                filtered_inventory,
-                langfuse_tickets,
-                selected_weeks,
-                config,
-                existing=existing,
-                as_of=datetime.now(VIETNAM_TIMEZONE),
-                max_workers=args.max_workers,
-                max_duration_seconds=max(0.1, deadline - monotonic_time.monotonic()),
-                on_week_complete=lambda cache: write_coverage_state(
-                    cache,
-                    None,
-                    0,
-                    force=True,
-                ),
-                resume_records=resume_records,
-                resume_week=resume_week,
-                resume_index=resume_index,
-                on_progress=lambda cache, week, index: write_coverage_state(
-                    cache,
-                    week,
-                    index,
-                ),
-            )
-        if args.auth == "cookie":
-            mark_cookie_verified(runtime_directory)
+            for week in target_weeks:
+                ticket_ids = population[week]
+                fetched: list[object] = []
+                interrupted = False
+                for ticket_id in ticket_ids:
+                    if should_stop():
+                        interrupted = True
+                        break
+                    langfuse_ticket = langfuse_tickets[ticket_id]
+                    try:
+                        metadata = client.get_ticket_metadata(ticket_id)
+                        conversations = ()
+                        if not langfuse_ticket.ai_first and not langfuse_ticket.transferred:
+                            conversations = client.get_conversation_metadata(
+                                ticket_id, should_stop=should_stop
+                            )
+                    except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
+                        interrupted = True
+                        break
+                    answered = True
+                    if metadata is None:
+                        # Deleted or merged since the snapshot was built; the
+                        # week is still complete without it.
+                        continue
+                    fetched.append(
+                        classify_entry_coverage(
+                            metadata, langfuse_ticket, conversations, config
+                        )
+                    )
+                if interrupted:
+                    # A half-fetched week must not be recorded as fetched; the
+                    # next run restarts this week from its first ticket.
+                    status = "duration_limit_reached"
+                    break
+
+                for ticket_id in ticket_ids:
+                    base_records.pop(ticket_id, None)
+                for record in fetched:
+                    base_records[record.ticket_id] = record
+                base_weeks[week] = _utc_iso(as_of)
+
+                try:
+                    write_entry_coverage_cache(
+                        runtime_directory / "entry_coverage_cache.json",
+                        EntryCoverageCache(
+                            fetched_weeks=base_weeks,
+                            records=tuple(base_records.values()),
+                        ),
+                    )
+                except EntryCoverageCacheError as error:
+                    raise FreshdeskEntryCoverageError(
+                        "Freshdesk entry coverage cache could not be published"
+                    ) from error
     except FreshdeskCookieExpired:
         if args.auth == "cookie":
             mark_cookie_expired(runtime_directory)
         raise
-    except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
-        try:
-            checkpoint_after_interrupt = load_coverage_checkpoint(checkpoint_path)
-        except EntryCoverageCheckpointError as error:
-            raise FreshdeskEntryCoverageError(
-                "Freshdesk coverage checkpoint is invalid"
-            ) from error
-        if checkpoint_after_interrupt is None:
-            fallback_cache = existing or EntryCoverageCache(
-                fetched_weeks={}, records=()
-            )
-            completed_after_interrupt: tuple[str, ...] = ()
-        else:
-            fallback_cache = EntryCoverageCache(
-                fetched_weeks={
-                    week: checkpoint_as_of
-                    for week in checkpoint_after_interrupt.completed_weeks
-                },
-                records=checkpoint_after_interrupt.records,
-            )
-            completed_after_interrupt = checkpoint_after_interrupt.completed_weeks
-        result = IncrementalEntryCoverageResult(
-            cache=fallback_cache,
-            completed_weeks=completed_after_interrupt,
-            complete=False,
-        )
-    if not result.complete:
-        write_coverage_state(
-            result.cache,
-            progress_state["week"],
-            int(progress_state["index"]),
-            force=True,
-        )
-    if result.complete:
-        try:
-            write_entry_coverage_cache(
-                runtime_directory / "entry_coverage_cache.json",
-                result.cache,
-            )
-            inventory_checkpoint_path.unlink(missing_ok=True)
-            checkpoint_path.unlink(missing_ok=True)
-        except (EntryCoverageCacheError, OSError) as error:
-            raise FreshdeskEntryCoverageError(
-                "Freshdesk entry coverage cache could not be published"
-            ) from error
+    if args.auth == "cookie" and answered:
+        mark_cookie_verified(runtime_directory)
 
     selected_records = tuple(
-        item for item in result.cache.records if item.cohort_week in selected_weeks
+        item for item in base_records.values() if item.cohort_week in selected
     )
     return _entry_coverage_command_result(
-        "complete" if result.complete else "duration_limit_reached",
-        selected_weeks,
-        selected_records,
-        fetched_weeks=result.cache.fetched_weeks,
+        status, selected_weeks, selected_records, fetched_weeks=base_weeks
     )
 
 
@@ -1731,18 +1549,6 @@ def _entry_coverage_command_result(
         "ai_replied_then_transferred_count": counts["ai_replied_then_transferred"],
         "transferred_without_ai_reply_count": counts["transferred_without_ai_reply"],
         "invoked_no_result_count": counts["invoked_no_result"],
-        "not_observed_invoked_count": counts["not_observed_invoked"],
-        "not_observed_human_replied_count": sum(
-            getattr(item, "status", None) == "not_observed_invoked"
-            and getattr(item, "human_replied", None) is True
-            for item in selected_records
-        ),
-        "not_observed_no_human_reply_count": sum(
-            getattr(item, "status", None) == "not_observed_invoked"
-            and getattr(item, "human_replied", None) is False
-            for item in selected_records
-        ),
-        "unresolved_count": counts["unresolved"],
     }
 
 

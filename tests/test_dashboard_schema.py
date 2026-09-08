@@ -138,7 +138,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 28
+    assert snapshot.storage_dict()["schema_version"] == 30
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -156,7 +156,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
         # Day-grain diagnostic fields (§4.1) -- server-only.
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
         "guardrail_rules", "tpe_signals",
-        "tool_error_codes",
+        "tool_error_codes", "ai_review_rating",
     }
     assert {
         ticket.ticket_id: getattr(ticket, "opened_at", None)
@@ -175,7 +175,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
         ticket_id="7043723",
         opened_at="2026-07-20T02:00:00Z",
         cohort_week="2026-07-20",
-        status="not_observed_invoked",
+        status="invoked_no_result",
         human_replied=True,
     )
     value = snapshot.storage_dict()
@@ -188,7 +188,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 28
+    value["schema_version"] = 30
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -606,14 +606,14 @@ def _entry_coverage_snapshot() -> DashboardSnapshot:
                 ticket_id="145667",
                 opened_at="2026-07-22T02:00:00Z",
                 cohort_week="2026-07-20",
-                status="not_observed_invoked",
+                status="invoked_no_result",
                 human_replied=True,
             ),
             EntryCoverageRecord(
                 ticket_id="145666",
                 opened_at="2026-07-24T18:00:00Z",
                 cohort_week="2026-07-20",
-                status="unresolved",
+                status="invoked_no_result",
                 human_replied=None,
             ),
             EntryCoverageRecord(
@@ -643,9 +643,8 @@ def test_entry_coverage_buckets_by_vietnam_day_and_sums_back_to_its_week():
     assert "2026-07-14" not in by_day
     assert "2026-07-13" not in mon_sun["by_week"]
 
-    assert by_day["2026-07-22"]["not_observed_invoked"] == 1
-    assert by_day["2026-07-22"]["not_observed_human_replied"] == 1
-    assert by_day["2026-07-25"]["unresolved"] == 1
+    assert by_day["2026-07-22"]["invoked_no_result"] == 1
+    assert by_day["2026-07-25"]["invoked_no_result"] == 1
 
     # Day grain composes upward: same population, cut finer. If these ever
     # disagree the two grains have drifted.
@@ -691,12 +690,18 @@ _AI_REVIEW_COUNT_KEYS = (
 def _ai_review_snapshot() -> DashboardSnapshot:
     """The same shape as `_entry_coverage_snapshot()`, hậu kiểm AI grain.
 
-    145665/145667/145666 sit in the fetched week 2026-07-20: reviewed with a
-    rating, reviewed with count 0 and no rating yet, and reviewed with a
-    different rating. 145670 sits in the same week but was never touched by
-    hậu kiểm at all (both fields null) -- the fourth ticket that keeps
-    `reviewed_ticket_count`/`rated_ticket_count` from accidentally equaling
-    the week's total ticket count. 145669 sits in an unfetched week.
+    `reviewed_ticket_count` is a SUM of `cf_s_ln_hu_kim_ai` over rated
+    tickets only (unrated tickets never add to this sum, whatever their
+    count). 145665/145667/145666/145668 sit in the fetched week 2026-07-20:
+    rated and reviewed twice, review_count == 0 with no rating (contributes
+    nowhere at all -- 0 isn't ">= 1" and there's no rating either), rated and
+    reviewed once, and reviewed with a count but no rating yet -- this last
+    one is "Chưa đánh giá lại": it counts toward `evaluated_ticket_count` and
+    `unrated_reviewed_ticket_count`, just not toward the rated-only
+    `reviewed_ticket_count`/`rated_ticket_count`. 145670 sits in the same
+    week but was never touched by hậu kiểm at all (both fields null) -- the
+    ticket that keeps every count below the week's total ticket count.
+    145669 sits in an unfetched week.
     """
     run = _run(
         [
@@ -705,6 +710,7 @@ def _ai_review_snapshot() -> DashboardSnapshot:
             # 18:00Z on Friday the 24th is already Saturday the 25th in Vietnam.
             _meta(trace("weekend", "145666", 0, "2026-07-24T18:00:00Z", "AI reply")),
             _meta(trace("never-reviewed", "145670", 0, "2026-07-21T02:00:00Z", "AI reply")),
+            _meta(trace("reviewed-unrated", "145668", 0, "2026-07-21T05:00:00Z", "AI reply")),
             _meta(trace("unfetched", "145669", 0, "2026-07-14T02:00:00Z", "AI reply")),
         ]
     )
@@ -756,6 +762,17 @@ def _ai_review_snapshot() -> DashboardSnapshot:
                 user_replied=None,
             ),
             AIReviewRecord(
+                ticket_id="145668",
+                opened_at="2026-07-21T05:00:00Z",
+                cohort_week="2026-07-20",
+                rating=None,
+                review_count=3,
+                review_date=None,
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=None,
+            ),
+            AIReviewRecord(
                 ticket_id="145669",
                 opened_at="2026-07-14T02:00:00Z",
                 cohort_week="2026-07-13",
@@ -775,36 +792,83 @@ def test_ai_review_denominators_are_distinct_and_neither_equals_total_ticket_cou
     dashboard = _ai_review_snapshot().dashboard_dict()
     week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
 
-    # 4 tickets total this week; 3 were reviewed (count present, including
-    # 0); 2 of those carry a rating. Every number below must differ, or the
-    # fixture is not actually exercising the "two mẫu số" contract.
+    # 5 tickets total this week; reviewed_ticket_count is a SUM over the 2
+    # rated tickets only (145665's count of 2 + 145666's count of 1 = 3;
+    # 145668's count of 3 doesn't count, it has no rating). Every number
+    # below must differ, or the fixture is not actually exercising the "two
+    # mẫu số" contract.
     assert week["reviewed_ticket_count"] == 3
     assert week["rated_ticket_count"] == 2
     assert week["satisfied_count"] == 1
     assert week["needs_edit_count"] == 1
     assert week["satisfied_with_edit_count"] == 0
+    # 145668 is reviewed (count 3) but never rated -- "Chưa đánh giá lại".
+    # It's the only ticket in `unrated_reviewed_ticket_count`, and
+    # `evaluated_ticket_count` is rated_ticket_count + unrated_reviewed_ticket_count.
+    assert week["unrated_reviewed_ticket_count"] == 1
+    assert week["evaluated_ticket_count"] == 3
     weekly_by_key = {
         item["cohort_week"]: item for item in dashboard["views"]["mon_sun"]["weekly"]
     }
     total_tickets = weekly_by_key["2026-07-20"]["total_tickets"]
-    assert total_tickets == 4
+    assert total_tickets == 5
     assert week["reviewed_ticket_count"] != total_tickets
     assert week["rated_ticket_count"] != total_tickets
     assert week["rated_ticket_count"] != week["reviewed_ticket_count"]
 
 
-def test_ai_review_ticket_with_zero_review_count_is_reviewed_but_not_rated():
+def test_ai_review_ticket_with_zero_review_count_is_not_reviewed():
     dashboard = _ai_review_snapshot().dashboard_dict()
     week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
     review_count_rows = {row["value"]: row for row in week["by_review_count"]}
 
-    # 145667 has review_count == 0 and no rating: it must land in the "0"
-    # review-count bucket and count toward reviewed, but never toward rated.
-    assert review_count_rows["0"]["reviewed_ticket_count"] == 1
-    assert review_count_rows["0"]["rated_ticket_count"] == 0
-    # 145670 (never reviewed at all) must not appear in any review-count
-    # bucket -- it has no review_count to key one on.
+    # 145667 has review_count == 0 and no rating: 0 isn't ">= 1" and there's
+    # no rating either, so it contributes nowhere -- no "0" bucket at all.
+    assert "0" not in review_count_rows
+    # 145670 (never touched at all) must not appear in any review-count
+    # bucket -- it has neither field to key one on. 145668 lands in the "3"
+    # bucket (it has a count >= 1) but contributes 0 to reviewed_ticket_count
+    # (it has no rating) -- it's unrated-reviewed instead; only 145665 (2)
+    # and 145666 (1) contribute to the reviewed sum below.
+    assert review_count_rows["3"]["reviewed_ticket_count"] == 0
+    assert review_count_rows["3"]["unrated_reviewed_ticket_count"] == 1
     assert sum(row["reviewed_ticket_count"] for row in week["by_review_count"]) == 3
+
+
+def test_ai_review_reviewed_but_unrated_ticket_is_chua_danh_gia_lai():
+    """A ticket reviewed (count >= 1) but never (re-)rated is not dropped.
+
+    It must not count toward `reviewed_ticket_count`/`rated_ticket_count`
+    (those stay rated-only), but it does count toward
+    `unrated_reviewed_ticket_count` ("Chưa đánh giá lại") and toward
+    `evaluated_ticket_count` ("Đã đánh giá"), which is a union of rated OR
+    reviewed>=1 tickets, not a sum of the two.
+    """
+    run = _run([_meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))])
+    cache = AIReviewCache(
+        fetched_weeks={"2026-07-20": "2026-08-04T01:00:00Z"},
+        records=(
+            AIReviewRecord(
+                ticket_id="145665",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+                rating=None,
+                review_count=2,
+                review_date="2026-07-21",
+                reopen_replied=None,
+                reopen_reply_count=None,
+                user_replied=True,
+            ),
+        ),
+    )
+
+    dashboard = project_dashboard(run, ai_review_cache=cache).dashboard_dict()
+    week = dashboard["views"]["mon_sun"]["ai_review"]["by_week"]["2026-07-20"]
+
+    assert week["rated_ticket_count"] == 0
+    assert week["reviewed_ticket_count"] == 0
+    assert week["unrated_reviewed_ticket_count"] == 1
+    assert week["evaluated_ticket_count"] == 1
 
 
 def test_ai_review_accepts_a_rating_without_a_review_count():
@@ -812,10 +876,10 @@ def test_ai_review_accepts_a_rating_without_a_review_count():
 
     Measured 2026-09-05 over the live cache: 8.717 tickets carry
     `cf_rating_ai` but only 6.677 carry `cf_s_ln_hu_kim_ai` -- 3.574 are
-    rated with no review count at all, and 1.534 the other way round. The
-    validator used to assert `rated <= reviewed`, which no real week
-    satisfies, so every refresh raised and the dashboard sat on a stale
-    snapshot still showing the "job never ran" empty state.
+    rated with no review count at all, and 1.534 the other way round.
+    `cf_s_ln_hu_kim_ai` only started existing 2026-08-21, so a `None` count
+    on an earlier rated ticket is a field-availability gap, not proof it was
+    never reviewed -- it defaults to 1.
 
     `_ai_review_snapshot()` never caught it because every rated record in
     that fixture also carries a count.
@@ -844,7 +908,11 @@ def test_ai_review_accepts_a_rating_without_a_review_count():
 
     assert week["rated_ticket_count"] == 1
     assert week["satisfied_count"] == 1
-    assert week["reviewed_ticket_count"] == 0
+    # No count at all, but rated -- defaults to 1, not 0.
+    assert week["reviewed_ticket_count"] == 1
+    # Rated tickets are "evaluated" too; none of them are unrated-reviewed.
+    assert week["evaluated_ticket_count"] == 1
+    assert week["unrated_reviewed_ticket_count"] == 0
 
 
 def test_ai_review_buckets_by_vietnam_day_and_sums_back_to_its_week():
@@ -2318,7 +2386,7 @@ def test_ticket_page_sort_contract_rejects_unknown_field_direction_and_orphan_di
     snapshot = _snapshot()
     projected_fields = set(asdict(snapshot.tickets[0]))
 
-    assert len(projected_fields) == 33
+    assert len(projected_fields) == 34
     assert projected_fields - _TICKET_EXPLORER_PUBLIC_KEYS == {
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
         "guardrail_rules", "tpe_signals",

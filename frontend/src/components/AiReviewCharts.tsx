@@ -52,11 +52,13 @@ export function AiReviewCharts({
           </strong>
           <span className={chartStyles.headlineLabel}>ticket có nhãn bị chấm “Cần sửa”</span>
         </p>
-        {/* Two denominators, both printed: `reviewed_ticket_count` (hậu kiểm
-            ran) and `rated_ticket_count` (a rating label exists). They are
-            never the same population, so neither can stand in for the other. */}
+        {/* Three denominators, all printed: `evaluated_ticket_count` (Đã
+            đánh giá -- rated OR reviewed>=1), `unrated_reviewed_ticket_count`
+            (Chưa đánh giá lại -- reviewed but never rated), and
+            `reviewed_ticket_count` (a SUM over rated tickets only). None can
+            stand in for another. */}
         <p className={chartStyles.headlineSupport}>
-          {`${formatCount(data.rated_ticket_count)} có nhãn / ${formatCount(data.reviewed_ticket_count)} đã hậu kiểm`}
+          {`${formatCount(data.evaluated_ticket_count)} đã đánh giá / ${formatCount(data.unrated_reviewed_ticket_count)} chưa đánh giá lại / ${formatCount(data.reviewed_ticket_count)} số lần hậu kiểm`}
         </p>
         <SplitBar
           buckets={AI_REVIEW_BUCKETS}

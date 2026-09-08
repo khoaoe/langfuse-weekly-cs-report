@@ -19,8 +19,8 @@ def _record(
     ticket_id: str = "123",
     opened_at: str = "2026-08-03T01:00:00Z",
     cohort_week: str = "2026-07-27",
-    status: str = "not_observed_invoked",
-    human_replied: bool | None = False,
+    status: str = "ai_replied_only",
+    human_replied: bool | None = None,
 ) -> EntryCoverageRecord:
     return EntryCoverageRecord(
         ticket_id=ticket_id,
@@ -45,15 +45,15 @@ def _write_private_json(path: Path, value: object) -> None:
 
 def _valid_value() -> dict[str, object]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "fetched_weeks": {"2026-07-27": "2026-08-04T01:00:00Z"},
         "records": [
             {
                 "ticket_id": "123",
                 "opened_at": "2026-08-03T01:00:00Z",
                 "cohort_week": "2026-07-27",
-                "status": "not_observed_invoked",
-                "human_replied": False,
+                "status": "ai_replied_only",
+                "human_replied": None,
             }
         ],
     }
@@ -125,7 +125,7 @@ def test_entry_cache_rejects_duplicate_ids_and_schema_drift(tmp_path: Path):
         load_entry_coverage_cache(destination)
 
     value = _valid_value()
-    value["schema_version"] = 2
+    value["schema_version"] = 1
     _write_private_json(destination, value)
     with pytest.raises(EntryCoverageCacheError):
         load_entry_coverage_cache(destination)

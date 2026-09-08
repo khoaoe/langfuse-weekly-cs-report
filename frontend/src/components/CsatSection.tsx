@@ -203,6 +203,8 @@ function selectCsatScope(
 const AI_REVIEW_COUNT_FIELDS = [
   "reviewed_ticket_count",
   "rated_ticket_count",
+  "evaluated_ticket_count",
+  "unrated_reviewed_ticket_count",
   "satisfied_count",
   "satisfied_with_edit_count",
   "needs_edit_count",
@@ -222,6 +224,8 @@ function sumAiReviewCounts(rows: readonly AiReviewCountFields[]): AiReviewCountF
     {
       reviewed_ticket_count: 0,
       rated_ticket_count: 0,
+      evaluated_ticket_count: 0,
+      unrated_reviewed_ticket_count: 0,
       satisfied_count: 0,
       satisfied_with_edit_count: 0,
       needs_edit_count: 0,
@@ -881,7 +885,7 @@ export function CsatSection({
               </div>
             ) : null}
           </div>
-        ) : aiReviewData === null || aiReviewData.reviewed_ticket_count === 0 ? (
+        ) : aiReviewData === null || aiReviewData.evaluated_ticket_count === 0 ? (
           <p className={csatStyles.empty}>
             {effectiveWeek === ""
               ? "Không có ticket nào vào diện hậu kiểm trong toàn kỳ."

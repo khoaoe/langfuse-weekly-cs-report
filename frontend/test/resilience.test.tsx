@@ -355,6 +355,7 @@ describe("bulk export", () => {
         data_quality: "valid",
         model_core: null,
         tool_error_codes: [],
+        ai_review_rating: null,
       }));
 
     const seen: string[] = [];

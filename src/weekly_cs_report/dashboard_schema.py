@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 28
+_STORAGE_VERSION = 30
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -117,8 +117,17 @@ _VIETNAMESE_NAME_MIDDLES = frozenset({"văn", "van", "thị", "thi"})
 _OUTCOMES = ("ai_end_to_end", "ai_then_cs", "direct_cs", "unclassified")
 _CSAT_BUCKETS = ("positive", "neutral", "negative")
 _AI_REVIEW_RATING_BUCKETS = ("satisfied_count", "satisfied_with_edit_count", "needs_edit_count")
-_AI_REVIEW_COUNT_KEYS = ("reviewed_ticket_count", "rated_ticket_count", *_AI_REVIEW_RATING_BUCKETS)
+_AI_REVIEW_COUNT_KEYS = (
+    "reviewed_ticket_count",
+    "rated_ticket_count",
+    "evaluated_ticket_count",
+    "unrated_reviewed_ticket_count",
+    *_AI_REVIEW_RATING_BUCKETS,
+)
 _CSAT_TICKET_STATES = frozenset({*_CSAT_BUCKETS, "unrated"})
+_AI_REVIEW_RATING_SLUGS = frozenset(
+    bucket.removesuffix("_count") for bucket in _AI_REVIEW_RATING_BUCKETS
+)
 _CSAT_SORT_RANK = {"negative": 0, "neutral": 1, "positive": 2}
 _VIEWS = ("mon_sun", "mon_fri")
 _ENTRY_COVERAGE_STATUSES = frozenset(
@@ -127,8 +136,6 @@ _ENTRY_COVERAGE_STATUSES = frozenset(
         "ai_replied_then_transferred",
         "transferred_without_ai_reply",
         "invoked_no_result",
-        "not_observed_invoked",
-        "unresolved",
     }
 )
 _VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -172,7 +179,7 @@ _TICKET_KEYS = frozenset(
         "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
-        "data_quality", "model_core", "tool_error_codes",
+        "data_quality", "model_core", "tool_error_codes", "ai_review_rating",
         # Day-grain diagnostic fields (§4.1) -- server-only, never part of the
         # Ticket Explorer's public projection (`_TICKET_EXPLORER_PUBLIC_KEYS`).
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
@@ -244,6 +251,10 @@ class TicketRow:
     # pairs, no free text and no PII. See `TicketDimensions.tool_error_codes`
     # for why this is a tuple rather than one label.
     tool_error_codes: tuple[str, ...] = ()
+    # Per-ticket AI post-review (hậu kiểm) rating slug, mirroring
+    # `csat_satisfaction`'s cache-lookup pattern. Public: a closed-enum slug,
+    # not PII.
+    ai_review_rating: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ticket_values(self)
@@ -343,6 +354,10 @@ def project_dashboard(
     # bake in a resolved TPE status at generation time -- day aggregates
     # read only stored `TicketRow`s later, when the taxonomy is gone.
     tpe_status_index = build_tpe_status_index(result.sessions, run.taxonomy)
+    ai_review_rating_by_ticket = {
+        record.ticket_id: record.rating
+        for record in (ai_review_cache.records if ai_review_cache is not None else ())
+    }
     tickets = tuple(sorted(
         (
             _ticket_row(
@@ -351,6 +366,7 @@ def project_dashboard(
                 csat_cache,
                 ordered_csat,
                 tpe_status_index,
+                ai_review_rating_by_ticket,
             )
             for session in result.sessions
             if _is_safe_ticket_id(session.session_id)
@@ -1271,16 +1287,6 @@ def _entry_coverage_bucket(
         "ai_replied_then_transferred": counts["ai_replied_then_transferred"],
         "transferred_without_ai_reply": counts["transferred_without_ai_reply"],
         "invoked_no_result": counts["invoked_no_result"],
-        "not_observed_invoked": counts["not_observed_invoked"],
-        "not_observed_human_replied": sum(
-            record.status == "not_observed_invoked" and record.human_replied is True
-            for record in records
-        ),
-        "not_observed_no_human_reply": sum(
-            record.status == "not_observed_invoked" and record.human_replied is False
-            for record in records
-        ),
-        "unresolved": counts["unresolved"],
     }
 
 
@@ -1562,8 +1568,20 @@ def _ai_review_bucket(
     computation over a different member list, so the two can never drift.
 
     Two denominators, never the total ticket count: `reviewed_ticket_count`
-    (hậu kiểm count present, including 0) and `rated_ticket_count` (a rating
-    label present).
+    (a SUM, not a ticket count -- `cf_s_ln_hu_kim_ai` summed over every rated
+    ticket, since `cf_s_ln_hu_kim_ai` only exists from 2026-08-21 onward so a
+    `None`/`0` on an older *rated* ticket is a field-availability gap, not
+    proof of zero reviews, and defaults to 1; an unrated ticket contributes
+    nothing to this sum regardless of its review count) and `rated_ticket_count`
+    (a rating label present).
+
+    `evaluated_ticket_count` and `unrated_reviewed_ticket_count` are ticket
+    counts, not sums, and cover the tickets `reviewed_ticket_count` leaves
+    out: a rated ticket is "evaluated" (same population as
+    `rated_ticket_count`); an unrated ticket with `cf_s_ln_hu_kim_ai >= 1` was
+    reviewed but never re-rated ("Chưa đánh giá lại"), and counts as
+    evaluated too. The two are disjoint by construction, so
+    `evaluated_ticket_count == rated_ticket_count + unrated_reviewed_ticket_count`.
     """
     outcome_counts = {outcome: _empty_ai_review_counts() for outcome in _OUTCOMES}
     dimension_counts: dict[str, dict[str, dict[str, int]]] = {
@@ -1588,9 +1606,14 @@ def _ai_review_bucket(
                 value, _empty_ai_review_counts()
             )
             _increment_ai_review_counts(counts, record)
-        if record.review_count is not None:
+        if record.rating is not None or (
+            record.review_count is not None and record.review_count >= 1
+        ):
+            review_count_key = (
+                str(record.review_count) if record.review_count is not None else "0"
+            )
             counts = review_count_counts.setdefault(
-                str(record.review_count), _empty_ai_review_counts()
+                review_count_key, _empty_ai_review_counts()
             )
             _increment_ai_review_counts(counts, record)
     return {
@@ -1624,11 +1647,15 @@ def _increment_ai_review_counts(
     counts: dict[str, int],
     record: "AIReviewRecord",
 ) -> None:
-    if record.review_count is not None:
-        counts["reviewed_ticket_count"] += 1
+    reviewed = record.review_count is not None and record.review_count >= 1
     if record.rating is not None:
         counts["rated_ticket_count"] += 1
         counts[f"{record.rating}_count"] += 1
+        counts["evaluated_ticket_count"] += 1
+        counts["reviewed_ticket_count"] += record.review_count if reviewed else 1
+    elif reviewed:
+        counts["unrated_reviewed_ticket_count"] += 1
+        counts["evaluated_ticket_count"] += 1
 
 
 def _csat_response_order(
@@ -2140,6 +2167,7 @@ def _ticket_row(
     csat_cache: CSATCache | None,
     ordered_csat: Mapping[str, tuple[CachedCSATResponse, ...]],
     tpe_status_index: Mapping[tuple[str, str | None], str],
+    ai_review_rating_by_ticket: Mapping[str, str | None],
 ) -> TicketRow:
     dims = session.dimensions
     cohort_week = session.cohort_week.isoformat()
@@ -2180,6 +2208,7 @@ def _ticket_row(
             for transstatus, step_result in _valid_tpe_signals(dims.tpe_signals)
         ),
         tool_error_codes=tuple(dims.tool_error_codes),
+        ai_review_rating=ai_review_rating_by_ticket.get(session.session_id),
     )
 
 
@@ -2564,6 +2593,11 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         and ticket.csat_satisfaction not in _CSAT_TICKET_STATES
     ):
         raise ValueError("csat_satisfaction is invalid")
+    if (
+        ticket.ai_review_rating is not None
+        and ticket.ai_review_rating not in _AI_REVIEW_RATING_SLUGS
+    ):
+        raise ValueError("ai_review_rating is invalid")
     if ticket.data_quality not in _QUALITY_LABELS:
         raise ValueError("data_quality is invalid")
     if ticket.transferred:
@@ -2858,10 +2892,6 @@ def _validate_entry_coverage(
         "ai_replied_then_transferred",
         "transferred_without_ai_reply",
         "invoked_no_result",
-        "not_observed_invoked",
-        "not_observed_human_replied",
-        "not_observed_no_human_reply",
-        "unresolved",
     }
     for cohort_week, raw_counts in by_week.items():
         _week_string(cohort_week, "view.entry_coverage.by_week key")
@@ -2906,16 +2936,10 @@ def _validate_entry_coverage_bucket(
             "ai_replied_then_transferred",
             "transferred_without_ai_reply",
             "invoked_no_result",
-            "not_observed_invoked",
-            "unresolved",
         )
     )
     if counts["freshdesk_ticket_count"] != status_total:
         raise ValueError("entry coverage status counts do not reconcile")
-    if counts["not_observed_invoked"] != (
-        counts["not_observed_human_replied"] + counts["not_observed_no_human_reply"]
-    ):
-        raise ValueError("entry coverage human counts do not reconcile")
 
 
 def _validate_ai_review(
@@ -2965,12 +2989,14 @@ def _validate_ai_review_bucket(
 ) -> None:
     """Validate one AI-review bucket. Grain-agnostic, like `_ai_review_bucket()`.
 
-    `reviewed_ticket_count`/`rated_ticket_count` are two distinct denominators
-    -- never the total ticket count -- so, unlike CSAT, there is no single
-    `ticket_count` field to compare against `population_cap`; only that
-    neither denominator may exceed it.
+    `reviewed_ticket_count` is a SUM of `cf_s_ln_hu_kim_ai` over rated
+    tickets, not a ticket count, so it can legitimately exceed
+    `population_cap` (one ticket can contribute more than 1) -- the other
+    three, `rated_ticket_count`, `evaluated_ticket_count`, and
+    `unrated_reviewed_ticket_count`, are actual ticket counts and are bounded
+    by it.
 
-    Neither nests inside the other either: `cf_rating_ai` and
+    The two source fields don't nest either: `cf_rating_ai` and
     `cf_s_ln_hu_kim_ai` are filled independently by CS. Measured 2026-09-05
     over the live cache, 3.574 tickets are rated with no review count and
     1.534 have a count but no rating.
@@ -2987,10 +3013,18 @@ def _validate_ai_review_bucket(
         counts[key] for key in _AI_REVIEW_RATING_BUCKETS
     ):
         raise ValueError("view.ai_review rating counts do not reconcile")
-    if counts["reviewed_ticket_count"] > population_cap:
-        raise ValueError("view.ai_review reviewed count exceeds weekly population")
+    if counts["evaluated_ticket_count"] != (
+        counts["rated_ticket_count"] + counts["unrated_reviewed_ticket_count"]
+    ):
+        raise ValueError("view.ai_review evaluated count does not reconcile")
     if counts["rated_ticket_count"] > population_cap:
         raise ValueError("view.ai_review rated count exceeds weekly population")
+    if counts["evaluated_ticket_count"] > population_cap:
+        raise ValueError("view.ai_review evaluated count exceeds weekly population")
+    if counts["unrated_reviewed_ticket_count"] > population_cap:
+        raise ValueError(
+            "view.ai_review unrated-reviewed count exceeds weekly population"
+        )
 
     by_outcome = _require_mapping(counts["by_outcome"], f"{path}.by_outcome")
     _require_exact_keys(by_outcome, set(_OUTCOMES), f"{path}.by_outcome")
@@ -3075,6 +3109,10 @@ def _validate_ai_review_count_row(
         _nonnegative_int(row[key], f"{name}.{key}")
     if row["rated_ticket_count"] != sum(row[key] for key in _AI_REVIEW_RATING_BUCKETS):
         raise ValueError(f"{name} rating buckets do not reconcile")
+    if row["evaluated_ticket_count"] != (
+        row["rated_ticket_count"] + row["unrated_reviewed_ticket_count"]
+    ):
+        raise ValueError(f"{name} evaluated count does not reconcile")
     return row
 
 

@@ -7,6 +7,7 @@ import socket
 import time
 import threading
 from collections.abc import Callable, Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
@@ -157,6 +158,7 @@ class LangfuseClient:
         cancel_event: threading.Event | None = None,
         max_pages: int = 500,
         fields: str = "core,io",
+        max_workers: int = 8,
     ) -> Iterator[dict]:
         if (
             not isinstance(max_pages, int)
@@ -168,9 +170,8 @@ class LangfuseClient:
             raise ValueError("fields must be a non-empty string")
         from_utc = _serialize_utc(from_timestamp, "from_timestamp")
         to_utc = _serialize_utc(to_timestamp, "to_timestamp")
-        page_number = 1
 
-        while True:
+        def fetch_page(page_number: int) -> tuple[list[dict], int]:
             _raise_if_cancelled(cancel_event, "GET", "/api/public/traces")
             params = {
                 "page": page_number,
@@ -188,16 +189,35 @@ class LangfuseClient:
                 deadline=deadline,
                 cancel_event=cancel_event,
             )
-            data, total_pages = self._parse_page(
-                response, "GET", "/api/public/traces"
-            )
-            if total_pages > max_pages:
-                raise LangfuseTracePageLimitExceeded
-            yield from data
-            _raise_if_cancelled(cancel_event, "GET", "/api/public/traces")
-            if page_number >= total_pages:
-                return
-            page_number += 1
+            return self._parse_page(response, "GET", "/api/public/traces")
+
+        first_page_data, total_pages = fetch_page(1)
+        if total_pages > max_pages:
+            raise LangfuseTracePageLimitExceeded
+        yield from first_page_data
+        _raise_if_cancelled(cancel_event, "GET", "/api/public/traces")
+        if total_pages <= 1:
+            return
+
+        # Pages 2..N are independent GET requests keyed by page number, so
+        # fetching them concurrently (bounded pool) turns a ~300s sequential
+        # crawl of a large trace window into one that finishes in the time
+        # of the slowest single page instead of the sum of all of them.
+        remaining_pages = range(2, total_pages + 1)
+        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(remaining_pages)))
+        try:
+            futures = {pool.submit(fetch_page, page): page for page in remaining_pages}
+            results: dict[int, list[dict]] = {}
+            for future in as_completed(futures):
+                data, _ = future.result()
+                results[futures[future]] = data
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
+        for page_number in remaining_pages:
+            yield from results[page_number]
 
     def list_traces_by_session(self, session_id: str) -> list[dict]:
         """Read every trace of one session, sorted by timestamp ascending."""

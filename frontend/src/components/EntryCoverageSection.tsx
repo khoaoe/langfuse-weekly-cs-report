@@ -20,8 +20,6 @@ const STATUS_LABELS: Readonly<Record<EntryCoverageStatus, string>> = {
   ai_replied_then_transferred: "AI phản hồi rồi chuyển CS",
   transferred_without_ai_reply: "Chuyển CS không có AI First",
   invoked_no_result: "Đã gọi nhưng không có phản hồi/chuyển CS",
-  not_observed_invoked: "Không thấy lần gọi CS-agent",
-  unresolved: "Chưa xác định",
 };
 
 interface EntryCoverageSectionProps {
@@ -204,12 +202,6 @@ export function EntryCoverageSection({
       label: STATUS_LABELS.invoked_no_result,
       investigation: true,
     },
-    {
-      key: "not_observed_invoked",
-      label: STATUS_LABELS.not_observed_invoked,
-      investigation: true,
-    },
-    { key: "unresolved", label: STATUS_LABELS.unresolved, investigation: true },
   ];
 
   return (
@@ -264,14 +256,6 @@ export function EntryCoverageSection({
             </div>
           );
         })}
-      </div>
-      <div className={entryStyles.subcounts}>
-        <span>
-          CS người đã phản hồi trực tiếp: {formatCount(totalFor("not_observed_human_replied"))}
-        </span>
-        <span>
-          Chưa thấy CS người phản hồi: {formatCount(totalFor("not_observed_no_human_reply"))}
-        </span>
       </div>
       {selectedStatus !== null ? (
         <div className={entryStyles.detail} aria-live="polite">

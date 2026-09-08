@@ -29,6 +29,8 @@ function csatWeek(overrides: Partial<CsatWeek> = {}): CsatWeek {
 const emptyAiCounts = {
   reviewed_ticket_count: 0,
   rated_ticket_count: 0,
+  evaluated_ticket_count: 0,
+  unrated_reviewed_ticket_count: 0,
   satisfied_count: 0,
   satisfied_with_edit_count: 0,
   needs_edit_count: 0,
@@ -117,8 +119,11 @@ describe("CsatBreakdownTable — bar-in-table (no ranking-panel duplicate)", () 
     const row = screen.getByRole("button", { name: /interbank-fund-transfer/ }).closest("tr");
     expect(row).not.toBeNull();
     expect(row!.textContent).toContain("3");
-    const dash = within(row!).getByText("—");
-    expect(dash.getAttribute("title")).toMatch(/Mẫu dưới 20/);
+    const dashes = within(row!).getAllByText("—");
+    expect(dashes.length).toBeGreaterThan(0);
+    for (const dash of dashes) {
+      expect(dash.getAttribute("title")).toMatch(/Mẫu dưới 20/);
+    }
   });
 });
 
@@ -127,6 +132,7 @@ describe("AiReviewBreakdownTable — bar-in-table (no ranking-panel duplicate)",
     const data = aiReviewBucket({
       reviewed_ticket_count: 25,
       rated_ticket_count: 25,
+      evaluated_ticket_count: 25,
       satisfied_count: 15,
       satisfied_with_edit_count: 5,
       needs_edit_count: 5,
@@ -137,6 +143,7 @@ describe("AiReviewBreakdownTable — bar-in-table (no ranking-panel duplicate)",
             ...emptyAiCounts,
             reviewed_ticket_count: 25,
             rated_ticket_count: 25,
+            evaluated_ticket_count: 25,
             satisfied_count: 15,
             satisfied_with_edit_count: 5,
             needs_edit_count: 5,
@@ -164,6 +171,7 @@ describe("AiReviewBreakdownTable — bar-in-table (no ranking-panel duplicate)",
     const data = aiReviewBucket({
       reviewed_ticket_count: 25,
       rated_ticket_count: 25,
+      evaluated_ticket_count: 25,
       satisfied_count: 15,
       satisfied_with_edit_count: 5,
       needs_edit_count: 5,
@@ -174,6 +182,7 @@ describe("AiReviewBreakdownTable — bar-in-table (no ranking-panel duplicate)",
             ...emptyAiCounts,
             reviewed_ticket_count: 25,
             rated_ticket_count: 25,
+            evaluated_ticket_count: 25,
             satisfied_count: 15,
             satisfied_with_edit_count: 5,
             needs_edit_count: 5,

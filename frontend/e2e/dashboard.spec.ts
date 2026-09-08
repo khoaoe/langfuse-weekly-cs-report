@@ -116,11 +116,7 @@ function entryCoverageEnvelope() {
         ai_replied_only: 1,
         ai_replied_then_transferred: 0,
         transferred_without_ai_reply: 0,
-        invoked_no_result: 1,
-        not_observed_invoked: 2,
-        not_observed_human_replied: 1,
-        not_observed_no_human_reply: 1,
-        unresolved: 0,
+        invoked_no_result: 3,
       },
     },
   };
@@ -296,6 +292,7 @@ function csatTicketRows(): readonly TicketRow[] {
     data_quality: "valid",
     model_core: null,
     tool_error_codes: [],
+    ai_review_rating: null,
   }));
 }
 
@@ -555,7 +552,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
       const url = new URL(route.request().url());
       expect(url.searchParams.get("week_definition")).toBe("mon_fri");
       expect(url.searchParams.get("cohort_weeks")).toBe("2026-07-20");
-      expect(url.searchParams.get("status")).toBe("not_observed_invoked");
+      expect(url.searchParams.get("status")).toBe("invoked_no_result");
       return route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -565,7 +562,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
               ticket_id: "7043723",
               opened_at: "2026-07-21T02:00:00Z",
               cohort_week: "2026-07-20",
-              status: "not_observed_invoked",
+              status: "invoked_no_result",
               human_replied: true,
             },
           ],
@@ -580,8 +577,8 @@ test.describe("Zalopay weekly CS dashboard", () => {
     const section = page.getByRole("region", {
       name: "Độ phủ xử lý từ Freshdesk",
     });
-    await expect(section).toContainText("Không thấy lần gọi CS-agent");
-    await section.getByRole("button", { name: "Xem ticket" }).nth(1).click();
+    await expect(section).toContainText("Đã gọi nhưng không có phản hồi/chuyển CS");
+    await section.getByRole("button", { name: "Xem ticket" }).nth(0).click();
     await expect(section).toContainText("7043723");
     await expect(section).toContainText("Trang 1 · 1 ticket");
     expect(
