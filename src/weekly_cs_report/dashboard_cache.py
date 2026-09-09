@@ -7,9 +7,11 @@ from datetime import datetime, timedelta, timezone
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
+import traceback
 
 from .dashboard_schema import _STORAGE_VERSION, DashboardSnapshot
 from .langfuse_client import LangfuseAPIError, LangfuseRequestCancelled
@@ -361,6 +363,12 @@ class SnapshotManager:
         except Exception as error:
             error_code = _error_code(error)
             error_detail = _error_detail(error)
+            # TEMP DIAGNOSTIC (khoann 2026-09-10): background refresh keeps
+            # hitting a data_validation_failed ValueError with no message in
+            # the sanitized log; dump the real traceback to stderr to find the
+            # exact invariant. Remove once root-caused.
+            print(f"DIAG refresh_failure: {error!r}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             if persistence_attempted and candidate_snapshot is not None:
                 failure_snapshot, restored = self._rollback_or_align_persisted_snapshot(
                     previous_snapshot
