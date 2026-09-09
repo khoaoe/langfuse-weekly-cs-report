@@ -16,7 +16,10 @@ _CONFIG_KEYS = frozenset(
     {"schema_version", "approved_by", "approved_at", "notes", "rating_labels"}
 )
 _REOPEN_NOT_REPLIED = "Chưa phản hồi Private Note"
-_REOPEN_REPLIED_UNSPECIFIED = "Đã phản hồi Private Note"
+# Freshdesk emits the bare "Đã phản hồi" alongside the "Private Note" wording
+# (observed live 2026-09-09). Both say replied without naming a count, so both
+# map to (True, None) -- the count stays unknown rather than invented.
+_REOPEN_REPLIED_UNSPECIFIED = frozenset({"Đã phản hồi Private Note", "Đã phản hồi"})
 _REOPEN_REPLIED_N = re.compile(r"Đã phản hồi (\d{1,2})\Z")
 _USER_REPLIED = "Đã trả lời cho User"
 _USER_NOT_REPLIED = "Chưa trả lời cho User"
@@ -152,7 +155,7 @@ def _quoted(raw: object) -> str:
 def parse_reopen_status(raw: str) -> tuple[bool, int | None]:
     if raw == _REOPEN_NOT_REPLIED:
         return False, None
-    if raw == _REOPEN_REPLIED_UNSPECIFIED:
+    if raw in _REOPEN_REPLIED_UNSPECIFIED:
         return True, None
     match = _REOPEN_REPLIED_N.fullmatch(raw)
     if match is None:

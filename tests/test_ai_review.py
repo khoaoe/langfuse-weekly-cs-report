@@ -235,3 +235,8 @@ def test_ai_review_cache_rejects_world_readable_file(tmp_path: Path):
 
 def test_ai_review_cache_missing_file_returns_none(tmp_path: Path):
     assert load_ai_review_cache(tmp_path / "missing.json") is None
+
+
+def test_parse_reopen_status_accepts_bare_replied() -> None:
+    # Freshdesk emits this variant live; it must mean replied, count unknown.
+    assert parse_reopen_status("Đã phản hồi") == (True, None)
