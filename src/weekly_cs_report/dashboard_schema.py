@@ -1506,14 +1506,13 @@ def _ai_review_payload(
 ) -> dict[str, object] | None:
     """Bucket Freshdesk AI post-review (hậu kiểm) at both week and day grain.
 
-    Mirrors `_csat_payload`'s shape so the frontend does not learn a second
-    one. Unlike CSAT, every record carries its own opening instant (see
-    `AIReviewRecord.opened_at`), so `by_day` keys on that directly instead of
-    a session's Langfuse turn0 timestamp -- the same reasoning that lets
-    `_entry_coverage_payload` skip a session join for its day key. A session
-    join is still needed here, for the outcome/skill/issue_category
-    breakdowns issue 02 requires, which `EntryCoverageRecord` has no
-    equivalent of.
+    Mirrors `_csat_payload`'s shape and, like it, keys `by_day` on the
+    session's own Langfuse turn0 timestamp rather than
+    `AIReviewRecord.opened_at`. The two can fall in different calendar weeks
+    for the same ticket (opened long before its AI activity), and week
+    membership here is already decided by `session.cohort_week` -- keying the
+    day off a different clock let a day slip outside the week that scoped it
+    in, tripping `view.ai_review contains a day outside this view`.
     """
     if cache is None or cache.fetched_at is None:
         return None
@@ -1539,10 +1538,9 @@ def _ai_review_payload(
     day_members: dict[str, list[SessionMetrics]] = {}
     for session in scoped:
         week_members[session.cohort_week.isoformat()].append(session)
-        record = records_by_ticket[session.session_id]
-        day = _parse_utc_iso(
-            record.opened_at, "AI review opened_at"
-        ).astimezone(_VIETNAM_TIMEZONE).date().isoformat()
+        day = (
+            session.turn0_timestamp.astimezone(_VIETNAM_TIMEZONE).date().isoformat()
+        )
         day_members.setdefault(day, []).append(session)
     return {
         "source": "freshdesk",
