@@ -1,4 +1,5 @@
 import type { TransferTriggerReason, WeekDefinition } from "./dashboard-schema";
+import { aiReviewRatingLabel } from "./ai-review-labels";
 import { csatSatisfactionLabel } from "./csat-labels";
 import { formatDateRangeLabel, formatWeekRange } from "./format";
 import { transferReasonLabel } from "./transfer-copy";
@@ -13,6 +14,7 @@ export interface TicketFilters {
   readonly opened_to: string;
   readonly outcome: string;
   readonly csat_satisfaction: string;
+  readonly ai_review_rating: string;
   readonly ticket_id: string;
   readonly issue_category: string;
   readonly app: string;
@@ -39,6 +41,7 @@ export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   opened_to: "",
   outcome: "",
   csat_satisfaction: "",
+  ai_review_rating: "",
   ticket_id: "",
   issue_category: "",
   app: "",
@@ -72,6 +75,7 @@ const FILTER_LABELS: Readonly<
 > = {
   ticket_id: "Ticket ID",
   csat_satisfaction: "Khách hàng đánh giá",
+  ai_review_rating: "CS hậu kiểm",
   issue_category: "Category",
   app: "App",
   product_code: "Product Code",
@@ -93,6 +97,7 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
   "ticket_id",
   "outcome",
   "csat_satisfaction",
+  "ai_review_rating",
   "issue_category",
   "app",
   "product_code",
@@ -203,6 +208,7 @@ export function updateTicketFilters(
 const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
   "outcome",
   "csat_satisfaction",
+  "ai_review_rating",
   "issue_category",
   "app",
   "product_code",
@@ -228,6 +234,7 @@ const HAS_VALUE_LABELS: Partial<Record<TicketFilterKey, string>> = {
   tpe_code: "Chỉ ticket có giá trị",
   model_core: "Chỉ ticket có giá trị",
   tool_error_codes: "Chỉ ticket có lỗi",
+  ai_review_rating: "Chỉ ticket đã hậu kiểm",
 };
 
 function displayFilterValuePiece(key: TicketFilterKey, value: string): string {
@@ -237,6 +244,11 @@ function displayFilterValuePiece(key: TicketFilterKey, value: string): string {
   if (key === "csat_satisfaction") {
     return csatSatisfactionLabel(
       value as "positive" | "neutral" | "negative" | "unrated",
+    );
+  }
+  if (key === "ai_review_rating") {
+    return aiReviewRatingLabel(
+      value as "satisfied" | "satisfied_with_edit" | "needs_edit",
     );
   }
   if (key === "transfer_reason") {

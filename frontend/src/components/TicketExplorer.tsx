@@ -14,7 +14,10 @@ import {
   CSAT_SATISFACTION_OPTIONS,
   csatSatisfactionLabel,
 } from "../lib/csat-labels";
-import { aiReviewRatingLabel } from "../lib/ai-review-labels";
+import {
+  AI_REVIEW_RATING_OPTIONS,
+  aiReviewRatingLabel,
+} from "../lib/ai-review-labels";
 import {
   EMPTY_TICKET_FILTERS,
   OUTCOME_FILTER_LABELS,
@@ -262,6 +265,7 @@ export function TicketExplorer({
       page_size: PAGE_SIZE,
       outcome: filters.outcome,
       csat_satisfaction: filters.csat_satisfaction,
+      ai_review_rating: filters.ai_review_rating,
       gt4_turn: filters.gt4_turn,
       transferred: filters.transferred,
       ticket_id: filters.ticket_id.trim(),
@@ -437,6 +441,7 @@ export function TicketExplorer({
       label: transferReasonLabel(value),
     })),
     csat_satisfaction: CSAT_SATISFACTION_OPTIONS,
+    ai_review_rating: AI_REVIEW_RATING_OPTIONS,
   } as const;
 
   const explorerActiveFilters = activeTicketFilterChips(filters, weekDefinition);
@@ -577,6 +582,17 @@ export function TicketExplorer({
             options={multiSelectOptions.csat_satisfaction}
             value={filters.csat_satisfaction}
             onChange={(value) => update({ csat_satisfaction: value })}
+          />
+        ) : null}
+        {visible.includes("ai_review_rating") ||
+        filters.ai_review_rating !== "" ? (
+          <MultiSelectField
+            id="aiReviewRatingInput"
+            label="CS hậu kiểm"
+            options={multiSelectOptions.ai_review_rating}
+            value={filters.ai_review_rating}
+            onChange={(value) => update({ ai_review_rating: value })}
+            hasValueLabel="Chỉ ticket đã hậu kiểm"
           />
         ) : null}
         {visible.includes("issue_category") || filters.issue_category !== "" ? (

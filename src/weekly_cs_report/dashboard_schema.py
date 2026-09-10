@@ -152,6 +152,7 @@ _SEGMENTS = (
 )
 _HAS_VALUE = "__has_value__"
 _MISSING = "Không xác định"
+_AI_REVIEW_RATING_TICKET_STATES = frozenset({*_AI_REVIEW_RATING_SLUGS, _MISSING})
 # `skill` never used _MISSING accurately: a ticket with three distinct skills
 # and a ticket with zero `execute` observations both collapsed to the same
 # label. These name the two real cases instead.
@@ -409,6 +410,7 @@ def ticket_page(
     tool_error_codes: str | None = None,
     transfer_reason: str | None = None,
     csat_satisfaction: str | None = None,
+    ai_review_rating: str | None = None,
     gt4_turn: bool | None = None,
     transferred: bool | None = None,
     is_weekend_start: bool | None = None,
@@ -477,6 +479,9 @@ def ticket_page(
     selected_csat_states = _parse_multi_ticket_filter(
         csat_satisfaction, _CSAT_TICKET_STATES, "csat_satisfaction"
     )
+    selected_ai_review_ratings = _parse_multi_ticket_filter(
+        ai_review_rating, _AI_REVIEW_RATING_TICKET_STATES, "ai_review_rating"
+    )
     for name, value in {
         "gt4_turn": gt4_turn,
         "transferred": transferred,
@@ -524,6 +529,7 @@ def ticket_page(
             selected_csat_states is None
             or row.csat_satisfaction in selected_csat_states
         )
+        and _matches_multi_dimension(row, "ai_review_rating", selected_ai_review_ratings)
         and (gt4_turn is None or row.gt4_turn == gt4_turn)
         and (transferred is None or row.transferred == transferred)
         and (is_weekend_start is None or row.is_weekend_start == is_weekend_start)

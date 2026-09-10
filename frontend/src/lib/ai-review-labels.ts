@@ -13,3 +13,10 @@ export function aiReviewRatingLabel(
 ): string {
   return value === null ? "—" : AI_REVIEW_RATING_LABELS[value];
 }
+
+export const AI_REVIEW_RATING_OPTIONS: readonly {
+  readonly value: AiReviewRating;
+  readonly label: string;
+}[] = (
+  ["satisfied", "satisfied_with_edit", "needs_edit"] as const
+).map((value) => ({ value, label: AI_REVIEW_RATING_LABELS[value] }));

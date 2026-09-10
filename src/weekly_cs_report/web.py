@@ -108,6 +108,7 @@ _QUERY_NAMES = (
     "tool_error_codes",
     "transfer_reason",
     "csat_satisfaction",
+    "ai_review_rating",
     "gt4_turn",
     "transferred",
     "is_weekend_start",
@@ -131,6 +132,7 @@ _MULTI_SELECT_QUERY_NAMES = frozenset(
         "tool_error_codes",
         "transfer_reason",
         "csat_satisfaction",
+        "ai_review_rating",
     }
 )
 _ENTRY_QUERY_NAMES = (
