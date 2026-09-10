@@ -49,6 +49,7 @@ class FreshdeskTicketMetadata:
     ai_review_date_raw: str | None = None
     ai_reopen_status_raw: str | None = None
     ai_user_replied_raw: str | None = None
+    tags: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if (
@@ -73,6 +74,10 @@ class FreshdeskTicketMetadata:
                 self.ai_review_date_raw is not None
                 and _RAW_ISO_DATE.fullmatch(self.ai_review_date_raw) is None
             )
+        ):
+            raise FreshdeskEntryCoverageError("Freshdesk ticket metadata is invalid")
+        if not isinstance(self.tags, tuple) or any(
+            not isinstance(tag, str) for tag in self.tags
         ):
             raise FreshdeskEntryCoverageError("Freshdesk ticket metadata is invalid")
 

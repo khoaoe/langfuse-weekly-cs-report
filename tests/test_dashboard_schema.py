@@ -26,6 +26,7 @@ from weekly_cs_report.dashboard_schema import (
 )
 from weekly_cs_report.ai_review import AIReviewRecord
 from weekly_cs_report.ai_review_cache import AIReviewCache
+from weekly_cs_report.ai_tag_cache import AiTagCache, AiTagRecord
 from weekly_cs_report.entry_coverage_cache import (
     EntryCoverageCache,
     EntryCoverageRecord,
@@ -138,7 +139,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 30
+    assert snapshot.storage_dict()["schema_version"] == 31
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -188,7 +189,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 30
+    value["schema_version"] = 31
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -676,6 +677,108 @@ def test_entry_coverage_ticket_page_cuts_to_the_picked_days():
     assert [item["ticket_id"] for item in days["items"]] == ["145667", "145665"]
     assert days["total"] == 2
     assert weeks["total"] == 3
+
+
+def _ai_tag_coverage_snapshot() -> DashboardSnapshot:
+    """Four tickets, one on each side of the `#AI` coverage comparison.
+
+    345001 is in Langfuse in week W-1 but Freshdesk's `created_at` (and
+    therefore its own `cohort_week`) puts the same ticket in week W -- the
+    "bẫy lệch tuần" the spec calls out: Langfuse derives `cohort_week` from
+    `turn0_timestamp`, Freshdesk from `created_at`, so the two can disagree.
+    345002 is `#AI`-tagged on Freshdesk but never reached Langfuse (a real
+    miss). 345003 is in Langfuse but was never `#AI`-tagged (a real
+    untagged). 345004 is tagged and in Langfuse, but opened on a Vietnam
+    Saturday on both sides.
+    """
+    run = _run(
+        [
+            _meta(trace("mismatch", "345001", 0, "2026-07-13T02:00:00Z", "AI reply")),
+            _meta(trace("untagged", "345003", 0, "2026-07-20T03:00:00Z", "AI reply")),
+            # 18:00Z on Friday the 24th is already Saturday the 25th in Vietnam.
+            _meta(trace("weekend", "345004", 0, "2026-07-24T18:00:00Z", "AI reply")),
+        ]
+    )
+    cache = AiTagCache(
+        fetched_weeks={
+            "2026-07-13": "2026-07-20T01:00:00Z",
+            "2026-07-20": "2026-08-04T01:00:00Z",
+        },
+        records=(
+            AiTagRecord(
+                ticket_id="345001",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+            ),
+            AiTagRecord(
+                ticket_id="345002",
+                opened_at="2026-07-21T02:00:00Z",
+                cohort_week="2026-07-20",
+            ),
+            AiTagRecord(
+                ticket_id="345004",
+                opened_at="2026-07-24T18:00:00Z",
+                cohort_week="2026-07-20",
+            ),
+        ),
+    )
+    return project_dashboard(run, ai_tag_cache=cache)
+
+
+def test_ai_tag_coverage_week_mismatch_is_not_counted_as_a_miss():
+    """The most important test in the plan.
+
+    345001 sits in Langfuse's week 2026-07-13 but Freshdesk's own
+    `cohort_week` for it is 2026-07-20. If either side's membership set were
+    built from a week-filtered subset instead of the full id set, this
+    ticket would wrongly show up as missed in 2026-07-20's bucket or as
+    untagged in 2026-07-13's bucket.
+    """
+    coverage = _ai_tag_coverage_snapshot().dashboard_dict()["views"]["mon_sun"][
+        "ai_tag_coverage"
+    ]
+
+    assert "345001" not in coverage["by_week"]["2026-07-20"]["missed_ticket_ids"]
+    assert "345001" not in coverage["by_week"]["2026-07-13"]["untagged_ticket_ids"]
+
+
+def test_ai_tag_coverage_payload_invariants_hold_per_bucket():
+    coverage = _ai_tag_coverage_snapshot().dashboard_dict()["views"]["mon_sun"][
+        "ai_tag_coverage"
+    ]
+    week = coverage["by_week"]["2026-07-20"]
+
+    # Real miss (Freshdesk-only) and real untagged (Langfuse-only) tickets
+    # land where expected, distinct from the week-mismatch ticket above.
+    assert week["missed_ticket_ids"] == ["345002"]
+    assert week["untagged_ticket_ids"] == ["345003"]
+
+    for bucket in (*coverage["by_week"].values(), *coverage["by_day"].values()):
+        assert bucket["union_count"] == bucket["ai_tagged_count"] + bucket["untagged_count"]
+        assert len(bucket["missed_ticket_ids"]) == bucket["missed_count"]
+        assert len(bucket["untagged_ticket_ids"]) == bucket["untagged_count"]
+
+    # An empty week (2026-07-13 has no Freshdesk-side tag records) reconciles
+    # to zero instead of erroring.
+    empty = coverage["by_week"]["2026-07-13"]
+    assert empty["ai_tagged_count"] == 0
+    assert empty["union_count"] == empty["untagged_count"]
+
+
+def test_ai_tag_coverage_drops_weekend_tickets_from_both_sides_for_mon_fri():
+    mon_fri = _ai_tag_coverage_snapshot().dashboard_dict()["views"]["mon_fri"][
+        "ai_tag_coverage"
+    ]
+    week = mon_fri["by_week"]["2026-07-20"]
+
+    # 345004 is tagged and in Langfuse, but opened on a Vietnam Saturday --
+    # it must vanish from both membership sets, not just the display bucket.
+    assert "345004" not in week["missed_ticket_ids"]
+    assert "345004" not in week["untagged_ticket_ids"]
+    assert week["ai_tagged_count"] == 2  # 345001 and 345002, not the weekend 345004
+    assert week["langfuse_count"] == 1  # only 345003; 345001's own week is W-1
+    assert week["missed_ticket_ids"] == ["345002"]
+    assert week["untagged_ticket_ids"] == ["345003"]
 
 
 _AI_REVIEW_COUNT_KEYS = (

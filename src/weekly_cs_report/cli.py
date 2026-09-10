@@ -7,7 +7,7 @@ import os
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -308,6 +308,13 @@ def build_parser() -> argparse.ArgumentParser:
     ai_review.add_argument("--max-duration", type=int, default=30 * 60)
     ai_review.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
     ai_review.add_argument(
+        "--auth", choices=("cookie", "rest"), default="cookie"
+    )
+    ai_tags = subparsers.add_parser("fetch-freshdesk-ai-tags")
+    ai_tags.add_argument("--weeks", type=int, default=13)
+    ai_tags.add_argument("--max-duration", type=int, default=30 * 60)
+    ai_tags.add_argument("--runtime-dir", type=Path, default=CSAT_RUNTIME_PATH)
+    ai_tags.add_argument(
         "--auth", choices=("cookie", "rest"), default="cookie"
     )
     parser.set_defaults(command="dry-run")
@@ -1389,6 +1396,161 @@ def _ai_review_command_result(
     }
 
 
+def _ai_tag_target_weeks(as_of: datetime, weeks: int) -> tuple[str, ...]:
+    """The `weeks` most recent Monday-start weeks ending at `as_of`'s week.
+
+    Independent of the Langfuse snapshot on purpose -- this job discovers
+    tickets Langfuse never saw, so it cannot start from a Langfuse-derived
+    population the way entry-coverage and AI review do.
+    """
+
+    from .cohort import cohort_week_for
+    from .entry_coverage_cache import ENTRY_COVERAGE_START_WEEK
+
+    current_monday = cohort_week_for(as_of)
+    return tuple(
+        week.isoformat()
+        for week in (
+            current_monday - timedelta(weeks=offset)
+            for offset in range(weeks - 1, -1, -1)
+        )
+        if week.isoformat() >= ENTRY_COVERAGE_START_WEEK
+    )
+
+
+def _run_fetch_freshdesk_ai_tags_command(args: argparse.Namespace) -> dict[str, object]:
+    from .ai_tag_cache import (
+        AiTagCache,
+        AiTagCacheError,
+        AiTagRecord,
+        load_ai_tag_cache,
+        write_ai_tag_cache,
+    )
+    from .cohort import VIETNAM_TIMEZONE
+    from .freshdesk_csat import (
+        FreshdeskCookieExpired,
+        FreshdeskFetchDeadline,
+        FreshdeskPageLimitReached,
+        FreshdeskRateLimitExhausted,
+        _week_needs_fetch,
+        mark_cookie_expired,
+        mark_cookie_verified,
+    )
+    import time as monotonic_time
+
+    runtime_directory = Path(args.runtime_dir)
+    if not runtime_directory.is_absolute() or not 1 <= args.weeks <= 52:
+        raise AiTagCacheError("AI tag fetch options are invalid")
+
+    as_of = datetime.now(timezone.utc)
+    selected_weeks = _ai_tag_target_weeks(as_of, args.weeks)
+    if not selected_weeks:
+        raise AiTagCacheError("AI tag coverage has no report weeks")
+    selected = frozenset(selected_weeks)
+
+    published = load_ai_tag_cache(runtime_directory / "ai_tag_cache.json")
+    base_weeks = dict(published.fetched_weeks) if published is not None else {}
+    base_records: dict[str, AiTagRecord] = {
+        item.ticket_id: item for item in (published.records if published is not None else ())
+    }
+    target_weeks = tuple(
+        week for week in selected_weeks if _week_needs_fetch(week, base_weeks, as_of)
+    )
+
+    started = monotonic_time.monotonic()
+    deadline = started + args.max_duration
+
+    def should_stop() -> bool:
+        return monotonic_time.monotonic() >= deadline
+
+    status = "complete"
+    answered = False
+    try:
+        with _freshdesk_client(args.auth, runtime_directory) as client:
+            for week in target_weeks:
+                week_start_local = datetime.combine(
+                    date.fromisoformat(week), time.min, tzinfo=VIETNAM_TIMEZONE
+                )
+                fetched: list[AiTagRecord] = []
+                interrupted = False
+                for offset in range(7):
+                    day_start_local = week_start_local + timedelta(days=offset)
+                    day_start_utc = day_start_local.astimezone(timezone.utc)
+                    if day_start_utc >= as_of:
+                        # The rest of a week-to-date week hasn't happened yet.
+                        break
+                    day_end_utc = min(
+                        (day_start_local + timedelta(days=1)).astimezone(timezone.utc),
+                        as_of,
+                    )
+                    if should_stop():
+                        interrupted = True
+                        break
+                    try:
+                        rows = client.list_ai_tagged_tickets(
+                            created_from=day_start_utc,
+                            created_to=day_end_utc,
+                            should_stop=should_stop,
+                        )
+                    except (
+                        FreshdeskFetchDeadline,
+                        FreshdeskRateLimitExhausted,
+                        FreshdeskPageLimitReached,
+                    ):
+                        interrupted = True
+                        break
+                    answered = True
+                    fetched.extend(
+                        AiTagRecord(
+                            ticket_id=row.ticket_id,
+                            opened_at=row.created_at,
+                            cohort_week=week,
+                        )
+                        for row in rows
+                    )
+                if interrupted:
+                    # A half-fetched week must not be recorded as fetched; the
+                    # next run restarts this week from its first day.
+                    status = "duration_limit_reached"
+                    break
+
+                for ticket_id, record in list(base_records.items()):
+                    if record.cohort_week == week:
+                        del base_records[ticket_id]
+                for record in fetched:
+                    base_records[record.ticket_id] = record
+                base_weeks[week] = _utc_iso(as_of)
+
+                try:
+                    write_ai_tag_cache(
+                        runtime_directory / "ai_tag_cache.json",
+                        AiTagCache(
+                            fetched_weeks=base_weeks,
+                            records=tuple(base_records.values()),
+                        ),
+                    )
+                except AiTagCacheError as error:
+                    raise AiTagCacheError(
+                        "Freshdesk AI tag cache could not be published"
+                    ) from error
+    except FreshdeskCookieExpired:
+        if args.auth == "cookie":
+            mark_cookie_expired(runtime_directory)
+        raise
+    if args.auth == "cookie" and answered:
+        mark_cookie_verified(runtime_directory)
+
+    weeks_fetched = sum(week in base_weeks for week in selected_weeks)
+    ai_tagged_count = sum(
+        1 for item in base_records.values() if item.cohort_week in selected
+    )
+    return {
+        "status": status,
+        "weeks_fetched": weeks_fetched,
+        "ai_tagged_count": ai_tagged_count,
+    }
+
+
 def _run_fetch_freshdesk_entry_coverage_command(
     args: argparse.Namespace,
 ) -> dict[str, object]:
@@ -1813,8 +1975,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             "reconcile-freshdesk-outcomes",
             "fetch-freshdesk-entry-coverage",
             "fetch-freshdesk-ai-review",
+            "fetch-freshdesk-ai-tags",
         }:
             from .ai_review import AIReviewError
+            from .ai_tag_cache import AiTagCacheError
             from .freshdesk_csat import FreshdeskCSATError
             from .freshdesk_entry_coverage import FreshdeskEntryCoverageError
             from .outcome_reconciliation import OutcomeReconciliationError
@@ -1828,10 +1992,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     result = _run_reconcile_freshdesk_outcomes_command(args)
                 elif args.command == "fetch-freshdesk-entry-coverage":
                     result = _run_fetch_freshdesk_entry_coverage_command(args)
-                else:
+                elif args.command == "fetch-freshdesk-ai-review":
                     result = _run_fetch_freshdesk_ai_review_command(args)
+                else:
+                    result = _run_fetch_freshdesk_ai_tags_command(args)
             except (
                 AIReviewError,
+                AiTagCacheError,
                 FreshdeskCSATError,
                 FreshdeskEntryCoverageError,
                 OutcomeReconciliationError,

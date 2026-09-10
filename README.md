@@ -122,9 +122,10 @@ Freshdesk, cần dashboard đang chạy và đã điền credential Freshdesk:
 Script này tuần tự:
 
 1. lập inventory ticket Freshdesk và đối chiếu với Ticket ID Langfuse;
-2. lấy survey chỉ gắn trực tiếp với `Admin CS ZaloPay`;
-3. đối chiếu conversation Freshdesk theo metadata đã được phê duyệt;
-4. yêu cầu dashboard tạo và publish snapshot mới.
+2. liệt kê ticket Freshdesk gắn tag `#AI` để đối chiếu độ phủ #AI với Langfuse;
+3. lấy survey chỉ gắn trực tiếp với `Admin CS ZaloPay`;
+4. đối chiếu conversation Freshdesk theo metadata đã được phê duyệt;
+5. yêu cầu dashboard tạo và publish snapshot mới.
 
 Phần inventory dùng các trạng thái quan sát riêng: `invoked_no_result` là
 ticket đã có trong Langfuse nhưng không có AI First/chuyển CS; `not_observed_invoked`

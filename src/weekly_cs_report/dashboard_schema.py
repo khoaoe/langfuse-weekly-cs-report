@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, AbstractSet, Mapping, Sequence
 from unicodedata import category, decimal, normalize
 from zoneinfo import ZoneInfo
 
+from .ai_tag_cache import AiTagCache, AiTagCacheError, AiTagRecord
 from .csat_cache import CSATCache, CachedCSATResponse
 from .enrichment import build_tpe_status_index
 from .entry_coverage_cache import (
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 30
+_STORAGE_VERSION = 31
 _TICKET_ID_PATTERN = re.compile(r"[1-9][0-9]{0,19}\Z")
 _PHONE = re.compile(r"(?:^|\D)(?:0|84|\+84)[0-9]{8,10}(?:$|\D)")
 _UUID = re.compile(
@@ -267,6 +268,7 @@ class DashboardSnapshot:
     dashboard: dict[str, object]
     tickets: tuple[TicketRow, ...]
     entry_coverage_tickets: tuple[EntryCoverageRecord, ...] = ()
+    ai_tag_tickets: tuple[AiTagRecord, ...] = ()
 
     def dashboard_dict(self) -> dict[str, object]:
         _require_aware(self.generated_at, "generated_at")
@@ -277,6 +279,7 @@ class DashboardSnapshot:
             tuple(_validated_ticket_dict(ticket) for ticket in self.tickets),
         )
         _validate_entry_coverage_records(self.entry_coverage_tickets)
+        _validate_ai_tag_records(self.ai_tag_tickets)
         return dashboard
 
     def storage_dict(self) -> dict[str, object]:
@@ -295,6 +298,9 @@ class DashboardSnapshot:
                 _entry_coverage_record_dict(record)
                 for record in self.entry_coverage_tickets
             ],
+            "ai_tag_tickets": [
+                _ai_tag_record_dict(record) for record in self.ai_tag_tickets
+            ],
         }
 
     @classmethod
@@ -308,6 +314,7 @@ class DashboardSnapshot:
                 "dashboard",
                 "tickets",
                 "entry_coverage_tickets",
+                "ai_tag_tickets",
             },
             "storage",
         )
@@ -328,12 +335,20 @@ class DashboardSnapshot:
             for item in raw_entry_tickets
         )
         _validate_entry_coverage_records(entry_tickets)
+        raw_ai_tag_tickets = storage["ai_tag_tickets"]
+        if not isinstance(raw_ai_tag_tickets, list):
+            raise ValueError("ai_tag_tickets must be a list")
+        ai_tag_tickets = tuple(
+            _ai_tag_record_from_storage(item) for item in raw_ai_tag_tickets
+        )
+        _validate_ai_tag_records(ai_tag_tickets)
         _validate_projected_intent_frequency(dashboard, tuple(asdict(ticket) for ticket in tickets))
         return cls(
             generated_at=generated_at,
             dashboard=deepcopy(dashboard),
             tickets=tickets,
             entry_coverage_tickets=entry_tickets,
+            ai_tag_tickets=ai_tag_tickets,
         )
 
 
@@ -344,6 +359,7 @@ def project_dashboard(
     reconciliation_cache: ReconciliationCache | None = None,
     entry_coverage_cache: EntryCoverageCache | None = None,
     ai_review_cache: AIReviewCache | None = None,
+    ai_tag_cache: AiTagCache | None = None,
 ) -> DashboardSnapshot:
     result = run.result
     generated_at = result.selection.window.as_of.astimezone(timezone.utc)
@@ -385,9 +401,12 @@ def project_dashboard(
             reconciliation_cache,
             entry_coverage_cache,
             ai_review_cache,
+            ai_tag_cache,
+            tickets,
         ),
         tickets,
         tuple(entry_coverage_cache.records) if entry_coverage_cache is not None else (),
+        tuple(ai_tag_cache.records) if ai_tag_cache is not None else (),
     )
 
 
@@ -986,6 +1005,8 @@ def _dashboard_payload(
     reconciliation_cache: ReconciliationCache | None,
     entry_coverage_cache: EntryCoverageCache | None,
     ai_review_cache: AIReviewCache | None,
+    ai_tag_cache: AiTagCache | None,
+    tickets: tuple[TicketRow, ...],
 ) -> dict[str, object]:
     result = run.result
     selection = result.selection
@@ -1008,6 +1029,8 @@ def _dashboard_payload(
             entry_coverage_cache,
             ai_review_cache,
             tpe_status_index,
+            ai_tag_cache,
+            tickets,
         ),
         "mon_fri": _view_payload(
             result.sessions,
@@ -1022,6 +1045,8 @@ def _dashboard_payload(
             entry_coverage_cache,
             ai_review_cache,
             tpe_status_index,
+            ai_tag_cache,
+            tickets,
         ),
     }
     quality = Counter(_quality_label(session.data_quality) for session in result.sessions)
@@ -1069,6 +1094,8 @@ def _view_payload(
     entry_coverage_cache: EntryCoverageCache | None,
     ai_review_cache: AIReviewCache | None,
     tpe_status_index: Mapping[tuple[str, str | None], str],
+    ai_tag_cache: AiTagCache | None,
+    tickets: tuple[TicketRow, ...],
 ) -> dict[str, object]:
     sessions = tuple(
         session for session in all_sessions
@@ -1107,6 +1134,8 @@ def _view_payload(
                 entry_coverage_cache,
                 ai_review_cache,
                 tpe_status_index,
+                ai_tag_cache,
+                tickets,
             )
         weekly_payloads.append(_weekly_payload(summary, reopen_reason))
     return {
@@ -1157,6 +1186,12 @@ def _view_payload(
             weekly,
             week_definition,
             entry_coverage_cache,
+        ),
+        "ai_tag_coverage": _ai_tag_coverage_payload(
+            weekly,
+            week_definition,
+            ai_tag_cache,
+            tickets,
         ),
         "ai_review": _ai_review_payload(sessions, weekly, ai_review_cache),
         "rule_gt4": {
@@ -1293,6 +1328,112 @@ def _entry_coverage_bucket(
         "ai_replied_then_transferred": counts["ai_replied_then_transferred"],
         "transferred_without_ai_reply": counts["transferred_without_ai_reply"],
         "invoked_no_result": counts["invoked_no_result"],
+    }
+
+
+def _ai_tag_coverage_payload(
+    weekly: tuple[WeeklySummary, ...],
+    week_definition: str,
+    cache: AiTagCache | None,
+    tickets: tuple[TicketRow, ...],
+) -> dict[str, object] | None:
+    """Two-universe `#AI` coverage: Freshdesk's `#AI`-tagged tickets vs the
+    Langfuse-known ticket population.
+
+    Langfuse derives `cohort_week` from `turn0_timestamp`, Freshdesk from
+    `created_at` -- the same ticket can land in different weeks on each side.
+    Membership (miss / untagged) is therefore checked against the FULL,
+    week-independent id set on each side, built once below; only bucket
+    *assignment* uses each side's own week/day. Filtering by week before
+    comparing would silently misreport a boundary ticket as missing.
+    """
+    if cache is None or cache.fetched_at is None:
+        return None
+    fetched_weeks = frozenset(cache.fetched_weeks)
+    observed_weeks = {
+        summary.cohort_week.isoformat()
+        for summary in weekly
+        if summary.cohort_week.isoformat() in fetched_weeks
+    }
+
+    def _weekday_ok(opened_at: str, label: str) -> bool:
+        if week_definition == "mon_sun":
+            return True
+        opened = _parse_utc_iso(opened_at, label).astimezone(_VIETNAM_TIMEZONE)
+        return opened.weekday() < 5
+
+    ai_records = [
+        record for record in cache.records
+        if _weekday_ok(record.opened_at, "ai tag opened_at")
+    ]
+    langfuse_rows = [
+        row for row in tickets if _weekday_ok(row.opened_at, "ticket opened_at")
+    ]
+    ai_tagged_ids = {record.ticket_id for record in ai_records}
+    langfuse_ids = {row.ticket_id for row in langfuse_rows}
+
+    week_ai: dict[str, list[AiTagRecord]] = {week: [] for week in observed_weeks}
+    week_langfuse: dict[str, list[TicketRow]] = {week: [] for week in observed_weeks}
+    day_ai: dict[str, list[AiTagRecord]] = {}
+    day_langfuse: dict[str, list[TicketRow]] = {}
+    for record in ai_records:
+        if record.cohort_week not in observed_weeks:
+            continue
+        week_ai[record.cohort_week].append(record)
+        opened = _parse_utc_iso(record.opened_at, "ai tag opened_at").astimezone(_VIETNAM_TIMEZONE)
+        day_ai.setdefault(opened.date().isoformat(), []).append(record)
+    for row in langfuse_rows:
+        if row.cohort_week not in observed_weeks:
+            continue
+        week_langfuse[row.cohort_week].append(row)
+        opened = _parse_utc_iso(row.opened_at, "ticket opened_at").astimezone(_VIETNAM_TIMEZONE)
+        day_langfuse.setdefault(opened.date().isoformat(), []).append(row)
+
+    day_keys = sorted(set(day_ai) | set(day_langfuse))
+    return {
+        "source": "freshdesk",
+        "source_start_week": ENTRY_COVERAGE_START_WEEK,
+        "fetched_at": cache.fetched_at,
+        "by_week": {
+            key: _ai_tag_coverage_bucket(
+                week_ai[key], week_langfuse[key], ai_tagged_ids, langfuse_ids
+            )
+            for key in sorted(week_ai)
+        },
+        "by_day": {
+            key: _ai_tag_coverage_bucket(
+                day_ai.get(key, ()), day_langfuse.get(key, ()), ai_tagged_ids, langfuse_ids
+            )
+            for key in day_keys
+        },
+    }
+
+
+def _ai_tag_coverage_bucket(
+    ai_records: Sequence[AiTagRecord],
+    langfuse_rows: Sequence[TicketRow],
+    ai_tagged_ids: AbstractSet[str],
+    langfuse_ids: AbstractSet[str],
+) -> dict[str, object]:
+    """Aggregate one bucket. Grain-agnostic, like `_entry_coverage_bucket()`."""
+    missed_ids = sorted(
+        (record.ticket_id for record in ai_records if record.ticket_id not in langfuse_ids),
+        key=int,
+    )
+    untagged_ids = sorted(
+        (row.ticket_id for row in langfuse_rows if row.ticket_id not in ai_tagged_ids),
+        key=int,
+    )
+    ai_tagged_count = len(ai_records)
+    untagged_count = len(untagged_ids)
+    return {
+        "ai_tagged_count": ai_tagged_count,
+        "langfuse_count": len(langfuse_rows),
+        "union_count": ai_tagged_count + untagged_count,
+        "missed_count": len(missed_ids),
+        "untagged_count": untagged_count,
+        "missed_ticket_ids": missed_ids,
+        "untagged_ticket_ids": untagged_ids,
     }
 
 
@@ -2551,6 +2692,36 @@ def _validate_entry_coverage_records(
         raise ValueError("entry coverage tickets are invalid") from error
 
 
+def _ai_tag_record_dict(record: AiTagRecord) -> dict[str, object]:
+    if not isinstance(record, AiTagRecord):
+        raise ValueError("ai tag tickets are invalid")
+    return {
+        "ticket_id": record.ticket_id,
+        "opened_at": record.opened_at,
+        "cohort_week": record.cohort_week,
+    }
+
+
+def _ai_tag_record_from_storage(value: object) -> AiTagRecord:
+    mapping = _require_mapping(value, "ai tag ticket")
+    _require_exact_keys(
+        mapping,
+        {"ticket_id", "opened_at", "cohort_week"},
+        "ai tag ticket",
+    )
+    try:
+        return AiTagRecord(**dict(mapping))
+    except (TypeError, AiTagCacheError) as error:
+        raise ValueError("stored ai tag ticket is invalid") from error
+
+
+def _validate_ai_tag_records(records: tuple[AiTagRecord, ...]) -> None:
+    try:
+        AiTagCache(fetched_weeks={}, records=records)
+    except AiTagCacheError as error:
+        raise ValueError("ai tag tickets are invalid") from error
+
+
 def _validate_ticket_values(ticket: TicketRow) -> None:
     _validate_ticket_filters(cohort_week=ticket.cohort_week, ticket_id=ticket.ticket_id, page=1, page_size=1)
     _parse_utc_iso(ticket.opened_at, "opened_at")
@@ -2764,6 +2935,7 @@ def _validate_view(value: object, expected_definition: str) -> None:
             "csat",
             "outcome_reconciliation",
             "entry_coverage",
+            "ai_tag_coverage",
             "ai_review",
             "rule_gt4",
         },
@@ -2835,6 +3007,7 @@ def _validate_view(value: object, expected_definition: str) -> None:
         weekly_by_key,
     )
     _validate_entry_coverage(view["entry_coverage"], weekly_by_key)
+    _validate_ai_tag_coverage(view["ai_tag_coverage"], weekly_by_key)
     _validate_ai_review(view["ai_review"], weekly_by_key)
     _validate_segment_rollup(
         view["segments"],
@@ -2944,6 +3117,80 @@ def _validate_entry_coverage_bucket(
     )
     if counts["freshdesk_ticket_count"] != status_total:
         raise ValueError("entry coverage status counts do not reconcile")
+
+
+def _validate_ai_tag_coverage(
+    value: object,
+    weekly_by_key: Mapping[str, Mapping[str, object]],
+) -> None:
+    if value is None:
+        return
+    coverage = _require_mapping(value, "view.ai_tag_coverage")
+    _require_exact_keys(
+        coverage,
+        {"source", "source_start_week", "fetched_at", "by_week", "by_day"},
+        "view.ai_tag_coverage",
+    )
+    if coverage["source"] != "freshdesk":
+        raise ValueError("view.ai_tag_coverage source is invalid")
+    if coverage["source_start_week"] != ENTRY_COVERAGE_START_WEEK:
+        raise ValueError("view.ai_tag_coverage source start week is invalid")
+    _parse_utc_iso(coverage["fetched_at"], "view.ai_tag_coverage.fetched_at")
+    by_week = _require_mapping(coverage["by_week"], "view.ai_tag_coverage.by_week")
+    if not set(by_week).issubset(weekly_by_key):
+        raise ValueError("view.ai_tag_coverage contains a week outside this view")
+    for cohort_week, raw_counts in by_week.items():
+        _week_string(cohort_week, "view.ai_tag_coverage.by_week key")
+        _validate_ai_tag_coverage_bucket(
+            raw_counts, f"view.ai_tag_coverage.by_week.{cohort_week}"
+        )
+    by_day = _require_mapping(coverage["by_day"], "view.ai_tag_coverage.by_day")
+    for day, raw_counts in by_day.items():
+        parsed_day = _day_string(day, "view.ai_tag_coverage.by_day key")
+        if (
+            parsed_day - timedelta(days=parsed_day.weekday())
+        ).isoformat() not in weekly_by_key:
+            raise ValueError("view.ai_tag_coverage contains a day outside this view")
+        _validate_ai_tag_coverage_bucket(
+            raw_counts, f"view.ai_tag_coverage.by_day.{day}"
+        )
+
+
+def _validate_ai_tag_coverage_bucket(raw_counts: object, path: str) -> None:
+    count_keys = {
+        "ai_tagged_count",
+        "langfuse_count",
+        "union_count",
+        "missed_count",
+        "untagged_count",
+        "missed_ticket_ids",
+        "untagged_ticket_ids",
+    }
+    counts = _require_mapping(raw_counts, path)
+    _require_exact_keys(counts, count_keys, path)
+    for key in (
+        "ai_tagged_count",
+        "langfuse_count",
+        "union_count",
+        "missed_count",
+        "untagged_count",
+    ):
+        _nonnegative_int(counts[key], f"{path}.{key}")
+    missed_ids = counts["missed_ticket_ids"]
+    untagged_ids = counts["untagged_ticket_ids"]
+    if not isinstance(missed_ids, list) or not isinstance(untagged_ids, list):
+        raise ValueError(f"{path} ticket id lists are invalid")
+    for ticket_id in (*missed_ids, *untagged_ids):
+        if not isinstance(ticket_id, str) or _TICKET_ID_PATTERN.fullmatch(ticket_id) is None:
+            raise ValueError(f"{path} ticket id is invalid")
+    if missed_ids != sorted(missed_ids) or untagged_ids != sorted(untagged_ids):
+        raise ValueError(f"{path} ticket id lists are not sorted")
+    if counts["union_count"] != counts["ai_tagged_count"] + counts["untagged_count"]:
+        raise ValueError(f"{path} union count does not reconcile")
+    if len(missed_ids) != counts["missed_count"]:
+        raise ValueError(f"{path} missed count does not reconcile")
+    if len(untagged_ids) != counts["untagged_count"]:
+        raise ValueError(f"{path} untagged count does not reconcile")
 
 
 def _validate_ai_review(

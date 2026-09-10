@@ -96,9 +96,15 @@ def _ticket_metadata_from_item(item: Mapping[str, object]) -> FreshdeskTicketMet
         if raw is not None and not isinstance(raw, str):
             raise FreshdeskCSATError("Freshdesk ticket custom field is invalid")
         extracted[field_name] = raw
+    raw_tags = item.get("tags") or ()
+    if not isinstance(raw_tags, (list, tuple)) or any(
+        not isinstance(tag, str) for tag in raw_tags
+    ):
+        raise FreshdeskCSATError("Freshdesk ticket tags are invalid")
     return FreshdeskTicketMetadata(
         ticket_id=str(item["id"]),
         created_at=item["created_at"],
+        tags=tuple(raw_tags),
         **extracted,
     )
 
@@ -535,6 +541,71 @@ class FreshdeskClient:
             page += 1
         raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
 
+    def list_ai_tagged_tickets(
+        self,
+        *,
+        created_from: datetime,
+        created_to: datetime,
+        max_pages: int = 300,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[FreshdeskTicketMetadata, ...]:
+        """List `#AI`-tagged tickets via REST v2 Search, for `--auth rest` parity.
+
+        The REST list endpoint (`/api/v2/tickets`) has no tag or created_at
+        filter; Search (`/api/v2/search/tickets?query=...`) does, capped at
+        30/page and 300 results/query. Untested live -- no REST API key was
+        available in this environment; only the cookie path (the default)
+        was probed. Mirrors the cookie client's window contract so callers
+        can swap `--auth` without changing call sites.
+        """
+        if (
+            created_from.tzinfo is None
+            or created_from.utcoffset() is None
+            or created_to.tzinfo is None
+            or created_to.utcoffset() is None
+            or created_to <= created_from
+            or max_pages < 1
+            or max_pages > 300
+        ):
+            raise FreshdeskCSATError("Freshdesk ticket listing options are invalid")
+        from_date = created_from.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        to_date = created_to.astimezone(timezone.utc).strftime("%Y-%m-%d")
+        query = f"tag:'#AI' AND created_at:>'{from_date}' AND created_at:<'{to_date}'"
+        projected: list[FreshdeskTicketMetadata] = []
+        seen_ids: set[str] = set()
+        page = 1
+        while page <= max_pages:
+            _check_fetch_deadline(should_stop)
+            value = self._get_json(
+                "/api/v2/search/tickets",
+                params={"query": f'"{query}"', "page": page},
+                should_stop=should_stop,
+            )
+            if not isinstance(value, Mapping):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            results = value.get("results")
+            if not isinstance(results, list):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            for item in results:
+                if not isinstance(item, Mapping):
+                    raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+                try:
+                    row = _ticket_metadata_from_item(item)
+                except (KeyError, TypeError, FreshdeskEntryCoverageError):
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response is invalid"
+                    ) from None
+                if row.ticket_id in seen_ids:
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response contains duplicate tickets"
+                    )
+                seen_ids.add(row.ticket_id)
+                projected.append(row)
+            if len(results) < 30:
+                return tuple(projected)
+            page += 1
+        raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
+
     def _get_json(
         self,
         path: str,
@@ -880,6 +951,91 @@ class FreshdeskUIClient:
             is_complete = len(tickets) < page_size
             if on_page is not None:
                 on_page(tuple(projected), page + 1, is_complete)
+            _check_fetch_deadline(should_stop)
+            if is_complete:
+                return tuple(projected)
+            page += 1
+            self._sleep(0.1)
+        raise FreshdeskPageLimitReached("Freshdesk ticket page limit exceeded")
+
+    def list_ai_tagged_tickets(
+        self,
+        *,
+        created_from: datetime,
+        created_to: datetime,
+        max_pages: int = 300,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[FreshdeskTicketMetadata, ...]:
+        """List `#AI`-tagged tickets created in `[created_from, created_to)`.
+
+        The UI API's query_hash rejects a `tags`/`tag_id` condition (probed
+        2026-09-10: both return 400 `invalid_value`) -- there is no
+        server-side tag filter. This crawls the same `created_at` window as
+        `list_ticket_metadata` and filters `#AI` client-side. Callers must
+        keep each window small enough to stay under `max_pages * 50`
+        results (measured 2026-09-10: a 7-day window alone returns ~19.4k
+        tickets, over the 15k/call cap) -- the CLI job chunks per day.
+        """
+        if (
+            created_from.tzinfo is None
+            or created_from.utcoffset() is None
+            or created_to.tzinfo is None
+            or created_to.utcoffset() is None
+            or created_to <= created_from
+            or max_pages < 1
+            or max_pages > 300
+        ):
+            raise FreshdeskCSATError("Freshdesk ticket listing options are invalid")
+        created_from_utc = created_from.astimezone(timezone.utc)
+        created_to_utc = created_to.astimezone(timezone.utc)
+        query_hash_params = [
+            ("query_hash[0][condition]", "created_at"),
+            ("query_hash[0][operator]", "is_greater_than"),
+            ("query_hash[0][type]", "default"),
+            (
+                "query_hash[0][value][from]",
+                created_from_utc.strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+            ),
+            ("query_hash[0][value][to]", created_to_utc.strftime("%Y-%m-%dT%H:%M:%S.999Z")),
+        ]
+        projected: list[FreshdeskTicketMetadata] = []
+        seen_ids: set[str] = set()
+        page = 1
+        while page <= max_pages:
+            _check_fetch_deadline(should_stop)
+            value = self._get_json(
+                "/api/_/tickets",
+                params=[
+                    ("order_by", "created_at"),
+                    ("order_type", "asc"),
+                    ("page", page),
+                    ("per_page", 50),
+                ]
+                + query_hash_params,
+                should_stop=should_stop,
+            )
+            if not isinstance(value, Mapping):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            tickets = value.get("tickets")
+            if not isinstance(tickets, list):
+                raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+            for item in tickets:
+                if not isinstance(item, Mapping):
+                    raise FreshdeskCSATError("Freshdesk ticket response is invalid")
+                try:
+                    row = _ticket_metadata_from_item(item)
+                except (KeyError, TypeError, FreshdeskEntryCoverageError):
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response is invalid"
+                    ) from None
+                if row.ticket_id in seen_ids:
+                    raise FreshdeskCSATError(
+                        "Freshdesk ticket response contains duplicate tickets"
+                    )
+                seen_ids.add(row.ticket_id)
+                if "#AI" in row.tags:
+                    projected.append(row)
+            is_complete = len(tickets) < 50
             _check_fetch_deadline(should_stop)
             if is_complete:
                 return tuple(projected)

@@ -149,11 +149,23 @@ def test_freshdesk_ticket_metadata_is_strict_and_does_not_keep_extra_fields():
         "ai_review_date_raw": None,
         "ai_reopen_status_raw": None,
         "ai_user_replied_raw": None,
+        "tags": (),
     }
     with pytest.raises(FreshdeskEntryCoverageError):
         FreshdeskTicketMetadata(ticket_id="01", created_at="2026-08-03T01:00:00Z")
     with pytest.raises(FreshdeskEntryCoverageError):
         FreshdeskTicketMetadata(ticket_id="123", created_at="2026-08-03T01:00:00")
+
+
+def test_freshdesk_ticket_metadata_keeps_tags_and_rejects_non_str_elements():
+    ticket = FreshdeskTicketMetadata(
+        ticket_id="123", created_at="2026-08-03T01:00:00Z", tags=("#AI", "HvVang")
+    )
+    assert ticket.tags == ("#AI", "HvVang")
+    with pytest.raises(FreshdeskEntryCoverageError):
+        FreshdeskTicketMetadata(
+            ticket_id="123", created_at="2026-08-03T01:00:00Z", tags=("#AI", 1)
+        )
 
 
 def test_list_ticket_metadata_paginates_and_projects_only_id_and_created_at():

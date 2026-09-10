@@ -457,6 +457,77 @@ def test_ui_list_ticket_metadata_rejects_duplicate_tickets_across_pages():
             )
 
 
+# --- FreshdeskUIClient.list_ai_tagged_tickets ------------------------------
+
+
+def test_ui_list_ai_tagged_tickets_filters_client_side_by_tag():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["query_hash[0][condition]"] == "created_at"
+        return httpx.Response(
+            200,
+            json={
+                "tickets": [
+                    {"id": 1, "created_at": "2026-09-01T01:00:00Z", "tags": ["#AI"]},
+                    {"id": 2, "created_at": "2026-09-01T02:00:00Z", "tags": ["HvVang"]},
+                    {
+                        "id": 3,
+                        "created_at": "2026-09-01T03:00:00Z",
+                        "tags": ["#AI", "Autorep"],
+                    },
+                ]
+            },
+        )
+
+    with FreshdeskUIClient(
+        "cs_session=abc123", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = client.list_ai_tagged_tickets(
+            created_from=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            created_to=datetime(2026, 9, 2, tzinfo=timezone.utc),
+        )
+
+    assert [item.ticket_id for item in result] == ["1", "3"]
+
+
+def test_ui_list_ai_tagged_tickets_rejects_invalid_window():
+    with FreshdeskUIClient(
+        "cs_session=abc123",
+        transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"tickets": []})),
+    ) as client:
+        with pytest.raises(FreshdeskCSATError, match="listing options"):
+            client.list_ai_tagged_tickets(
+                created_from=datetime(2026, 9, 2, tzinfo=timezone.utc),
+                created_to=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            )
+
+
+def test_ui_list_ai_tagged_tickets_paginates_until_a_short_page():
+    requests: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = request.url.params["page"]
+        requests.append(page)
+        if page == "1":
+            rows = [
+                {"id": index, "created_at": "2026-09-01T01:00:00Z", "tags": ["#AI"]}
+                for index in range(1, 51)
+            ]
+        else:
+            rows = [{"id": 999, "created_at": "2026-09-01T01:00:00Z", "tags": ["#AI"]}]
+        return httpx.Response(200, json={"tickets": rows})
+
+    with FreshdeskUIClient(
+        "cs_session=abc123", transport=httpx.MockTransport(handler)
+    ) as client:
+        result = client.list_ai_tagged_tickets(
+            created_from=datetime(2026, 9, 1, tzinfo=timezone.utc),
+            created_to=datetime(2026, 9, 2, tzinfo=timezone.utc),
+        )
+
+    assert requests == ["1", "2"]
+    assert len(result) == 51
+
+
 # --- cookie file storage -----------------------------------------------------
 
 

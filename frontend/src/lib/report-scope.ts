@@ -1,4 +1,5 @@
 import type {
+  AiTagCoverage,
   DashboardSnapshot,
   DashboardView,
   DayAggregate,
@@ -432,6 +433,19 @@ function scopeEntryCoverage(
       };
 }
 
+function scopeAiTagCoverage(
+  coverage: AiTagCoverage | null,
+  selected: ReadonlySet<string>,
+): AiTagCoverage | null {
+  return coverage === null
+    ? null
+    : {
+        ...coverage,
+        by_week: filterByWeek(coverage.by_week, selected),
+        by_day: filterByWeekOfDay(coverage.by_day, selected),
+      };
+}
+
 /** An inclusive Vietnam-local day window, as the day-range picker reports it. */
 export interface DayRangeScope {
   readonly from: string;
@@ -661,6 +675,7 @@ export function scopeSnapshotToWeeks(
             ),
           },
     entry_coverage: scopeEntryCoverage(view.entry_coverage, selected),
+    ai_tag_coverage: scopeAiTagCoverage(view.ai_tag_coverage, selected),
     rule_gt4: {
       gt4_turn_total: weekly.reduce(
         (total, row) =>
@@ -831,6 +846,7 @@ export function scopeSnapshotToDayRange(
     csat: null,
     outcome_reconciliation: null,
     entry_coverage: null,
+    ai_tag_coverage: null,
     ai_review: null,
     rule_gt4: {
       gt4_turn_total: totals.gt4TurnWithCs + totals.gt4TurnWithoutCs,

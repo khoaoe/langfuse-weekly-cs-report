@@ -9,6 +9,8 @@ import { dashboardEnvelopeFixture } from "./fixtures/dashboard";
 import { server } from "./msw/server";
 import {
   DashboardEnvelopeSchema,
+  type AiTagCoverage,
+  type AiTagCoverageBucket,
   type DashboardSnapshot,
   type DayAggregate,
   type EntryCoverage,
@@ -241,6 +243,39 @@ function snapshotWithEntryCoverage(
           fetched_at: "2026-08-04T03:00:00Z",
           by_week: { "2026-07-20": coverageBucket() },
           ...(byDay === undefined ? {} : { by_day: byDay }),
+        },
+      },
+    },
+  };
+}
+
+function aiTagBucket(overrides: Partial<AiTagCoverageBucket> = {}): AiTagCoverageBucket {
+  return {
+    ai_tagged_count: 0,
+    langfuse_count: 0,
+    union_count: 0,
+    missed_count: 0,
+    untagged_count: 0,
+    missed_ticket_ids: [],
+    untagged_ticket_ids: [],
+    ...overrides,
+  };
+}
+
+function snapshotWithAiTagCoverage(byWeek: AiTagCoverage["by_week"]): DashboardSnapshot {
+  const view = baseSnapshot.views.mon_sun;
+  return {
+    ...baseSnapshot,
+    views: {
+      ...baseSnapshot.views,
+      mon_sun: {
+        ...view,
+        ai_tag_coverage: {
+          source: "freshdesk",
+          source_start_week: "2026-07-06",
+          fetched_at: "2026-08-04T03:00:00Z",
+          by_week: byWeek,
+          by_day: {},
         },
       },
     },
@@ -564,6 +599,44 @@ describe("Below-fold analysis", () => {
     );
     expect(await within(section).findByRole("table")).toHaveTextContent("7043723");
     expect(within(section).getByText("Trang 1 · 1 ticket")).toBeVisible();
+  });
+
+  it("shows the #AI miss count and share, and opens its ticket list", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      belowFold(
+        snapshotWithAiTagCoverage({
+          "2026-07-20": aiTagBucket({
+            ai_tagged_count: 3,
+            union_count: 3,
+            missed_count: 1,
+            missed_ticket_ids: ["7043723"],
+          }),
+        }),
+      ),
+    );
+
+    const section = screen.getByRole("region", { name: "Độ phủ #AI từ Freshdesk" });
+    const missedRow = within(section)
+      .getByText("AI agent xử lý nhưng Langfuse chưa ghi nhận")
+      .closest("div")!;
+    expect(within(missedRow).getByText("1")).toBeVisible();
+    expect(within(missedRow).getByText("33,3%")).toBeVisible();
+
+    await user.click(within(missedRow).getByRole("button", { name: "Xem ticket" }));
+    expect(await within(section).findByRole("table")).toHaveTextContent("7043723");
+  });
+
+  it("shows an em dash for the #AI share when the union is empty", () => {
+    renderWithQuery(
+      belowFold(snapshotWithAiTagCoverage({ "2026-07-20": aiTagBucket() })),
+    );
+
+    const section = screen.getByRole("region", { name: "Độ phủ #AI từ Freshdesk" });
+    expect(within(section).getAllByText("—")).toHaveLength(3);
+    for (const button of within(section).getAllByRole("button", { name: "Xem ticket" })) {
+      expect(button).toBeDisabled();
+    }
   });
 
   it("refuses to draw a trend from a single observed week", () => {

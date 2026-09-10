@@ -48,6 +48,17 @@ if ! jq -e '.status == "complete"' <<<"$entry_coverage_result" >/dev/null; then
   exit 1
 fi
 
+ai_tags_result="$(
+  uv run --isolated --locked weekly-cs-report fetch-freshdesk-ai-tags \
+    --weeks 13 --max-duration 7200 \
+    --runtime-dir "$project_root/runtime"
+)"
+printf '%s\n' "$ai_tags_result"
+if ! jq -e '.status == "complete"' <<<"$ai_tags_result" >/dev/null; then
+  echo "Freshdesk AI tag coverage refresh did not complete; dashboard refresh cancelled" >&2
+  exit 1
+fi
+
 csat_result="$(
   uv run --isolated --locked weekly-cs-report fetch-csat \
     --weeks 13 --max-workers 1 --max-duration 7200 \

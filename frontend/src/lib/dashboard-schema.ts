@@ -1097,6 +1097,53 @@ export const EntryCoverageSchema = z
   .strict();
 export type EntryCoverage = z.infer<typeof EntryCoverageSchema>;
 
+const AiTagCoverageBucketSchema = z
+  .object({
+    ai_tagged_count: nonNegativeInteger,
+    langfuse_count: nonNegativeInteger,
+    union_count: nonNegativeInteger,
+    missed_count: nonNegativeInteger,
+    untagged_count: nonNegativeInteger,
+    missed_ticket_ids: z.array(TicketIdSchema),
+    untagged_ticket_ids: z.array(TicketIdSchema),
+  })
+  .strict()
+  .superRefine((value, context) => {
+    if (value.union_count !== value.ai_tagged_count + value.untagged_count) {
+      context.addIssue({
+        code: "custom",
+        path: ["union_count"],
+        message: "#AI union count must equal tagged + untagged.",
+      });
+    }
+    if (value.missed_ticket_ids.length !== value.missed_count) {
+      context.addIssue({
+        code: "custom",
+        path: ["missed_count"],
+        message: "Missed ticket id list must match missed_count.",
+      });
+    }
+    if (value.untagged_ticket_ids.length !== value.untagged_count) {
+      context.addIssue({
+        code: "custom",
+        path: ["untagged_count"],
+        message: "Untagged ticket id list must match untagged_count.",
+      });
+    }
+  });
+export type AiTagCoverageBucket = z.infer<typeof AiTagCoverageBucketSchema>;
+
+export const AiTagCoverageSchema = z
+  .object({
+    source: z.literal("freshdesk"),
+    source_start_week: z.literal("2026-07-06"),
+    fetched_at: UtcDateTimeSchema,
+    by_week: z.record(WeekStringSchema, AiTagCoverageBucketSchema),
+    by_day: z.record(IsoDateSchema, AiTagCoverageBucketSchema),
+  })
+  .strict();
+export type AiTagCoverage = z.infer<typeof AiTagCoverageSchema>;
+
 const AI_REVIEW_COUNT_KEYS = [
   "reviewed_ticket_count",
   "rated_ticket_count",
@@ -1329,6 +1376,7 @@ export const DashboardViewSchema = z
     csat: CsatSchema.nullable(),
     outcome_reconciliation: OutcomeReconciliationSchema.nullable(),
     entry_coverage: EntryCoverageSchema.nullable(),
+    ai_tag_coverage: AiTagCoverageSchema.nullable(),
     ai_review: AiReviewSchema.nullable(),
     rule_gt4: z
       .object({

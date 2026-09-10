@@ -156,11 +156,12 @@ def test_freshdesk_refresh_orchestrator_keeps_network_reads_outside_web_process(
 
     assert text.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
     entry = text.index("weekly-cs-report fetch-freshdesk-entry-coverage")
+    ai_tags = text.index("weekly-cs-report fetch-freshdesk-ai-tags")
     fetch = text.index("weekly-cs-report fetch-csat")
     reconcile = text.index("weekly-cs-report reconcile-freshdesk-outcomes")
     ai_review = text.index("weekly-cs-report fetch-freshdesk-ai-review")
     refresh = text.index("/api/refresh")
-    assert entry < fetch < reconcile < ai_review < refresh
+    assert entry < ai_tags < fetch < reconcile < ai_review < refresh
     assert "http://127.0.0.1:" in text
     assert "X-Dashboard-Action: refresh" in text
     assert "FRESHDESK_API_KEY" not in text
@@ -188,6 +189,7 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
         "printf 'uv %s\\n' \"$*\" >> \"$CALL_LOG\"\n"
         "case \"$*\" in\n"
         "  *fetch-freshdesk-entry-coverage*) status=\"$ENTRY_STATUS\" ;;\n"
+        "  *fetch-freshdesk-ai-tags*) status=\"$AI_TAGS_STATUS\" ;;\n"
         "  *fetch-csat*) status=\"$FETCH_STATUS\" ;;\n"
         "  *reconcile-freshdesk-outcomes*) status=\"$RECONCILE_STATUS\" ;;\n"
         "  *) status=\"$AI_REVIEW_STATUS\" ;;\n"
@@ -210,10 +212,21 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
             "complete",
             "complete",
             "complete",
+            "complete",
             "Freshdesk entry coverage refresh did not complete",
+            "fetch-freshdesk-ai-tags",
+        ),
+        (
+            "complete",
+            "duration_limit_reached",
+            "complete",
+            "complete",
+            "complete",
+            "Freshdesk AI tag coverage refresh did not complete",
             "fetch-csat",
         ),
         (
+            "complete",
             "complete",
             "duration_limit_reached",
             "complete",
@@ -222,6 +235,7 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
             "reconcile-freshdesk-outcomes",
         ),
         (
+            "complete",
             "complete",
             "complete",
             "duration_limit_reached",
@@ -233,6 +247,7 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
             "complete",
             "complete",
             "complete",
+            "complete",
             "duration_limit_reached",
             "Freshdesk AI review refresh did not complete",
             None,
@@ -241,6 +256,7 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
 
     for (
         entry_status,
+        ai_tags_status,
         fetch_status,
         reconcile_status,
         ai_review_status,
@@ -254,6 +270,7 @@ def test_freshdesk_refresh_orchestrator_stops_before_publish_when_a_cache_job_is
             env={
                 **base_env,
                 "ENTRY_STATUS": entry_status,
+                "AI_TAGS_STATUS": ai_tags_status,
                 "FETCH_STATUS": fetch_status,
                 "RECONCILE_STATUS": reconcile_status,
                 "AI_REVIEW_STATUS": ai_review_status,
@@ -322,14 +339,23 @@ def test_freshdesk_refresh_orchestrator_uses_one_worker_and_publishes_after_both
     calls = call_log.read_text(encoding="utf-8").splitlines()
     uv_calls = [line for line in calls if line.startswith("uv ")]
     assert result.returncode == 0
-    assert len(uv_calls) == 4
-    # fetch-freshdesk-ai-review has no --max-workers flag; the other three do.
-    ai_review_calls = [line for line in uv_calls if "fetch-freshdesk-ai-review" in line]
-    other_calls = [line for line in uv_calls if "fetch-freshdesk-ai-review" not in line]
-    assert len(ai_review_calls) == 1
+    assert len(uv_calls) == 5
+    # fetch-freshdesk-ai-review and fetch-freshdesk-ai-tags have no
+    # --max-workers flag; the other three jobs do.
+    no_worker_flag_calls = [
+        line
+        for line in uv_calls
+        if "fetch-freshdesk-ai-review" in line or "fetch-freshdesk-ai-tags" in line
+    ]
+    other_calls = [
+        line
+        for line in uv_calls
+        if "fetch-freshdesk-ai-review" not in line and "fetch-freshdesk-ai-tags" not in line
+    ]
+    assert len(no_worker_flag_calls) == 2
     assert len(other_calls) == 3
     assert all("--max-workers 1" in line for line in other_calls)
-    assert all("--max-workers" not in line for line in ai_review_calls)
+    assert all("--max-workers" not in line for line in no_worker_flag_calls)
     assert any("-X POST" in line for line in calls)
 
 

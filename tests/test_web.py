@@ -79,6 +79,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
                 "csat": None,
                 "outcome_reconciliation": None,
                 "entry_coverage": None,
+                "ai_tag_coverage": None,
                 "ai_review": None,
                 "rule_gt4": {"gt4_turn_total": 0, "gt4_turn_with_cs": 0, "gt4_turn_without_cs": 0, "max_replies_rule_fired": 0},
             }

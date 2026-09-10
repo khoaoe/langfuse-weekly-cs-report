@@ -45,6 +45,7 @@ import { DataTableSortButton } from "./DataTableSortButton";
 import { FilterValueButton } from "./FilterValueButton";
 import { CsatSection } from "./CsatSection";
 import type { CsatGrouping } from "./CsatBreakdownTable";
+import { AiTagCoverageSection } from "./AiTagCoverageSection";
 import { EntryCoverageSection } from "./EntryCoverageSection";
 import { TransferDiagnostics } from "./TransferDiagnostics";
 import belowFoldStyles from "./below-fold.module.css";
@@ -1128,6 +1129,15 @@ export function BelowFold({
     dayRange === undefined ? view.ai_review : (weeklyView.ai_review ?? null);
   const entryCoverage =
     dayRange === undefined ? view.entry_coverage : weeklyView.entry_coverage;
+  const aiTagCoverage =
+    dayRange === undefined ? view.ai_tag_coverage : weeklyView.ai_tag_coverage;
+  const aiTagCoverageScopeNote =
+    dayRange === undefined || aiTagCoverage === null
+      ? undefined
+      : `Phạm vi độ phủ: ${formatDateRangeLabel(
+          dayRange.from,
+          dayRange.to,
+        )} · đúng khoảng ngày đã chọn`;
   const entryCoverageScopeNote =
     dayRange === undefined
       ? undefined
@@ -1150,6 +1160,15 @@ export function BelowFold({
         {...(entryCoverageScopeNote === undefined
           ? {}
           : { scopeNote: entryCoverageScopeNote })}
+        {...(dayRange === undefined
+          ? {}
+          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
+      />
+      <AiTagCoverageSection
+        aiTagCoverage={aiTagCoverage}
+        {...(aiTagCoverageScopeNote === undefined
+          ? {}
+          : { scopeNote: aiTagCoverageScopeNote })}
         {...(dayRange === undefined
           ? {}
           : { dayRange: { from: dayRange.from, to: dayRange.to } })}
