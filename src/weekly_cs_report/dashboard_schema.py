@@ -1415,14 +1415,19 @@ def _ai_tag_coverage_bucket(
     ai_tagged_ids: AbstractSet[str],
     langfuse_ids: AbstractSet[str],
 ) -> dict[str, object]:
-    """Aggregate one bucket. Grain-agnostic, like `_entry_coverage_bucket()`."""
+    """Aggregate one bucket. Grain-agnostic, like `_entry_coverage_bucket()`.
+
+    The ids sort as strings, not `key=int`: `_validate_ai_tag_coverage_bucket`
+    checks `ids == sorted(ids)` on the stored list, which is a string compare.
+    Langfuse ticket ids are not all the same width (a handful of 4-, 5-, 8- and
+    10-digit ones exist alongside the 7-digit Freshdesk ones), so a numeric sort
+    disagrees with that check and fails the whole snapshot.
+    """
     missed_ids = sorted(
-        (record.ticket_id for record in ai_records if record.ticket_id not in langfuse_ids),
-        key=int,
+        record.ticket_id for record in ai_records if record.ticket_id not in langfuse_ids
     )
     untagged_ids = sorted(
-        (row.ticket_id for row in langfuse_rows if row.ticket_id not in ai_tagged_ids),
-        key=int,
+        row.ticket_id for row in langfuse_rows if row.ticket_id not in ai_tagged_ids
     )
     ai_tagged_count = len(ai_records)
     untagged_count = len(untagged_ids)

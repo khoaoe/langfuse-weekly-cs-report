@@ -695,6 +695,13 @@ def _ai_tag_coverage_snapshot() -> DashboardSnapshot:
         [
             _meta(trace("mismatch", "345001", 0, "2026-07-13T02:00:00Z", "AI reply")),
             _meta(trace("untagged", "345003", 0, "2026-07-20T03:00:00Z", "AI reply")),
+            # Two untagged tickets whose ids differ in width: production carries
+            # 4-, 5-, 8- and 10-digit Langfuse ids next to the 7-digit Freshdesk
+            # ones, and numeric order disagrees with the string order the
+            # validator enforces (9999 < 345005 numerically, the reverse as
+            # strings).
+            _meta(trace("wide", "9999", 0, "2026-07-14T03:00:00Z", "AI reply")),
+            _meta(trace("narrow", "345005", 0, "2026-07-14T03:00:00Z", "AI reply")),
             # 18:00Z on Friday the 24th is already Saturday the 25th in Vietnam.
             _meta(trace("weekend", "345004", 0, "2026-07-24T18:00:00Z", "AI reply")),
         ]
@@ -763,6 +770,26 @@ def test_ai_tag_coverage_payload_invariants_hold_per_bucket():
     empty = coverage["by_week"]["2026-07-13"]
     assert empty["ai_tagged_count"] == 0
     assert empty["union_count"] == empty["untagged_count"]
+
+
+def test_ai_tag_coverage_ticket_ids_sort_as_strings_across_id_widths():
+    """Froze the live dashboard from 2026-09-10 to 2026-09-13.
+
+    The bucket sorted ids with `key=int` while the validator checks
+    `ids == sorted(ids)` (a string compare). Every id in the fixtures used to
+    be the same width, so the two orders agreed and nothing caught it; in
+    production a 10-digit id next to 7-digit ones tripped
+    `view.ai_tag_coverage.by_week.2026-07-06 ticket id lists are not sorted`,
+    a ValueError that fails the whole snapshot refresh.
+    """
+    coverage = _ai_tag_coverage_snapshot().dashboard_dict()["views"]["mon_sun"][
+        "ai_tag_coverage"
+    ]
+
+    assert coverage["by_week"]["2026-07-13"]["untagged_ticket_ids"] == [
+        "345005",
+        "9999",
+    ]
 
 
 def test_ai_tag_coverage_drops_weekend_tickets_from_both_sides_for_mon_fri():
