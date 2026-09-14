@@ -4,7 +4,6 @@ import type { AiTagCoverage, AiTagCoverageBucket } from "../lib/dashboard-schema
 import { formatCount, formatRate, formatUpdatedAt, share } from "../lib/format";
 import { selectScopeDays } from "../lib/report-scope";
 import type { DayRangeScope } from "../lib/report-scope";
-import { csvCell } from "../lib/spreadsheet";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
 import styles from "./dashboard.module.css";
 import entryStyles from "./entry-coverage.module.css";
@@ -18,6 +17,8 @@ interface AiTagCoverageSectionProps {
 }
 
 type Panel = "missed" | "untagged" | null;
+
+const PAGE_SIZE = 30;
 
 function percentage(count: number, total: number): string {
   return total === 0 ? "—" : formatRate(share(count, total));
@@ -52,6 +53,7 @@ export function AiTagCoverageSection({
   dayRange,
 }: AiTagCoverageSectionProps) {
   const [openPanel, setOpenPanel] = useState<Panel>(null);
+  const [page, setPage] = useState(1);
   const weeks = useMemo(
     () => (aiTagCoverage === null ? [] : Object.keys(aiTagCoverage.by_week).sort()),
     [aiTagCoverage],
@@ -117,15 +119,14 @@ export function AiTagCoverageSection({
   ];
   const panelIds = openPanel === "missed" ? missedIds : openPanel === "untagged" ? untaggedIds : [];
   const panelLabel = metricRows.find((row) => row.key === openPanel)?.label ?? "";
+  const pageCount = Math.max(1, Math.ceil(panelIds.length / PAGE_SIZE));
+  const pagedIds = panelIds.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const exportTickets = useCallback(() => {
     if (panelIds.length === 0) {
       return;
     }
-    const body = [
-      "Ticket ID",
-      ...panelIds,
-    ].map((line) => csvCell(line)).join("\r\n");
+    const body = ["Ticket ID", ...panelIds].join("\r\n");
     const url = URL.createObjectURL(
       new Blob([`\u{FEFF}${body}`], { type: "text/csv;charset=utf-8" }),
     );
@@ -171,9 +172,10 @@ export function AiTagCoverageSection({
                 className={entryStyles.investigateButton}
                 aria-pressed={openPanel === metric.key}
                 disabled={metric.count === 0}
-                onClick={() =>
-                  setOpenPanel((current) => (current === metric.key ? null : metric.key))
-                }
+                onClick={() => {
+                  setOpenPanel((current) => (current === metric.key ? null : metric.key));
+                  setPage(1);
+                }}
               >
                 Xem ticket
               </button>
@@ -198,16 +200,39 @@ export function AiTagCoverageSection({
           {panelIds.length === 0 ? (
             <p className={entryStyles.empty}>Không có ticket trong phạm vi đang chọn.</p>
           ) : (
-            <ul className={entryStyles.ticketChipGrid}>
-              {panelIds.map((ticketId) => (
-                <li key={ticketId}>
-                  <FreshdeskTicketLink
-                    ticketId={ticketId}
-                    className={entryStyles.ticketChip}
-                  />
-                </li>
-              ))}
-            </ul>
+            <>
+              <ul className={entryStyles.ticketChipGrid}>
+                {pagedIds.map((ticketId) => (
+                  <li key={ticketId}>
+                    <FreshdeskTicketLink
+                      ticketId={ticketId}
+                      className={entryStyles.ticketChip}
+                    />
+                  </li>
+                ))}
+              </ul>
+              {pageCount > 1 ? (
+                <div className={entryStyles.pagination}>
+                  <button
+                    type="button"
+                    className={entryStyles.pageButton}
+                    disabled={page <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    Trang trước
+                  </button>
+                  <span>{`Trang ${formatCount(page)}/${formatCount(pageCount)} · ${formatCount(panelIds.length)} ticket`}</span>
+                  <button
+                    type="button"
+                    className={entryStyles.pageButton}
+                    disabled={page >= pageCount}
+                    onClick={() => setPage((current) => Math.min(pageCount, current + 1))}
+                  >
+                    Trang sau
+                  </button>
+                </div>
+              ) : null}
+            </>
           )}
         </div>
       )}
