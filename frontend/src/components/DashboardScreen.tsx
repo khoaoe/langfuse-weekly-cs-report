@@ -149,13 +149,13 @@ function DashboardBody() {
             dayRangeData.plottedDays,
           );
     }
-    return multiWeekSelection
-      ? scopeSnapshotToWeeks(snapshot, weekDefinition, selectedReportWeeks)
-      : snapshot;
+    return allReportWeeksSelected
+      ? snapshot
+      : scopeSnapshotToWeeks(snapshot, weekDefinition, selectedReportWeeks);
   }, [
+    allReportWeeksSelected,
     dayRangeData,
     isDayRangeMode,
-    multiWeekSelection,
     reportScope,
     selectedReportWeeks,
     snapshot,

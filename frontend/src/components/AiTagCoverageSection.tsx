@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import type { AiTagCoverage, AiTagCoverageBucket } from "../lib/dashboard-schema";
 import { formatCount, formatRate, formatUpdatedAt, share } from "../lib/format";
 import { selectScopeDays } from "../lib/report-scope";
 import type { DayRangeScope } from "../lib/report-scope";
+import { csvCell } from "../lib/spreadsheet";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
 import styles from "./dashboard.module.css";
 import entryStyles from "./entry-coverage.module.css";
@@ -72,7 +73,7 @@ export function AiTagCoverageSection({
         aria-labelledby="ai-tag-coverage-title"
       >
         <h2 id="ai-tag-coverage-title" className={styles.sectionTitle}>
-          Độ phủ #AI từ Freshdesk
+          Độ phủ xử lý từ Freshdesk
         </h2>
         <p className={entryStyles.empty}>
           {aiTagCoverage === null
@@ -103,7 +104,7 @@ export function AiTagCoverageSection({
     { key: null, label: "Tổng (hợp #AI và Langfuse)", count: unionCount, ids: null },
     {
       key: "missed",
-      label: "AI agent xử lý nhưng Langfuse chưa ghi nhận",
+      label: "Có tag #AI nhưng CS agent không xử lý",
       count: missedIds.length,
       ids: missedIds,
     },
@@ -117,6 +118,25 @@ export function AiTagCoverageSection({
   const panelIds = openPanel === "missed" ? missedIds : openPanel === "untagged" ? untaggedIds : [];
   const panelLabel = metricRows.find((row) => row.key === openPanel)?.label ?? "";
 
+  const exportTickets = useCallback(() => {
+    if (panelIds.length === 0) {
+      return;
+    }
+    const body = [
+      "Ticket ID",
+      ...panelIds,
+    ].map((line) => csvCell(line)).join("\r\n");
+    const url = URL.createObjectURL(
+      new Blob([`\u{FEFF}${body}`], { type: "text/csv;charset=utf-8" }),
+    );
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `zalopay-ai-tag-coverage-${openPanel ?? "tickets"}.csv`;
+    anchor.rel = "noopener";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  }, [openPanel, panelIds]);
+
   return (
     <section
       id="ai-tag-coverage"
@@ -125,15 +145,14 @@ export function AiTagCoverageSection({
     >
       <div className={styles.sectionHead}>
         <h2 id="ai-tag-coverage-title" className={styles.sectionTitle}>
-          Độ phủ #AI từ Freshdesk
+          Độ phủ xử lý từ Freshdesk
         </h2>
         <span className={entryStyles.fetchedAt}>
           Cập nhật {formatUpdatedAt(aiTagCoverage.fetched_at)}
         </span>
       </div>
       <p className={styles.sectionNote}>
-        So khớp tập ticket gắn tag #AI trên Freshdesk với tập ticket Langfuse đã ghi nhận, mỗi
-        bên xét theo tuần của chính nó để tránh lệch tuần giữa hai nguồn.
+        So khớp ticket gắn tag #AI trên Freshdesk với ticket Langfuse đã ghi nhận, mỗi bên xét theo tuần riêng.
       </p>
       {scopeNote === undefined ? null : (
         <p id="ai-tag-coverage-scope" className={styles.sectionNote}>
@@ -164,28 +183,31 @@ export function AiTagCoverageSection({
       </div>
       {openPanel === null ? null : (
         <div className={entryStyles.detail} aria-live="polite">
-          <h3 className={entryStyles.detailTitle}>{panelLabel}</h3>
+          <div className={entryStyles.detailHead}>
+            <h3 className={entryStyles.detailTitle}>{panelLabel}</h3>
+            {panelIds.length === 0 ? null : (
+              <button
+                type="button"
+                className={entryStyles.investigateButton}
+                onClick={exportTickets}
+              >
+                Xuất CSV
+              </button>
+            )}
+          </div>
           {panelIds.length === 0 ? (
             <p className={entryStyles.empty}>Không có ticket trong phạm vi đang chọn.</p>
           ) : (
-            <div className={styles.tableScroll}>
-              <table className={styles.table}>
-                <thead>
-                  <tr>
-                    <th>Ticket</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {panelIds.map((ticketId) => (
-                    <tr key={ticketId}>
-                      <td>
-                        <FreshdeskTicketLink ticketId={ticketId} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <ul className={entryStyles.ticketChipGrid}>
+              {panelIds.map((ticketId) => (
+                <li key={ticketId}>
+                  <FreshdeskTicketLink
+                    ticketId={ticketId}
+                    className={entryStyles.ticketChip}
+                  />
+                </li>
+              ))}
+            </ul>
           )}
         </div>
       )}

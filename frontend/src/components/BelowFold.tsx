@@ -46,7 +46,6 @@ import { FilterValueButton } from "./FilterValueButton";
 import { CsatSection } from "./CsatSection";
 import type { CsatGrouping } from "./CsatBreakdownTable";
 import { AiTagCoverageSection } from "./AiTagCoverageSection";
-import { EntryCoverageSection } from "./EntryCoverageSection";
 import { TransferDiagnostics } from "./TransferDiagnostics";
 import belowFoldStyles from "./below-fold.module.css";
 import styles from "./dashboard.module.css";
@@ -1127,8 +1126,6 @@ export function BelowFold({
   const csat = dayRange === undefined ? view.csat : (weeklyView.csat ?? null);
   const aiReview =
     dayRange === undefined ? view.ai_review : (weeklyView.ai_review ?? null);
-  const entryCoverage =
-    dayRange === undefined ? view.entry_coverage : weeklyView.entry_coverage;
   const aiTagCoverage =
     dayRange === undefined ? view.ai_tag_coverage : weeklyView.ai_tag_coverage;
   const aiTagCoverageScopeNote =
@@ -1138,32 +1135,10 @@ export function BelowFold({
           dayRange.from,
           dayRange.to,
         )} · đúng khoảng ngày đã chọn`;
-  const entryCoverageScopeNote =
-    dayRange === undefined
-      ? undefined
-      : entryCoverage !== null && entryCoverage.by_day !== undefined
-        ? `Phạm vi độ phủ: ${formatDateRangeLabel(
-            dayRange.from,
-            dayRange.to,
-          )} · đúng khoảng ngày đã chọn`
-        : touchedWeeks.length === 0
-          ? undefined
-          : `Độ phủ theo tuần trọn vẹn chạm khoảng ngày: ${touchedWeeks
-              .map((week) => formatWeekRange(week, weekDefinition))
-              .join(", ")}. Bản dữ liệu này chưa có độ phủ theo ngày.`;
-
   return (
     <>
-      <EntryCoverageSection
-        entryCoverage={entryCoverage}
-        weekDefinition={weekDefinition}
-        {...(entryCoverageScopeNote === undefined
-          ? {}
-          : { scopeNote: entryCoverageScopeNote })}
-        {...(dayRange === undefined
-          ? {}
-          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
-      />
+      {/* EntryCoverageSection hidden from UI: superseded by AiTagCoverageSection's
+          "Độ phủ xử lý từ Freshdesk" title, keeping the component for now. */}
       <AiTagCoverageSection
         aiTagCoverage={aiTagCoverage}
         {...(aiTagCoverageScopeNote === undefined

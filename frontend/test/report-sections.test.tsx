@@ -13,8 +13,6 @@ import {
   type AiTagCoverageBucket,
   type DashboardSnapshot,
   type DayAggregate,
-  type EntryCoverage,
-  type EntryCoverageWeek,
   type Segments,
   type WeeklyReportRow,
 } from "../src/lib/dashboard-schema";
@@ -211,41 +209,6 @@ function dayAggregate(day: string): DayAggregate {
     ai_reply_sum_ai_first: 3,
     segments: { skill: {}, app: {}, issue_category: {} },
     transfer_reasons: EMPTY_DAY_TRANSFER_REASONS,
-  };
-}
-
-function coverageBucket(
-  overrides: Partial<EntryCoverageWeek> = {},
-): EntryCoverageWeek {
-  return {
-    freshdesk_ticket_count: 4,
-    ai_replied_only: 1,
-    ai_replied_then_transferred: 0,
-    transferred_without_ai_reply: 0,
-    invoked_no_result: 3,
-    ...overrides,
-  };
-}
-
-function snapshotWithEntryCoverage(
-  byDay?: EntryCoverage["by_day"],
-): DashboardSnapshot {
-  const view = baseSnapshot.views.mon_sun;
-  return {
-    ...baseSnapshot,
-    views: {
-      ...baseSnapshot.views,
-      mon_sun: {
-        ...view,
-        entry_coverage: {
-          source: "freshdesk",
-          source_start_week: "2026-07-06",
-          fetched_at: "2026-08-04T03:00:00Z",
-          by_week: { "2026-07-20": coverageBucket() },
-          ...(byDay === undefined ? {} : { by_day: byDay }),
-        },
-      },
-    },
   };
 }
 
@@ -565,42 +528,6 @@ describe("Weekly Report", () => {
 });
 
 describe("Below-fold analysis", () => {
-  it("shows Freshdesk entry coverage separately and opens a paginated investigation list", async () => {
-    const user = userEvent.setup();
-    server.use(
-      http.get("/api/freshdesk-entry-coverage/tickets", () =>
-        HttpResponse.json({
-          items: [
-            {
-              ticket_id: "7043723",
-              opened_at: "2026-07-21T02:00:00Z",
-              cohort_week: "2026-07-20",
-              status: "invoked_no_result",
-              human_replied: true,
-            },
-          ],
-          page: 1,
-          page_size: 10,
-          total: 1,
-        }),
-      ),
-    );
-
-    renderWithQuery(belowFold(snapshotWithEntryCoverage()));
-
-    const section = screen.getByRole("region", {
-      name: "Độ phủ xử lý từ Freshdesk",
-    });
-    expect(within(section).getByText("Đã gọi nhưng không có phản hồi/chuyển CS")).toBeVisible();
-    expect(within(section).getAllByRole("button", { name: "Xem ticket" })).toHaveLength(1);
-
-    await user.click(
-      within(section).getAllByRole("button", { name: "Xem ticket" })[0]!,
-    );
-    expect(await within(section).findByRole("table")).toHaveTextContent("7043723");
-    expect(within(section).getByText("Trang 1 · 1 ticket")).toBeVisible();
-  });
-
   it("shows the #AI miss count and share, and opens its ticket list", async () => {
     const user = userEvent.setup();
     renderWithQuery(
@@ -616,15 +543,15 @@ describe("Below-fold analysis", () => {
       ),
     );
 
-    const section = screen.getByRole("region", { name: "Độ phủ #AI từ Freshdesk" });
+    const section = screen.getByRole("region", { name: "Độ phủ xử lý từ Freshdesk" });
     const missedRow = within(section)
-      .getByText("AI agent xử lý nhưng Langfuse chưa ghi nhận")
+      .getByText("Có tag #AI nhưng CS agent không xử lý")
       .closest("div")!;
     expect(within(missedRow).getByText("1")).toBeVisible();
     expect(within(missedRow).getByText("33,3%")).toBeVisible();
 
     await user.click(within(missedRow).getByRole("button", { name: "Xem ticket" }));
-    expect(await within(section).findByRole("table")).toHaveTextContent("7043723");
+    expect(await within(section).findByRole("link", { name: /7043723/ })).toBeVisible();
   });
 
   it("shows an em dash for the #AI share when the union is empty", () => {
@@ -632,7 +559,7 @@ describe("Below-fold analysis", () => {
       belowFold(snapshotWithAiTagCoverage({ "2026-07-20": aiTagBucket() })),
     );
 
-    const section = screen.getByRole("region", { name: "Độ phủ #AI từ Freshdesk" });
+    const section = screen.getByRole("region", { name: "Độ phủ xử lý từ Freshdesk" });
     expect(within(section).getAllByText("—")).toHaveLength(3);
     for (const button of within(section).getAllByRole("button", { name: "Xem ticket" })) {
       expect(button).toBeDisabled();
@@ -844,64 +771,6 @@ describe("Below-fold analysis", () => {
     // summed, with 2026-07-22 left out entirely.
     expect(csatSection).toHaveTextContent("10");
     expect(csatSection).not.toHaveTextContent("100");
-  });
-
-  it("cuts entry coverage to the picked days, and sends the same window to the drill-down", async () => {
-    const user = userEvent.setup();
-    // The picked range is Mon-Tue of a week whose Wed also has coverage. Week
-    // grain reports 100 tickets; day grain must report exactly the 8 in range.
-    const weeklySnapshot = snapshotWithEntryCoverage({
-      "2026-07-20": coverageBucket({ freshdesk_ticket_count: 4 }),
-      "2026-07-21": coverageBucket({ freshdesk_ticket_count: 4 }),
-      "2026-07-22": coverageBucket({
-        freshdesk_ticket_count: 92,
-        ai_replied_only: 89,
-      }),
-    });
-    weeklySnapshot.views.mon_sun.entry_coverage!.by_week["2026-07-20"] =
-      coverageBucket({ freshdesk_ticket_count: 100, ai_replied_only: 97 });
-    const requested: string[] = [];
-    server.use(
-      http.get("/api/freshdesk-entry-coverage/tickets", ({ request }) => {
-        requested.push(new URL(request.url).search);
-        return HttpResponse.json({ items: [], page: 1, page_size: 10, total: 0 });
-      }),
-    );
-
-    renderWithQuery(
-      belowFold(baseSnapshot, {
-        weeklySnapshot,
-        dayRange: {
-          from: "2026-07-20",
-          to: "2026-07-21",
-          allDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
-          plottedDays: [dayAggregate("2026-07-20"), dayAggregate("2026-07-21")],
-          activeDay: "",
-          onDaySelect: () => {},
-        },
-      }),
-    );
-
-    const section = screen.getByRole("region", {
-      name: "Độ phủ xử lý từ Freshdesk",
-    });
-    expect(
-      within(section).getByText(/Phạm vi độ phủ: 20\/07–21\/07/),
-    ).toBeVisible();
-    expect(section).not.toHaveTextContent("Độ phủ theo tuần trọn vẹn");
-    expect(section).toHaveTextContent("Ticket Freshdesk8");
-    // 100 (the week) and 89/92 (the out-of-range day) must appear nowhere.
-    expect(section).not.toHaveTextContent(/Ticket Freshdesk(100|92)/);
-    expect(section).not.toHaveTextContent(/AI đã phản hồi(97|89)/);
-
-    // The list under the counts has to answer for the same population; sending
-    // only the touched week would return the whole week's tickets.
-    await user.click(
-      within(section).getAllByRole("button", { name: "Xem ticket" })[0]!,
-    );
-    await waitFor(() => expect(requested).not.toHaveLength(0));
-    expect(requested[0]).toContain("opened_from=2026-07-20");
-    expect(requested[0]).toContain("opened_to=2026-07-21");
   });
 
   it("names the shortfall instead of listing nothing when the picked range touches no week", () => {
