@@ -1385,9 +1385,17 @@ def _ai_tag_coverage_payload(
     for row in langfuse_rows:
         if row.cohort_week not in observed_weeks:
             continue
+        opened = _parse_utc_iso(row.opened_at, "ticket opened_at")
+        fetched_at = _parse_utc_iso(cache.fetched_weeks[row.cohort_week], "fetched timestamp")
+        if opened >= fetched_at:
+            # This ticket's own week was fetched before the ticket even opened,
+            # so Freshdesk was never actually checked for its #AI tag yet --
+            # counting it as untagged would just be reporting fetch lag.
+            continue
         week_langfuse[row.cohort_week].append(row)
-        opened = _parse_utc_iso(row.opened_at, "ticket opened_at").astimezone(_VIETNAM_TIMEZONE)
-        day_langfuse.setdefault(opened.date().isoformat(), []).append(row)
+        day_langfuse.setdefault(
+            opened.astimezone(_VIETNAM_TIMEZONE).date().isoformat(), []
+        ).append(row)
 
     day_keys = sorted(set(day_ai) | set(day_langfuse))
     return {

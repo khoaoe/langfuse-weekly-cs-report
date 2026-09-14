@@ -808,6 +808,29 @@ def test_ai_tag_coverage_drops_weekend_tickets_from_both_sides_for_mon_fri():
     assert week["untagged_ticket_ids"] == ["345003"]
 
 
+def test_ai_tag_coverage_excludes_tickets_opened_after_their_week_was_fetched():
+    """A ticket that opened after the last Freshdesk fetch for its own week
+    hasn't actually had its #AI tag checked yet -- it must not count as
+    untagged just because the fetch cron hasn't caught up to it (production
+    incident 2026-09-14: same-day tickets briefly showed as untagged)."""
+    run = _run(
+        [
+            _meta(trace("late", "345006", 0, "2026-07-20T02:00:00Z", "AI reply")),
+        ]
+    )
+    cache = AiTagCache(
+        fetched_weeks={"2026-07-20": "2026-07-20T01:00:00Z"},
+        records=(),
+    )
+    coverage = project_dashboard(run, ai_tag_cache=cache).dashboard_dict()["views"][
+        "mon_sun"
+    ]["ai_tag_coverage"]
+    week = coverage["by_week"]["2026-07-20"]
+
+    assert "345006" not in week["untagged_ticket_ids"]
+    assert week["langfuse_count"] == 0
+
+
 _AI_REVIEW_COUNT_KEYS = (
     "reviewed_ticket_count",
     "rated_ticket_count",
