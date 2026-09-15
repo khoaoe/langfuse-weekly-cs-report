@@ -535,6 +535,7 @@ describe("Below-fold analysis", () => {
         snapshotWithAiTagCoverage({
           "2026-07-20": aiTagBucket({
             ai_tagged_count: 3,
+            langfuse_count: 2,
             union_count: 3,
             missed_count: 1,
             missed_ticket_ids: ["7043723"],

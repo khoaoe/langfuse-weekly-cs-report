@@ -32,6 +32,7 @@ function combineBuckets(buckets: readonly AiTagCoverageBucket[]): {
   unionCount: number;
 } {
   const aiTaggedCount = buckets.reduce((sum, bucket) => sum + bucket.ai_tagged_count, 0);
+  const langfuseCount = buckets.reduce((sum, bucket) => sum + bucket.langfuse_count, 0);
   const byTicketId = (a: string, b: string) => Number(a) - Number(b);
   const missedIds = [...new Set(buckets.flatMap((bucket) => bucket.missed_ticket_ids))].sort(
     byTicketId,
@@ -43,7 +44,10 @@ function combineBuckets(buckets: readonly AiTagCoverageBucket[]): {
     aiTaggedCount,
     missedIds,
     untaggedIds,
-    unionCount: aiTaggedCount + untaggedIds.length,
+    // Union of the Langfuse and Freshdesk #AI populations: every Langfuse
+    // ticket, plus every #AI ticket that never reached Langfuse (missedIds).
+    // Matches the backend's union_count invariant in dashboard_schema.py.
+    unionCount: langfuseCount + missedIds.length,
   };
 }
 
