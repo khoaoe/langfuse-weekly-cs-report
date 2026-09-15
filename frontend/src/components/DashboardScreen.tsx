@@ -412,6 +412,7 @@ function DashboardBody() {
           />
           <BelowFold
             snapshot={reportSnapshot}
+            weeklySnapshot={snapshot ?? undefined}
             {...dayRangeProps}
             weekDefinition={weekDefinition}
             activeWeek={reportWeek}

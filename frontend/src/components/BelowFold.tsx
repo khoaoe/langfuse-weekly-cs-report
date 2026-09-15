@@ -1002,6 +1002,14 @@ export function BelowFold({
 }: BelowFoldProps) {
   const view = selectView(snapshot, weekDefinition);
   const weeks = selectWeekly(view);
+  // The volume/rate trend chart always plots every observed week, even when
+  // the report itself is scoped to a subset — `weeklySnapshot` (when passed)
+  // is the pre-scope snapshot; `weeks` is used as a fallback and for every
+  // other scoped reading below (same_period, selected week detail, CSAT).
+  const fullWeeks =
+    weeklySnapshot === undefined
+      ? weeks
+      : selectWeekly(selectView(weeklySnapshot, weekDefinition));
   const [trendMode, setTrendMode] = useState<"full" | "same_period">("full");
   const hasSamePeriod = view.same_period !== null;
   useEffect(() => {
@@ -1013,8 +1021,8 @@ export function BelowFold({
     () =>
       effectiveTrendMode === "same_period" && view.same_period !== null
         ? samePeriodTrendWeeks(weeks, view.same_period)
-        : weeks,
-    [effectiveTrendMode, view.same_period, weeks],
+        : fullWeeks,
+    [effectiveTrendMode, view.same_period, weeks, fullWeeks],
   );
   const weekTrendPoints = useMemo(
     () => trendWeeks.map((week) => trendWeekToPoint(week, weekDefinition)),

@@ -748,6 +748,16 @@ export function CsatSection({
         </div>
       </div>
 
+      {csat === null && aiReview === null ? null : (
+        <CsatGroupingField
+          grouping={grouping}
+          onGroupingChange={(nextGrouping) => {
+            setGrouping(nextGrouping);
+            onBreakdownGroupingChange();
+          }}
+        />
+      )}
+
       <div className={csatStyles.subsection}>
         <h3 className={csatStyles.subsectionTitle}>Khách hàng chấm</h3>
         <p
@@ -788,13 +798,6 @@ export function CsatSection({
           </p>
         ) : (
           <>
-            <CsatGroupingField
-              grouping={grouping}
-              onGroupingChange={(nextGrouping) => {
-                setGrouping(nextGrouping);
-                onBreakdownGroupingChange();
-              }}
-            />
             <CsatCharts
               scopeTickets={scopeTickets}
               data={data}
