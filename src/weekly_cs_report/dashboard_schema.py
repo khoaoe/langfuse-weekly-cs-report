@@ -1374,8 +1374,10 @@ def _ai_tag_coverage_payload(
 
     week_ai: dict[str, list[AiTagRecord]] = {week: [] for week in observed_weeks}
     week_langfuse: dict[str, list[TicketRow]] = {week: [] for week in observed_weeks}
+    week_unfetched_ids: dict[str, set[str]] = {week: set() for week in observed_weeks}
     day_ai: dict[str, list[AiTagRecord]] = {}
     day_langfuse: dict[str, list[TicketRow]] = {}
+    day_unfetched_ids: dict[str, set[str]] = {}
     for record in ai_records:
         if record.cohort_week not in observed_weeks:
             continue
@@ -1387,15 +1389,15 @@ def _ai_tag_coverage_payload(
             continue
         opened = _parse_utc_iso(row.opened_at, "ticket opened_at")
         fetched_at = _parse_utc_iso(cache.fetched_weeks[row.cohort_week], "fetched timestamp")
+        day_key = opened.astimezone(_VIETNAM_TIMEZONE).date().isoformat()
+        week_langfuse[row.cohort_week].append(row)
+        day_langfuse.setdefault(day_key, []).append(row)
         if opened >= fetched_at:
             # This ticket's own week was fetched before the ticket even opened,
-            # so Freshdesk was never actually checked for its #AI tag yet --
-            # counting it as untagged would just be reporting fetch lag.
-            continue
-        week_langfuse[row.cohort_week].append(row)
-        day_langfuse.setdefault(
-            opened.astimezone(_VIETNAM_TIMEZONE).date().isoformat(), []
-        ).append(row)
+            # so Freshdesk was never actually checked for its #AI tag yet.
+            # Default it to "has tag" rather than reporting fetch lag as a miss.
+            week_unfetched_ids[row.cohort_week].add(row.ticket_id)
+            day_unfetched_ids.setdefault(day_key, set()).add(row.ticket_id)
 
     day_keys = sorted(set(day_ai) | set(day_langfuse))
     return {
@@ -1404,13 +1406,21 @@ def _ai_tag_coverage_payload(
         "fetched_at": cache.fetched_at,
         "by_week": {
             key: _ai_tag_coverage_bucket(
-                week_ai[key], week_langfuse[key], ai_tagged_ids, langfuse_ids
+                week_ai[key],
+                week_langfuse[key],
+                ai_tagged_ids,
+                langfuse_ids,
+                week_unfetched_ids[key],
             )
             for key in sorted(week_ai)
         },
         "by_day": {
             key: _ai_tag_coverage_bucket(
-                day_ai.get(key, ()), day_langfuse.get(key, ()), ai_tagged_ids, langfuse_ids
+                day_ai.get(key, ()),
+                day_langfuse.get(key, ()),
+                ai_tagged_ids,
+                langfuse_ids,
+                day_unfetched_ids.get(key, frozenset()),
             )
             for key in day_keys
         },
@@ -1422,6 +1432,7 @@ def _ai_tag_coverage_bucket(
     langfuse_rows: Sequence[TicketRow],
     ai_tagged_ids: AbstractSet[str],
     langfuse_ids: AbstractSet[str],
+    unfetched_ids: AbstractSet[str],
 ) -> dict[str, object]:
     """Aggregate one bucket. Grain-agnostic, like `_entry_coverage_bucket()`.
 
@@ -1430,19 +1441,32 @@ def _ai_tag_coverage_bucket(
     Langfuse ticket ids are not all the same width (a handful of 4-, 5-, 8- and
     10-digit ones exist alongside the 7-digit Freshdesk ones), so a numeric sort
     disagrees with that check and fails the whole snapshot.
+
+    `ai_tagged_count` stays a Freshdesk-side count (`len(ai_records)`,
+    including `missed_ids`) and `langfuse_count` a Langfuse-side count --
+    the two are independent populations that can bucket the same ticket into
+    different weeks/days (see `_ai_tag_coverage_payload`'s docstring).
+    `union_count` used to be `ai_tagged_count + untagged_count`, which adds a
+    Freshdesk-side total to a Langfuse-side total and can fall below
+    `langfuse_count` whenever a tagged ticket's Freshdesk bucket differs from
+    its Langfuse bucket. It is a true union instead: every Langfuse ticket in
+    this bucket, plus every Freshdesk `#AI` ticket in this bucket that never
+    reached Langfuse at all (`missed_ids`) -- always >= `langfuse_count`.
     """
     missed_ids = sorted(
         record.ticket_id for record in ai_records if record.ticket_id not in langfuse_ids
     )
     untagged_ids = sorted(
-        row.ticket_id for row in langfuse_rows if row.ticket_id not in ai_tagged_ids
+        row.ticket_id
+        for row in langfuse_rows
+        if row.ticket_id not in ai_tagged_ids and row.ticket_id not in unfetched_ids
     )
     ai_tagged_count = len(ai_records)
     untagged_count = len(untagged_ids)
     return {
         "ai_tagged_count": ai_tagged_count,
         "langfuse_count": len(langfuse_rows),
-        "union_count": ai_tagged_count + untagged_count,
+        "union_count": len(langfuse_rows) + len(missed_ids),
         "missed_count": len(missed_ids),
         "untagged_count": untagged_count,
         "missed_ticket_ids": missed_ids,
@@ -3198,7 +3222,7 @@ def _validate_ai_tag_coverage_bucket(raw_counts: object, path: str) -> None:
             raise ValueError(f"{path} ticket id is invalid")
     if missed_ids != sorted(missed_ids) or untagged_ids != sorted(untagged_ids):
         raise ValueError(f"{path} ticket id lists are not sorted")
-    if counts["union_count"] != counts["ai_tagged_count"] + counts["untagged_count"]:
+    if counts["union_count"] != counts["langfuse_count"] + counts["missed_count"]:
         raise ValueError(f"{path} union count does not reconcile")
     if len(missed_ids) != counts["missed_count"]:
         raise ValueError(f"{path} missed count does not reconcile")

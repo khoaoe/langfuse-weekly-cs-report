@@ -761,7 +761,8 @@ def test_ai_tag_coverage_payload_invariants_hold_per_bucket():
     assert week["untagged_ticket_ids"] == ["345003"]
 
     for bucket in (*coverage["by_week"].values(), *coverage["by_day"].values()):
-        assert bucket["union_count"] == bucket["ai_tagged_count"] + bucket["untagged_count"]
+        assert bucket["union_count"] == bucket["langfuse_count"] + bucket["missed_count"]
+        assert bucket["union_count"] >= bucket["langfuse_count"]
         assert len(bucket["missed_ticket_ids"]) == bucket["missed_count"]
         assert len(bucket["untagged_ticket_ids"]) == bucket["untagged_count"]
 
@@ -769,7 +770,45 @@ def test_ai_tag_coverage_payload_invariants_hold_per_bucket():
     # to zero instead of erroring.
     empty = coverage["by_week"]["2026-07-13"]
     assert empty["ai_tagged_count"] == 0
-    assert empty["union_count"] == empty["untagged_count"]
+    assert empty["union_count"] == empty["langfuse_count"]
+
+
+def test_ai_tag_coverage_union_count_never_undercounts_langfuse_count():
+    """`union_count` used to be `len(ai_records) + untagged_count`, counting
+    Freshdesk's own raw record count for the bucket instead of how many
+    Langfuse tickets in the bucket are actually tagged. When a tagged
+    ticket's Freshdesk `cohort_week` differs from its Langfuse week (the
+    "bẫy lệch tuần" case), that raw count could fall below `langfuse_count`,
+    making the reported total smaller than the Langfuse-only count -- a
+    logical impossibility for what claims to be a union.
+    """
+    run = _run(
+        [
+            _meta(trace("mismatch", "345001", 0, "2026-07-13T02:00:00Z", "AI reply")),
+        ]
+    )
+    cache = AiTagCache(
+        fetched_weeks={
+            "2026-07-13": "2026-07-20T01:00:00Z",
+            "2026-07-20": "2026-08-04T01:00:00Z",
+        },
+        records=(
+            AiTagRecord(
+                ticket_id="345001",
+                opened_at="2026-07-20T02:00:00Z",
+                cohort_week="2026-07-20",
+            ),
+        ),
+    )
+    coverage = project_dashboard(run, ai_tag_cache=cache).dashboard_dict()["views"][
+        "mon_sun"
+    ]["ai_tag_coverage"]
+    week = coverage["by_week"]["2026-07-13"]
+
+    assert week["langfuse_count"] == 1
+    assert week["union_count"] >= week["langfuse_count"]
+    assert week["union_count"] == week["langfuse_count"]
+    assert "345001" not in week["untagged_ticket_ids"]
 
 
 def test_ai_tag_coverage_ticket_ids_sort_as_strings_across_id_widths():
@@ -808,11 +847,19 @@ def test_ai_tag_coverage_drops_weekend_tickets_from_both_sides_for_mon_fri():
     assert week["untagged_ticket_ids"] == ["345003"]
 
 
-def test_ai_tag_coverage_excludes_tickets_opened_after_their_week_was_fetched():
+def test_ai_tag_coverage_defaults_unfetched_tickets_to_tagged():
     """A ticket that opened after the last Freshdesk fetch for its own week
     hasn't actually had its #AI tag checked yet -- it must not count as
     untagged just because the fetch cron hasn't caught up to it (production
-    incident 2026-09-14: same-day tickets briefly showed as untagged)."""
+    incident 2026-09-14: same-day tickets briefly showed as untagged).
+
+    Rather than dropping it from the bucket entirely (which used to make
+    `union_count` disagree with `langfuse_count` whenever Freshdesk's and
+    Langfuse's own week buckets diverged), it counts as tagged by default: it
+    is included in `langfuse_count` and excluded from `untagged_ticket_ids`.
+    `ai_tagged_count` stays the Freshdesk-side raw record count (0 here,
+    since Freshdesk has no `#AI` record for it yet at all).
+    """
     run = _run(
         [
             _meta(trace("late", "345006", 0, "2026-07-20T02:00:00Z", "AI reply")),
@@ -828,7 +875,8 @@ def test_ai_tag_coverage_excludes_tickets_opened_after_their_week_was_fetched():
     week = coverage["by_week"]["2026-07-20"]
 
     assert "345006" not in week["untagged_ticket_ids"]
-    assert week["langfuse_count"] == 0
+    assert week["langfuse_count"] == 1
+    assert week["union_count"] == week["langfuse_count"]
 
 
 _AI_REVIEW_COUNT_KEYS = (
