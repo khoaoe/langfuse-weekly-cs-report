@@ -1109,11 +1109,11 @@ const AiTagCoverageBucketSchema = z
   })
   .strict()
   .superRefine((value, context) => {
-    if (value.union_count !== value.ai_tagged_count + value.untagged_count) {
+    if (value.union_count !== value.langfuse_count + value.missed_count) {
       context.addIssue({
         code: "custom",
         path: ["union_count"],
-        message: "#AI union count must equal tagged + untagged.",
+        message: "#AI union count must equal Langfuse count + missed count.",
       });
     }
     if (value.missed_ticket_ids.length !== value.missed_count) {
