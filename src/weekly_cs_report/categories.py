@@ -13,6 +13,14 @@ from .models import CategoryResult, TicketDimensions, TraceRecord, TransferCateg
 
 @dataclass(frozen=True)
 class Taxonomy:
+    """The parsed classification rules, loaded from ``config/taxonomy.v*.json``.
+
+    This is the whole non-LLM classification vocabulary: which meta fields map
+    to which dimension, which tool names carry TPE signals, which guardrail
+    values count as blocked, and the exact transfer sentence that marks a
+    handover to CS. v1 and v2 differ enough that ``extract_dimensions``
+    rejects v1 outright.
+    """
     version: str
     transfer_text: str
     transfer_texts: tuple[str, ...]
@@ -324,6 +332,11 @@ def _load_v2_taxonomy(root: Mapping[str, object]) -> Taxonomy:
 
 
 def load_taxonomy(path: Path) -> Taxonomy:
+    """Load and validate a taxonomy file, dispatching on its ``version``.
+
+    Raises ``ValueError`` on an unknown version rather than guessing: a
+    silently mis-parsed taxonomy would misclassify every ticket.
+    """
     with path.open(encoding="utf-8") as file:
         raw = json.load(file)
     root = _required_mapping(raw, "root")
@@ -416,6 +429,15 @@ def _model_core(first_trace: TraceRecord) -> str | None:
 
 
 def extract_dimensions(first_trace: TraceRecord, taxonomy: Taxonomy) -> TicketDimensions:
+    """Resolve every taxonomy dimension for a ticket from its first trace.
+
+    Pure field lookup against ``input.other_info.meta`` -- no model is
+    involved. Absent values become the taxonomy's fallback string rather than
+    ``None``, because the P0 coverage gate counts field presence and needs the
+    two cases to stay distinguishable.
+
+    Requires taxonomy v2; v1 lacks the dimension paths this reads.
+    """
     if taxonomy.version != "v2":
         raise ValueError("extract_dimensions requires taxonomy v2")
     meta = _trace_meta(first_trace)

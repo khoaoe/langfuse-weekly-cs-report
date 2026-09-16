@@ -59,11 +59,21 @@ def _apply_dns_override() -> None:
 
 @dataclass(frozen=True)
 class IngestionReceipt:
+    """What an ingestion call asked for versus what Langfuse accepted.
+
+    The two tuples are compared rather than assumed equal: a partial accept is
+    reported, not silently treated as success.
+    """
     requested_ids: tuple[str, ...]
     success_ids: tuple[str, ...]
 
 
 class LangfuseAPIError(RuntimeError):
+    """A Langfuse request failed, named by method, path and status.
+
+    The message is deliberately built from those three fields only -- response
+    bodies can carry customer data and must not reach a log or a traceback.
+    """
     def __init__(
         self,
         method: str,
@@ -77,11 +87,17 @@ class LangfuseAPIError(RuntimeError):
 
 
 class ReadOnlyOperationError(RuntimeError):
+    """A write was attempted through a client configured for reporting only."""
     def __init__(self) -> None:
         super().__init__("Langfuse client permits read-only reporting")
 
 
 class LangfuseTracePageLimitExceeded(LangfuseAPIError):
+    """Pagination ran past its page cap, so the result would be incomplete.
+
+    Raised instead of returning a truncated set: a short read looks exactly
+    like a quiet week in every downstream figure.
+    """
     def __init__(self) -> None:
         super().__init__(
             "GET",
@@ -91,16 +107,26 @@ class LangfuseTracePageLimitExceeded(LangfuseAPIError):
 
 
 class LangfuseDeadlineExceeded(LangfuseAPIError):
+    """The caller's deadline passed before the request finished."""
     def __init__(self, method: str, path: str) -> None:
         super().__init__(method, path, "deadline_exceeded")
 
 
 class LangfuseRequestCancelled(LangfuseAPIError):
+    """The request was cancelled by the caller, e.g. a shutting-down refresh."""
     def __init__(self, method: str, path: str) -> None:
         super().__init__(method, path, "cancelled")
 
 
 class LangfuseClient:
+    """Read-only HTTP client for the Langfuse API.
+
+    Hides pagination, bounded retry on 429, deadline and cancellation checks,
+    and an optional DNS override behind a handful of iterator methods. Callers
+    ask for traces, observations or metrics and never see a page cursor.
+
+    Writes are refused unless the client was explicitly built to allow them.
+    """
     def __init__(
         self,
         base_url: str,
