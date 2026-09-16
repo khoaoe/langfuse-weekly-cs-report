@@ -1297,8 +1297,23 @@ def _run_fetch_freshdesk_ai_review_command(
 
     as_of = datetime.now(timezone.utc)
     base_weeks = dict(published.fetched_weeks) if published is not None else {}
+    # Keep crawl-era residue out of the merge. Before 2026-09-05 this job
+    # searched Freshdesk per week -- 190,723 tickets fetched to serve 18,134
+    # (see `_ai_review_population`) -- and those rows are still carried forward
+    # on every rewrite: 172,644 of 191,667 in production, none of them
+    # reachable, because both consumers (`_ai_review_payload`,
+    # `_ai_review_ratings_by_ticket`) join on the Langfuse ticket set.
+    #
+    # Retention spans every week in the cache, not just this run's, so a run
+    # over recent weeks does not evict older ones. A week absent from the
+    # population is untouched; a week present keeps only its Langfuse tickets.
+    retained_ids = frozenset(
+        ticket_id for ticket_ids in population.values() for ticket_id in ticket_ids
+    )
     base_records: dict[str, object] = {
-        item.ticket_id: item for item in (published.records if published is not None else ())
+        item.ticket_id: item
+        for item in (published.records if published is not None else ())
+        if item.cohort_week not in selected or item.ticket_id in retained_ids
     }
     target_weeks = tuple(
         week for week in sorted(selected) if _week_needs_fetch(week, base_weeks, as_of)

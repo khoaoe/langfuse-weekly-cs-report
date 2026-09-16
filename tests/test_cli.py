@@ -1155,3 +1155,59 @@ def test_main_reports_client_failures_without_a_traceback_or_credentials(
     assert output.err == "GET /api/public/traces status=500\n"
     assert "sensitive" not in output.err
     assert "Traceback" not in output.err
+
+
+def test_ai_review_merge_drops_tickets_langfuse_does_not_know(
+    monkeypatch, tmp_path: Path
+):
+    """Crawl-era residue must not survive a merge.
+
+    Before 2026-09-05 this job crawled Freshdesk broadly, and those rows were
+    carried forward on every rewrite -- 172,644 of 191,667 in production, none
+    reachable, because both consumers join on the Langfuse ticket set. The
+    merge now drops anything Langfuse does not know.
+    """
+
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.ai_review import AIReviewRecord
+    from weekly_cs_report.ai_review_cache import (
+        AIReviewCache,
+        load_ai_review_cache,
+        write_ai_review_cache,
+    )
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700, parents=True)
+    # "101" is a Langfuse ticket; "999" is crawl-era residue.
+    write_ai_review_cache(
+        runtime / "ai_review_cache.json",
+        AIReviewCache(
+            fetched_weeks={},
+            records=(
+                AIReviewRecord("999", "2026-06-30T01:00:00Z", "2026-06-29", *(None,) * 6),
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_ai_review_population",
+        lambda *_args: {"2026-06-29": ("101",)},
+    )
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get_ticket_metadata(self, ticket_id):
+            return FreshdeskTicketMetadata(ticket_id, "2026-06-30T01:00:00Z")
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
+
+    cli_module._run_fetch_freshdesk_ai_review_command(_ai_review_args(runtime))
+
+    cache = load_ai_review_cache(runtime / "ai_review_cache.json")
+    assert {record.ticket_id for record in cache.records} == {"101"}
