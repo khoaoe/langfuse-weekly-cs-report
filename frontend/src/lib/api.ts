@@ -8,8 +8,6 @@
  */
 export const DASHBOARD_ENDPOINT = "/api/dashboard";
 export const TICKETS_ENDPOINT = "/api/tickets";
-export const ENTRY_COVERAGE_TICKETS_ENDPOINT =
-  "/api/freshdesk-entry-coverage/tickets";
 export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
@@ -96,21 +94,6 @@ export async function fetchTicketPage(
   return readJson(response);
 }
 
-export async function fetchEntryCoverageTicketPage(
-  query: TicketQuery,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  const response = await fetch(
-    `${ENTRY_COVERAGE_TICKETS_ENDPOINT}${ticketQueryString(query)}`,
-    {
-      method: "GET",
-      credentials: "same-origin",
-      headers: JSON_HEADERS,
-      ...(signal ? { signal } : {}),
-    },
-  );
-  return readJson(response);
-}
 
 export interface FreshdeskCookieState {
   readonly state: "ok" | "expired" | "missing";

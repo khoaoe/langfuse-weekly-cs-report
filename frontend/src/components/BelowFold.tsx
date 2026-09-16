@@ -1196,8 +1196,6 @@ export function BelowFold({
         />
       </section>
 
-      {/* EntryCoverageSection hidden from UI: superseded by AiTagCoverageSection's
-          "Độ phủ xử lý từ Freshdesk" title, keeping the component for now. */}
       <AiTagCoverageSection
         aiTagCoverage={aiTagCoverage}
         {...(aiTagCoverageScopeNote === undefined

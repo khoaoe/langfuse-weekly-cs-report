@@ -54,9 +54,8 @@ function traceHashTicketId(hash: string): string | null | undefined {
 
 const SECTIONS = [
   { id: "weekly", label: "Báo cáo tuần" },
-  { id: "entry-coverage", label: "Độ phủ Freshdesk" },
-  { id: "ai-tag-coverage", label: "Độ phủ #AI" },
   { id: "trend", label: "Xu hướng" },
+  { id: "ai-tag-coverage", label: "Độ phủ Freshdesk" },
   { id: "segments", label: "So sánh segment" },
   { id: "csat", label: "Mức hài lòng" },
   { id: "diagnostics", label: "Chẩn đoán" },
