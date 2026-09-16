@@ -89,6 +89,10 @@ export function Legend<K extends string>({
 }) {
   return (
     <div className={chartStyles.legend}>
+      <p className={chartStyles.legendItem}>
+        <span className={chartStyles.legendLabel}>Tổng</span>
+        <span className={chartStyles.legendValue}>{formatCount(total)}</span>
+      </p>
       {buckets.map((bucket) => (
         <p key={bucket.key} className={chartStyles.legendItem}>
           <span className={`${chartStyles.swatch} ${bucket.className}`} aria-hidden="true" />
@@ -312,6 +316,7 @@ export function CsatCharts({
               `${formatCount(total)} phản hồi · Rất tệ ${formatCount(counts.negative)}`
             }
           />
+          <Legend buckets={CSAT_BUCKETS} counts={totals} total={totals.ticket_count} />
         </div>
       ) : null}
     </div>

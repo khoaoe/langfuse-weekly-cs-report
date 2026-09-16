@@ -92,6 +92,7 @@ export function AiReviewCharts({
               `${formatCount(total)} ticket có nhãn · Cần sửa ${formatCount(counts.needs_edit_count)}`
             }
           />
+          <Legend buckets={AI_REVIEW_BUCKETS} counts={data} total={data.rated_ticket_count} />
         </div>
       ) : null}
     </div>
