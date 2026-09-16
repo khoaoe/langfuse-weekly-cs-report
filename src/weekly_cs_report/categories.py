@@ -482,41 +482,6 @@ def _category_result(matches: set[str], ordered: Sequence[str], source_fields: l
     return CategoryResult("multiple", values, tuple(source_fields))
 
 
-def classify_business(turn0_input: object, taxonomy: Taxonomy) -> CategoryResult:
-    input_data = _mapping(turn0_input)
-    other_info = _mapping(input_data.get("other_info")) if input_data is not None else None
-    if other_info is None:
-        return CategoryResult("unknown")
-    candidates: list[tuple[str, str]] = []
-    title = _string(other_info.get("title"))
-    if title is not None:
-        candidates.append(("title", title))
-    meta = _mapping(other_info.get("meta"))
-    if title is None and meta is None:
-        return CategoryResult("unknown")
-    if meta is not None:
-        candidates.extend(_allowed_meta_values(meta, taxonomy))
-
-    matches: set[str] = set()
-    sources: list[str] = []
-    for field, value in candidates:
-        found = _business_matches(value, taxonomy)
-        if found:
-            matches.update(found)
-            sources.append(field)
-    return _category_result(matches, taxonomy.business_precedence, sources, taxonomy.business_fallback)
-
-
-def _tpe_mapping(code: str, step: str | None, taxonomy: Taxonomy) -> dict[str, object] | None:
-    for mapping in taxonomy.tpe_mappings:
-        if mapping["code"] == code and mapping["step"] == step:
-            return mapping
-    return next(
-        (mapping for mapping in taxonomy.tpe_mappings if mapping["code"] == code and mapping["step"] is None),
-        None,
-    )
-
-
 def _tpe_scalar(value: object) -> str | None:
     if isinstance(value, bool):
         return None
@@ -534,43 +499,6 @@ def _is_tpe_observation(observation: Mapping[str, object], taxonomy: Taxonomy) -
     )
 
 
-def classify_tpe(observations: Sequence[dict], taxonomy: Taxonomy) -> CategoryResult:
-    matched: list[tuple[dict[str, object], tuple[str, str | None]]] = []
-    sources: list[str] = []
-    for observation in observations:
-        if not _is_tpe_observation(observation, taxonomy):
-            continue
-        output = _mapping(observation.get("output"))
-        result = _mapping(output.get("result")) if output is not None else None
-        if result is None:
-            continue
-        code_field = "transstatus" if _tpe_scalar(result.get("transstatus")) is not None else "tpe_error_code"
-        code = _tpe_scalar(result.get(code_field))
-        step = _tpe_scalar(result.get("stepresult"))
-        if code is None:
-            continue
-        mapping = _tpe_mapping(code, step, taxonomy)
-        if mapping is None:
-            continue
-        mapped_result = (str(mapping["code"]), mapping["step"] if isinstance(mapping["step"], str) else None)
-        if mapped_result not in [item[1] for item in matched]:
-            matched.append((mapping, mapped_result))
-        source = f"output.result.{code_field}"
-        if source not in sources:
-            sources.append(source)
-        if step is not None and "output.result.stepresult" not in sources:
-            sources.append("output.result.stepresult")
-    if not matched:
-        return CategoryResult("unknown")
-    if len(matched) == 1:
-        mapping, (_, mapped_step) = matched[0]
-        raw_values = (str(mapping["code"]),)
-        if mapped_step is not None:
-            raw_values += (mapped_step,)
-        return CategoryResult(str(mapping["case"]), raw_values, tuple(sources))
-    return CategoryResult("multiple", tuple(item[1][0] for item in matched), tuple(sources))
-
-
 def _guardrail_signal(observation: Mapping[str, object], taxonomy: Taxonomy) -> bool:
     metadata = _mapping(observation.get("metadata"))
     output = _mapping(observation.get("output"))
@@ -586,40 +514,3 @@ def _guardrail_signal(observation: Mapping[str, object], taxonomy: Taxonomy) -> 
             elif container.get(field) is True:
                 return True
     return False
-
-
-def classify_guardrail(observations: Sequence[dict], taxonomy: Taxonomy) -> CategoryResult:
-    rules: list[str] = []
-    fields: list[str] = []
-    for observation in observations:
-        if not _guardrail_signal(observation, taxonomy):
-            continue
-        for container_name in ("metadata", "output"):
-            container = _mapping(observation.get(container_name))
-            if container is None:
-                continue
-            for key in taxonomy.guardrail_value_fields:
-                value = _string(container.get(key))
-                if (
-                    value is not None
-                    and value in taxonomy.guardrail_allowed_values
-                    and value not in taxonomy.guardrail_compliant_values
-                    and value not in rules
-                ):
-                    rules.append(value)
-                    fields.append(f"{container_name}.{key}")
-    if not rules:
-        return CategoryResult("unknown")
-    if len(rules) == 1:
-        return CategoryResult(rules[0], tuple(rules), tuple(fields))
-    return CategoryResult("multiple", tuple(rules), tuple(fields))
-
-
-def classify_transfer(
-    turn0: TraceRecord, observations: Sequence[dict], taxonomy: Taxonomy
-) -> TransferCategories:
-    return TransferCategories(
-        business=classify_business(turn0.input_data, taxonomy),
-        tpe=classify_tpe(observations, taxonomy),
-        guardrail_rule=classify_guardrail(observations, taxonomy),
-    )
