@@ -321,8 +321,10 @@ def test_close_stops_the_background_refresh_thread(tmp_path: Path):
     assert thread.is_alive() is False
 
 
-def test_long_refresh_ttl_starts_at_successful_commit(tmp_path: Path):
-    """Using report generated_at makes a slow refresh stale as soon as it commits."""
+def test_long_refresh_ttl_starts_when_the_refresh_began_not_when_it_committed(
+    tmp_path: Path,
+):
+    """A slow refresh's TTL window starts at kickoff, so duration doesn't stack on top of TTL."""
     clock = FakeClock(NOW)
     first_started = threading.Event()
     first_release = threading.Event()
@@ -353,19 +355,14 @@ def test_long_refresh_ttl_starts_at_successful_commit(tmp_path: Path):
         assert manager.get().status == "loading"
         assert first_started.wait(2)
 
+        # Refresh #1 takes 301s to commit -- longer than the TTL itself.
         clock.advance(timedelta(seconds=301))
         first_release.set()
         assert manager.wait_for_idle(2) is True
 
-        immediate_views = [manager.get() for _ in range(10)]
-        assert all(view.status == "ready" for view in immediate_views)
-        assert calls == [1]
-
-        clock.advance(timedelta(seconds=299))
-        assert manager.get().status == "ready"
-        assert calls == [1]
-
-        clock.advance(timedelta(seconds=1))
+        # TTL was already exhausted by the time refresh #1 committed, so the
+        # very next get() should kick off refresh #2 immediately instead of
+        # granting it a fresh 300s window from the commit.
         boundary = manager.get()
         assert boundary.status == "refreshing"
         assert second_started.wait(2)

@@ -192,6 +192,7 @@ class SnapshotManager:
         with self._lock:
             self._snapshot = initial_snapshot
             self._last_success_at = initial_success_at
+            self._last_refresh_started_at: datetime | None = initial_success_at
             self._persisted_mtime = persisted_mtime
             self._future: Future[None] | None = None
             self._last_error_code: str | None = None
@@ -206,7 +207,7 @@ class SnapshotManager:
         with self._lock:
             now = self._utc_clock()
             if self._should_refresh_automatically(now):
-                self._start_refresh()
+                self._start_refresh(now)
             return self._view()
 
     def peek(self) -> CacheView:
@@ -224,7 +225,7 @@ class SnapshotManager:
                     or (not force and self._should_refresh_automatically(now))
                 )
             ):
-                self._start_refresh()
+                self._start_refresh(now)
             return self._view()
 
     def wait_for_idle(self, timeout_seconds: float) -> bool:
@@ -321,17 +322,23 @@ class SnapshotManager:
                     or self._snapshot.generated_at.astimezone(timezone.utc),
                     self._persisted_mtime,
                 )
+                self._last_refresh_started_at = self._last_success_at
             self._persisted_mtime = None
         if self._last_success_at is None:
             return True
-        return now - self._last_success_at >= self._ttl
+        # TTL counts from when the last refresh *started*, not when it
+        # finished: refreshes here take 10-20+ minutes, so anchoring on
+        # completion time stacks the TTL on top of the fetch duration and
+        # the dashboard visibly lags 15-45 minutes behind real time.
+        started_at = self._last_refresh_started_at or self._last_success_at
+        return now - started_at >= self._ttl
 
-    def _start_refresh(self) -> None:
+    def _start_refresh(self, now: datetime) -> None:
         if self._closed or self._future is not None:
             return
-        self._future = self._executor.submit(self._refresh)
+        self._future = self._executor.submit(self._refresh, now)
 
-    def _refresh(self) -> None:
+    def _refresh(self, started_at_wall: datetime) -> None:
         started_at = self._monotonic()
         with self._lock:
             has_snapshot = self._snapshot is not None
@@ -395,7 +402,9 @@ class SnapshotManager:
                     error_code = "refresh_failed"
         finally:
             if refreshed_snapshot is not None and success_at is not None:
-                self._finish_successful_refresh(refreshed_snapshot, success_at)
+                self._finish_successful_refresh(
+                    refreshed_snapshot, success_at, started_at_wall
+                )
             else:
                 self._finish_failed_refresh(
                     error_code,
@@ -407,10 +416,12 @@ class SnapshotManager:
         self,
         snapshot: DashboardSnapshot,
         success_at: datetime,
+        started_at: datetime,
     ) -> None:
         with self._lock:
             self._snapshot = snapshot
             self._last_success_at = success_at
+            self._last_refresh_started_at = started_at
             self._persisted_mtime = None
             self._last_error_code = None
             self._last_error_at = None
