@@ -1145,17 +1145,6 @@ export function BelowFold({
         )} · đúng khoảng ngày đã chọn`;
   return (
     <>
-      {/* EntryCoverageSection hidden from UI: superseded by AiTagCoverageSection's
-          "Độ phủ xử lý từ Freshdesk" title, keeping the component for now. */}
-      <AiTagCoverageSection
-        aiTagCoverage={aiTagCoverage}
-        {...(aiTagCoverageScopeNote === undefined
-          ? {}
-          : { scopeNote: aiTagCoverageScopeNote })}
-        {...(dayRange === undefined
-          ? {}
-          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
-      />
       <section id="trend" className={styles.section} aria-labelledby="trend-title">
         <div className={styles.sectionHead}>
           <div>
@@ -1206,6 +1195,18 @@ export function BelowFold({
           onPointSelect={trendOnPointSelect}
         />
       </section>
+
+      {/* EntryCoverageSection hidden from UI: superseded by AiTagCoverageSection's
+          "Độ phủ xử lý từ Freshdesk" title, keeping the component for now. */}
+      <AiTagCoverageSection
+        aiTagCoverage={aiTagCoverage}
+        {...(aiTagCoverageScopeNote === undefined
+          ? {}
+          : { scopeNote: aiTagCoverageScopeNote })}
+        {...(dayRange === undefined
+          ? {}
+          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
+      />
 
       <section id="segments" className={styles.section} aria-labelledby="segments-title">
         <div className={styles.sectionHead}>
