@@ -1,12 +1,18 @@
 from __future__ import annotations
 
-"""``TicketRow`` and the privacy guards that validate it.
+"""``TicketRow``, the privacy guards that validate it, and the shared vocabulary.
 
 Split out of ``dashboard_schema`` because that module imports the Freshdesk
 and AI-review layers, while those layers need ``TicketRow`` -- an import cycle
 that used to be worked around with a ``TYPE_CHECKING`` block and a deferred
 import inside a function body. Nothing here imports another module of this
 package, so the cycle cannot come back.
+
+It also holds the enums and key sets that both the projector
+(``dashboard_schema``) and the validator (``dashboard_validate``) must agree
+on -- ``_OUTCOMES``, ``_VIEWS``, ``_SEGMENTS``, ``_TICKET_KEYS`` and friends.
+Putting them in the leaf is what lets those two modules stay independent of
+each other.
 
 ``dashboard_schema`` re-exports every name below, so existing callers keep
 importing them from there.
@@ -450,3 +456,133 @@ def _nullable_nonnegative_int(value: object, name: str) -> int | None:
 _AI_REVIEW_RATING_SLUGS = frozenset(
     bucket.removesuffix("_count") for bucket in _AI_REVIEW_RATING_BUCKETS
 )
+
+
+_TICKET_SORT_DIRECTIONS = frozenset({"asc", "desc"})
+
+
+_TRANSFER_TRIGGER_SOURCES = frozenset(
+    {"input_guardrail", "skill_guardrail_checked", "output_guardrail"}
+)
+
+
+_COMMENT_URL = re.compile(
+    rf"{_URL.pattern}"
+    r"|(?<![\w])(?:"
+    r"(?:mailto|tel|sms|data|javascript|geo|urn):\S+"
+    r"|[a-z][a-z0-9+.-]*:(?://\S+|[^\s:/?#]+[/?#]\S*)"
+    r")"
+    r"|(?<![\w@])(?:[^\W_](?:[\w-]{0,61}[^\W_])?\.)+"
+    r"[^\W\d_]{2,63}(?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}"
+    r"(?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|\[[0-9a-f:.%]+\](?::\d{1,5})?(?:[/?#]\S*)?"
+    r"|(?<![\w:])(?:[0-9a-f]{0,4}:)*[0-9a-f]{0,4}::"
+    r"(?:[0-9a-f]{0,4}:)*[0-9a-f]{0,4}(?:[/?#]\S*)?"
+    r"|(?<![\w:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}"
+    r"(?:[/?#]\S*)?",
+    re.IGNORECASE,
+)
+
+
+_AI_REVIEW_COUNT_KEYS = (
+    "reviewed_ticket_count",
+    "rated_ticket_count",
+    "evaluated_ticket_count",
+    "unrated_reviewed_ticket_count",
+    *_AI_REVIEW_RATING_BUCKETS,
+)
+
+
+_VIEWS = ("mon_sun", "mon_fri")
+
+
+_SEGMENTS = (
+    "issue_category",
+    "app",
+    "product_code",
+    "skill",
+    "intent",
+    "tpe",
+    "guardrail_rule",
+    "entry_point",
+    "model_core",
+)
+
+
+_MISSING = "Không xác định"
+
+
+_NO_SKILL = "Chưa ghi nhận"
+
+
+_DASHBOARD_KEYS = frozenset(
+    {
+        "generated_at", "source", "enrichment_status", "data_range", "views",
+        "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
+        "tool_error_codes",
+    }
+)
+
+
+_WEEKLY_KEYS = frozenset(
+    {
+        "cohort_week", "cohort_status", "week_definition", "has_data",
+        "total_tickets", "ai_first_count", "ai_first_rate", "ai_end_to_end_count",
+        "ai_then_cs_count", "direct_cs_count", "unclassified_count", "reopen_7d_rate",
+        "reopen_7d_denominator", "reopen_lifetime_rate", "reopen_lifetime_numerator",
+        "reopen_lifetime_denominator", "ai_reply_sum_ai_first",
+        "ai_reply_mean_ai_first", "ai_reply_p50",
+        "ai_reply_p90", "ai_reply_max", "gt4_turn_with_cs", "gt4_turn_without_cs",
+        "max_replies_rule_fired", "resolved_first_reply", "as_of", "reopen_reason",
+    }
+)
+
+
+def _expected_transfer_reason(
+    rule: str,
+    source: str,
+    stage: str | None,
+) -> str:
+    if (
+        rule == "cs_escalation"
+        and source == "skill_guardrail_checked"
+        and stage == "output"
+    ):
+        return "skill_suggested_transfer"
+    if rule == "cs_escalation" and source == "output_guardrail":
+        return "ai_response_requires_transfer"
+    return {
+        "missing_transaction_id": "missing_transaction_id",
+        "max_replies_exceeded": "max_replies_exceeded",
+        "off_topic": "out_of_scope",
+        "off_topic_llm": "out_of_scope",
+        "empty_input": "empty_message",
+        "empty_message_marker": "empty_message",
+        "prompt_injection": "prompt_injection",
+        "prompt_injection_llm": "prompt_injection",
+        "system_prompt_leak": "prompt_injection",
+        "tone_check_error": "output_check_error",
+    }.get(rule, "other_guardrail")
+
+
+_TICKET_KEYS = frozenset(
+    {
+        "ticket_id", "opened_at", "cohort_week", "cohort_status", "is_weekend_start", "outcome",
+        "ai_first", "transferred", "reopen_lifetime", "reopen_within_7d",
+        "ai_reply_count", "turn_count", "gt4_turn", "issue_category", "app",
+        "product_code", "skill", "intent", "tpe_code", "tpe_status",
+        "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
+        "data_quality", "model_core", "tool_error_codes", "ai_review_rating",
+        # Day-grain diagnostic fields (§4.1) -- server-only, never part of the
+        # Ticket Explorer's public projection (`_TICKET_EXPLORER_PUBLIC_KEYS`).
+        "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+        "guardrail_rules", "tpe_signals",
+    }
+)
+
+
+_TICKET_EXPLORER_PUBLIC_KEYS = _TICKET_KEYS - {
+    "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",
+    "guardrail_rules", "tpe_signals",
+}
