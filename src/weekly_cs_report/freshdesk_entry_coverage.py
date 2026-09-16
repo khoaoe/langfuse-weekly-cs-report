@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import re
 from typing import Literal
 
-from .dashboard_schema import TicketRow
+from .dashboard_rows import TicketRow
 from .entry_coverage_cache import EntryCoverageRecord
 from .outcome_reconciliation import (
     ConversationMetadata,

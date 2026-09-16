@@ -11,6 +11,13 @@ def _require_aware(value: datetime, field_name: str) -> None:
 
 @dataclass(frozen=True)
 class CohortWindow:
+    """The time bounds one analysis run is allowed to look at.
+
+    Carries both the local Vietnam-time reporting boundaries (which weeks are
+    complete, where week-to-date begins) and the UTC bounds actually sent to
+    Langfuse. Every field is timezone-aware; naive input is rejected outright,
+    because a silently-naive boundary shifts a whole cohort by seven hours.
+    """
     as_of: datetime
     complete_start_local: datetime
     complete_end_exclusive_local: datetime
@@ -30,6 +37,12 @@ class CohortWindow:
 
 @dataclass(frozen=True)
 class TraceRecord:
+    """One normalized Langfuse trace: a single turn of one conversation.
+
+    A ticket has many traces, ordered by ``turn``. This is the raw grain --
+    ``SessionMetrics`` is what one ticket becomes after all of its traces are
+    folded together.
+    """
     id: str
     session_id: str
     timestamp: datetime
@@ -44,6 +57,11 @@ class TraceRecord:
 
 @dataclass(frozen=True)
 class QualityIssue:
+    """One trace or ticket rejected from analysis, with the reason why.
+
+    Kept rather than dropped so a run can report what it excluded: an
+    unexplained fall in ticket count is indistinguishable from a real fall.
+    """
     reason: str
     session_id: str | None
     trace_id: str | None
@@ -56,6 +74,11 @@ class QualityIssue:
 
 @dataclass(frozen=True)
 class CategoryResult:
+    """A single resolved taxonomy value, with the raw input it came from.
+
+    ``raw_values`` and ``source_fields`` retain the pre-mapping evidence so a
+    reader can tell "no value present" from "value present but unmapped".
+    """
     value: str
     raw_values: tuple[str, ...] = ()
     source_fields: tuple[str, ...] = ()
@@ -63,6 +86,7 @@ class CategoryResult:
 
 @dataclass(frozen=True)
 class TransferCategories:
+    """The three taxonomy axes resolved for one transfer to CS."""
     business: CategoryResult
     tpe: CategoryResult
     guardrail_rule: CategoryResult
@@ -70,6 +94,15 @@ class TransferCategories:
 
 @dataclass(frozen=True)
 class TicketDimensions:
+    """Every taxonomy axis resolved for one ticket.
+
+    Populated from ``input.other_info.meta`` plus TPE observations, via
+    ``taxonomy.v2.json``. No LLM is involved -- these are field lookups.
+
+    Absent values are the string ``"Không xác định"`` for the required axes and
+    ``None`` for the optional ones; the difference is deliberate and load-bearing
+    for the P0 coverage gate, which counts field presence.
+    """
     issue_category: str
     app: str
     app_code: int | None
@@ -161,6 +194,18 @@ def _empty_ticket_dimensions() -> TicketDimensions:
 
 @dataclass(frozen=True)
 class SessionMetrics:
+    """One ticket, after all of its traces are folded into a single row.
+
+    Naming, to be read carefully: this type is keyed by ``session_id``, but a
+    session *is* a ticket here -- the two words name the same thing throughout
+    this codebase, and ``dimensions`` on this very class is a
+    ``TicketDimensions``. ``dashboard_schema._ticket_row`` completes the
+    rename by assigning ``ticket_id=session.session_id``. The ``session_``
+    prefix is Langfuse's wire vocabulary, not a second concept.
+
+    Several fields are marked internal-only and must never reach the browser;
+    each carries its own comment saying so.
+    """
     session_id: str
     turn0_trace_id: str
     turn0_timestamp: datetime
@@ -237,6 +282,7 @@ class ReopenLabel:
 
 @dataclass(frozen=True)
 class ScoreSpec:
+    """One score to write back to Langfuse, as its ingestion API expects it."""
     id: str
     event_id: str
     name: str
@@ -252,11 +298,21 @@ class ScoreSpec:
 
 
 class InvariantError(RuntimeError):
-    pass
+    """A published invariant did not hold, so the run must not publish.
+
+    Raised rather than logged: a broken invariant means the numbers are
+    wrong, and wrong numbers are worse than absent ones.
+    """
 
 
 @dataclass(frozen=True)
 class CandidateSelection:
+    """The outcome of choosing which tickets an analysis run may score.
+
+    ``eligible`` is what gets analysed; every other field records what was set
+    aside and why. The P0 denominator is built from the whole picture, not from
+    ``eligible`` alone -- excluded units stay in the denominator.
+    """
     eligible: dict[str, tuple[TraceRecord, ...]]
     weekend_start: tuple[str, ...]
     left_censored: tuple[str, ...]
@@ -268,6 +324,11 @@ class CandidateSelection:
 
 @dataclass(frozen=True)
 class GateStatus:
+    """Which metric families this run is allowed to publish.
+
+    A gate closes when its input data is too incomplete to report honestly;
+    ``reasons`` carries the human-readable explanation for each closure.
+    """
     core_allowed: bool
     business_allowed: bool
     tpe_allowed: bool
@@ -278,6 +339,12 @@ class GateStatus:
 
 @dataclass(frozen=True)
 class WeeklySummary:
+    """One cohort week's published figures.
+
+    ``cohort_status`` distinguishes a complete week from a week-to-date one,
+    which is what stops a partial week from being compared against full weeks
+    as though they were alike.
+    """
     cohort_week: date
     cohort_status: str
     total_tickets: int
@@ -314,6 +381,12 @@ class WeeklySummary:
 
 @dataclass(frozen=True)
 class AnalysisResult:
+    """Everything one pipeline run produced, before projection to a payload.
+
+    ``sessions`` is the per-ticket grain (see ``SessionMetrics`` on the
+    session/ticket naming); ``weekly_mon_sun`` and ``weekly_mon_fri`` are the
+    same tickets summarized under the two supported week definitions.
+    """
     sessions: tuple[SessionMetrics, ...]
     transfers: dict[str, TransferCategories]
     selection: CandidateSelection
