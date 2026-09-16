@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { scaleBand, scaleLinear } from "@visx/scale";
 
@@ -106,6 +106,31 @@ export function Legend<K extends string>({
   );
 }
 
+/** Colour key only, no counts — for a chart that already puts numbers in its tooltip. */
+export function LegendKey<K extends string>({
+  buckets,
+}: {
+  readonly buckets: readonly BucketDef<K>[];
+}) {
+  return (
+    <div className={chartStyles.legend}>
+      {buckets.map((bucket) => (
+        <p key={bucket.key} className={chartStyles.legendItem}>
+          <span className={`${chartStyles.swatch} ${bucket.className}`} aria-hidden="true" />
+          <span className={chartStyles.legendLabel}>{bucket.label}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+const TIME_CHART_TOOLTIP_WIDTH = 200;
+
+interface TimeChartTooltipState {
+  readonly key: string;
+  readonly anchorX: number;
+}
+
 /**
  * Volume over the scope's own buckets, stacked by the worst-first dimension.
  *
@@ -124,18 +149,14 @@ export function TimeChart<K extends string>({
   dayGrain,
   weekDefinition,
   regionLabel,
-  svgLabel,
-  tooltipFor,
 }: {
   readonly series: readonly (readonly [string, Record<K, number>])[];
   readonly buckets: readonly BucketDef<K>[];
   readonly dayGrain: boolean;
   readonly weekDefinition: WeekDefinition;
   readonly regionLabel: string;
-  readonly svgLabel: (maxTotal: number) => string;
-  /** Renders the volume + worst-bucket half of the tooltip; the period prefix is added here. */
-  readonly tooltipFor: (total: number, counts: Record<K, number>) => string;
 }) {
+  const [tooltip, setTooltip] = useState<TimeChartTooltipState | null>(null);
   const totalOf = (counts: Record<K, number>) =>
     buckets.reduce((sum, bucket) => sum + counts[bucket.key], 0);
   const width = Math.max(560, series.length * 34 + TIME_CHART_PADDING.left);
@@ -153,73 +174,128 @@ export function TimeChart<K extends string>({
     dayGrain ? formatWeekStart(key) : formatWeekRange(key, weekDefinition);
   // Enough labels to orient, never so many that they collide.
   const labelStep = Math.ceil(series.length / Math.max(1, Math.floor(innerWidth / 68)));
+  const periodLabel = dayGrain ? "Ngày" : "Tuần";
+  const tooltipSeries = tooltip === null ? null : series.find(([key]) => key === tooltip.key);
+  const tooltipAnchor = (clientX: number, bounds: DOMRect): number => {
+    if (bounds.width <= 0) {
+      return 50;
+    }
+    return Math.min(92, Math.max(8, ((clientX - bounds.left) / bounds.width) * 100));
+  };
 
   return (
-    <div className={chartStyles.chartViewport} role="region" aria-label={regionLabel}>
-      <svg
-        className={chartStyles.chartSvg}
-        viewBox={`0 0 ${width} ${TIME_CHART_HEIGHT}`}
-        role="img"
-        aria-label={svgLabel(maxTotal)}
-      >
-        <g transform={`translate(${TIME_CHART_PADDING.left},${TIME_CHART_PADDING.top})`}>
-          {ticks.map((tick) => (
-            <g key={tick}>
-              <line
-                className={chartStyles.gridLine}
-                x1={0}
-                x2={innerWidth}
-                y1={y(tick)}
-                y2={y(tick)}
-              />
-              <text className={chartStyles.axisLabel} x={-8} y={y(tick)} dy="0.32em" textAnchor="end">
-                {formatCount(tick)}
-              </text>
-            </g>
-          ))}
-          {series.map(([key, counts], index) => {
-            const left = x(key) ?? 0;
-            const bandWidth = x.bandwidth();
-            const total = totalOf(counts);
-            let cursor = innerHeight;
-            return (
-              <g key={key}>
-                <title>
-                  {`${dayGrain ? "Ngày" : "Tuần"} ${bucketLabel(key)}: ${tooltipFor(total, counts)}`}
-                </title>
-                {buckets.map((bucket) => {
-                  const value = counts[bucket.key];
-                  if (value === 0) {
-                    return null;
-                  }
-                  const height = (value / maxTotal) * innerHeight;
-                  cursor -= height;
-                  return (
-                    <rect
-                      key={bucket.key}
-                      className={`${chartStyles.column} ${bucket.className}`}
-                      x={left}
-                      y={cursor}
-                      width={bandWidth}
-                      height={height}
-                    />
-                  );
-                })}
-                {index % labelStep === 0 ? (
-                  <text
-                    className={chartStyles.axisLabel}
-                    x={left + bandWidth / 2}
-                    y={innerHeight + 16}
-                    textAnchor="middle"
-                  >
-                    {bucketLabel(key)}
-                  </text>
-                ) : null}
+    <div className={chartStyles.chartFrame}>
+      <div className={chartStyles.chartViewport} role="region" aria-label={regionLabel}>
+        <svg
+          className={chartStyles.chartSvg}
+          viewBox={`0 0 ${width} ${TIME_CHART_HEIGHT}`}
+          role="img"
+          aria-label={regionLabel}
+        >
+          <g transform={`translate(${TIME_CHART_PADDING.left},${TIME_CHART_PADDING.top})`}>
+            {ticks.map((tick) => (
+              <g key={tick}>
+                <line
+                  className={chartStyles.gridLine}
+                  x1={0}
+                  x2={innerWidth}
+                  y1={y(tick)}
+                  y2={y(tick)}
+                />
+                <text
+                  className={chartStyles.axisLabel}
+                  x={-8}
+                  y={y(tick)}
+                  dy="0.32em"
+                  textAnchor="end"
+                >
+                  {formatCount(tick)}
+                </text>
               </g>
-            );
-          })}
-        </g>
-      </svg>
+            ))}
+            {series.map(([key, counts], index) => {
+              const left = x(key) ?? 0;
+              const bandWidth = x.bandwidth();
+              let cursor = innerHeight;
+              return (
+                <g key={key}>
+                  {buckets.map((bucket) => {
+                    const value = counts[bucket.key];
+                    if (value === 0) {
+                      return null;
+                    }
+                    const height = (value / maxTotal) * innerHeight;
+                    cursor -= height;
+                    return (
+                      <rect
+                        key={bucket.key}
+                        className={`${chartStyles.column} ${bucket.className}`}
+                        x={left}
+                        y={cursor}
+                        width={bandWidth}
+                        height={height}
+                      />
+                    );
+                  })}
+                  {index % labelStep === 0 ? (
+                    <text
+                      className={chartStyles.axisLabel}
+                      x={left + bandWidth / 2}
+                      y={innerHeight + 16}
+                      textAnchor="middle"
+                    >
+                      {bucketLabel(key)}
+                    </text>
+                  ) : null}
+                  <rect
+                    className={chartStyles.columnHit}
+                    x={left}
+                    y={0}
+                    width={bandWidth}
+                    height={innerHeight}
+                    onPointerEnter={(event) => {
+                      const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+                      setTooltip({
+                        key,
+                        anchorX: bounds === undefined ? 50 : tooltipAnchor(event.clientX, bounds),
+                      });
+                    }}
+                    onPointerMove={(event) => {
+                      const bounds = event.currentTarget.ownerSVGElement?.getBoundingClientRect();
+                      if (bounds !== undefined) {
+                        setTooltip({ key, anchorX: tooltipAnchor(event.clientX, bounds) });
+                      }
+                    }}
+                    onPointerLeave={() => setTooltip(null)}
+                  />
+                </g>
+              );
+            })}
+          </g>
+        </svg>
+      </div>
+      {tooltip !== null && tooltipSeries !== undefined && tooltipSeries !== null ? (
+        <div
+          className={chartStyles.chartTooltip}
+          role="tooltip"
+          style={{
+            left: `${tooltip.anchorX}%`,
+            transform: tooltip.anchorX >= 75 ? "translateX(-100%)" : "translateX(-8px)",
+            maxWidth: TIME_CHART_TOOLTIP_WIDTH,
+          }}
+        >
+          <strong>{`${periodLabel} ${bucketLabel(tooltipSeries[0])}`}</strong>
+          <span>{`Tổng ${formatCount(totalOf(tooltipSeries[1]))}`}</span>
+          {buckets.map((bucket) => (
+            <span key={bucket.key}>
+              {`${bucket.label}: ${formatCount(tooltipSeries[1][bucket.key])} · ${guardedRate(
+                tooltipSeries[1][bucket.key],
+                totalOf(tooltipSeries[1]),
+              )}`}
+            </span>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -309,14 +385,8 @@ export function CsatCharts({
             dayGrain={dayGrain}
             weekDefinition={weekDefinition}
             regionLabel="Phản hồi theo thời gian"
-            svgLabel={(maxTotal) =>
-              `Số phản hồi theo ${dayGrain ? "ngày" : "tuần"}, xếp chồng theo mức hài lòng, cao nhất ${formatCount(maxTotal)} phản hồi.`
-            }
-            tooltipFor={(total, counts) =>
-              `${formatCount(total)} phản hồi · Rất tệ ${formatCount(counts.negative)}`
-            }
           />
-          <Legend buckets={CSAT_BUCKETS} counts={totals} total={totals.ticket_count} />
+          <LegendKey buckets={CSAT_BUCKETS} />
         </div>
       ) : null}
     </div>

@@ -2,7 +2,7 @@ import { useMemo } from "react";
 
 import type { AiReviewBucket, WeekDefinition } from "../lib/dashboard-schema";
 import { formatCount } from "../lib/format";
-import { Legend, SplitBar, TimeChart, guardedRate, type BucketDef } from "./CsatCharts";
+import { Legend, LegendKey, SplitBar, TimeChart, guardedRate, type BucketDef } from "./CsatCharts";
 import chartStyles from "./csat-charts.module.css";
 
 type AiReviewRatingKey = "needs_edit_count" | "satisfied_with_edit_count" | "satisfied_count";
@@ -85,14 +85,8 @@ export function AiReviewCharts({
             dayGrain={dayGrain}
             weekDefinition={weekDefinition}
             regionLabel="Hậu kiểm theo thời gian"
-            svgLabel={(maxTotal) =>
-              `Số ticket có nhãn hậu kiểm theo ${dayGrain ? "ngày" : "tuần"}, xếp chồng theo mức đánh giá, cao nhất ${formatCount(maxTotal)} ticket.`
-            }
-            tooltipFor={(total, counts) =>
-              `${formatCount(total)} ticket có nhãn · Cần sửa ${formatCount(counts.needs_edit_count)}`
-            }
           />
-          <Legend buckets={AI_REVIEW_BUCKETS} counts={data} total={data.rated_ticket_count} />
+          <LegendKey buckets={AI_REVIEW_BUCKETS} />
         </div>
       ) : null}
     </div>
