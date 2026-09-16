@@ -942,7 +942,7 @@ def test_environment_errors_name_only_missing_variables_and_load_project_dotenv(
 ):
     loaded: list[tuple[Path, bool]] = []
     monkeypatch.setattr(
-        "weekly_cs_report.cli.load_dotenv",
+        "weekly_cs_report.config.load_dotenv",
         lambda path, override=False: loaded.append((Path(path), override)),
     )
     monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)

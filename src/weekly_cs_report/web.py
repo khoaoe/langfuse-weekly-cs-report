@@ -32,7 +32,7 @@ from .ab_test_cache import (
     write_ab_test_cache,
 )
 from .categories import load_taxonomy
-from .cli import ConfigurationError, PROJECT_ROOT, load_environment
+from .config import ConfigurationError, PROJECT_ROOT, load_environment
 from .ai_review_cache import AIReviewCacheError, load_ai_review_cache
 from .ai_tag_cache import AiTagCacheError, load_ai_tag_cache
 from .csat_cache import CSATCacheError, load_csat_cache
