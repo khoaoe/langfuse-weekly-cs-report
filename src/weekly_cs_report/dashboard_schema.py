@@ -99,7 +99,7 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 31
+_STORAGE_VERSION = 32
 # `<tool>:<CODE>` as produced by `enrichment.tool_error_token`. The code half
 # is either an allowlisted upper-case enum or the `khac` bucket that absorbs
 # anything off the allowlist -- neither can carry free text or PII.
@@ -1366,16 +1366,29 @@ def _csat_payload(
             session.turn0_timestamp.astimezone(_VIETNAM_TIMEZONE).date().isoformat()
         )
         day_members.setdefault(day, []).append(session)
+    # One pool per view. Buckets reference entries by key, so a comment that
+    # belongs to both a week and a day bucket is stored once instead of twice.
+    feedback_pool: dict[str, dict[str, object]] = {}
+
+    def _bucket(members: Sequence[SessionMetrics]) -> dict[str, object]:
+        bucket, entries = _csat_bucket(members, ordered_responses)
+        for entry in entries:
+            feedback_pool.setdefault(_feedback_entry_key(entry), entry)
+        return bucket
+
+    by_week = {
+        key: _bucket(members) for key, members in sorted(week_members.items())
+    }
+    by_day = {
+        key: _bucket(members) for key, members in sorted(day_members.items())
+    }
     return {
         "source": "freshdesk",
         "fetched_at": cache.fetched_at,
-        "by_week": {
-            key: _csat_bucket(members, ordered_responses)
-            for key, members in sorted(week_members.items())
-        },
-        "by_day": {
-            key: _csat_bucket(members, ordered_responses)
-            for key, members in sorted(day_members.items())
+        "by_week": by_week,
+        "by_day": by_day,
+        "feedback_pool": {
+            key: feedback_pool[key] for key in sorted(feedback_pool)
         },
     }
 
@@ -1383,7 +1396,7 @@ def _csat_payload(
 def _csat_bucket(
     sessions: Sequence[SessionMetrics],
     ordered_responses: Mapping[str, tuple[CachedCSATResponse, ...]],
-) -> dict[str, object]:
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     """Aggregate one bucket of tickets, whatever key selected them.
 
     Grain-agnostic on purpose: a day bucket and a week bucket are the same
@@ -1457,6 +1470,8 @@ def _csat_bucket(
                 )
                 _increment_csat_counts(counts, response)
 
+    # Collected here, returned via `_csat_bucket_entries` so `_csat_payload`
+    # can hoist them into one shared pool per view.
     feedback_entries: list[dict[str, object]] = []
     for ticket_id, responses in ticket_responses.items():
         session = session_by_ticket[ticket_id]
@@ -1523,8 +1538,20 @@ def _csat_bucket(
             ]
             for dimension, values in response_dimension_counts.items()
         },
-        "feedback_entries": feedback_entries,
-    }
+        # Entry KEYS only. The entries themselves live once per view in
+        # `csat.feedback_pool`: a comment legitimately belongs to both its week
+        # bucket and its day bucket, and both view definitions, so storing it
+        # inline duplicated all 6,058 responses 3.5x -- 7.86 MB of a 29 MB
+        # snapshot, 5.62 MB of it redundant (measured 2026-09-17).
+        "feedback_entry_keys": [
+            _feedback_entry_key(entry) for entry in feedback_entries
+        ],
+    }, feedback_entries
+
+
+def _feedback_entry_key(entry: Mapping[str, object]) -> str:
+    """Stable identity of one CSAT comment: ticket + its response ordinal."""
+    return f"{entry['ticket_id']}:{entry['response_number']}"
 
 
 def _ai_review_payload(

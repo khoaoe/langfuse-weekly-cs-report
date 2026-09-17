@@ -656,13 +656,17 @@ def _validate_csat(
     # that is still valid and simply carries no day grain.
     _require_exact_keys(
         csat,
-        {"source", "fetched_at", "by_week"}
+        {"source", "fetched_at", "by_week", "feedback_pool"}
         | ({"by_day"} if "by_day" in csat else set()),
         "view.csat",
     )
     if csat["source"] != "freshdesk":
         raise ValueError("view.csat source is invalid")
     _parse_utc_iso(csat["fetched_at"], "view.csat.fetched_at")
+    # Entries live once per view; buckets only reference them by key. Validated
+    # here so every per-entry safety rule (PII, URL, length) runs exactly once
+    # instead of once per bucket the entry appears in.
+    feedback_pool = _validate_csat_feedback_pool(csat["feedback_pool"])
     by_week = _require_mapping(csat["by_week"], "view.csat.by_week")
     if not set(by_week).issubset(weekly_by_key):
         raise ValueError("view.csat contains a week outside this view")
@@ -672,6 +676,7 @@ def _validate_csat(
             raw_counts,
             f"view.csat.by_week.{cohort_week}",
             weekly_by_key[cohort_week]["total_tickets"],
+            feedback_pool,
         )
     if "by_day" not in csat:
         return
@@ -690,6 +695,7 @@ def _validate_csat(
             raw_counts,
             f"view.csat.by_day.{day}",
             weekly_by_key[cohort_week]["total_tickets"],
+            feedback_pool,
         )
 
 
@@ -706,6 +712,7 @@ def _validate_csat_bucket(
     raw_counts: object,
     path: str,
     population_cap: object,
+    feedback_pool: Mapping[str, Mapping[str, object]],
 ) -> None:
     """Validate one CSAT bucket. Grain-agnostic, like `_csat_bucket()`.
 
@@ -723,7 +730,7 @@ def _validate_csat_bucket(
             "by_dimension",
             "response_by_outcome",
             "response_by_dimension",
-            "feedback_entries",
+            "feedback_entry_keys",
         },
         path,
     )
@@ -864,15 +871,35 @@ def _validate_csat_bucket(
             "response dimension",
         )
 
-    feedback_entries = counts["feedback_entries"]
+    feedback_entry_keys = counts["feedback_entry_keys"]
     if (
-        not isinstance(feedback_entries, list)
-        or len(feedback_entries) > counts["response_count"]
+        not isinstance(feedback_entry_keys, list)
+        or len(feedback_entry_keys) > counts["response_count"]
     ):
         raise ValueError("view.csat feedback entries are invalid")
+    seen: set[str] = set()
+    for key in feedback_entry_keys:
+        if not isinstance(key, str) or key not in feedback_pool:
+            raise ValueError("view.csat feedback key is unknown")
+        if key in seen:
+            raise ValueError("view.csat feedback key is duplicated")
+        seen.add(key)
+
+
+def _validate_csat_feedback_pool(
+    value: object,
+) -> Mapping[str, Mapping[str, object]]:
+    """Validate every distinct CSAT comment in this view exactly once.
+
+    Holds the per-entry safety rules that used to run inside each bucket: an
+    entry appearing in both its week and its day bucket was previously checked
+    -- and stored -- twice.
+    """
+    pool = _require_mapping(value, "view.csat.feedback_pool")
     ticket_metadata: dict[str, tuple[object, ...]] = {}
     ticket_numbers: dict[str, set[int]] = defaultdict(set)
-    for raw_entry in feedback_entries:
+    validated: dict[str, Mapping[str, object]] = {}
+    for raw_key, raw_entry in pool.items():
         entry = _require_mapping(raw_entry, "view.csat feedback entry")
         _require_exact_keys(
             entry,
@@ -922,13 +949,13 @@ def _validate_csat_bucket(
         )
         if response_number > response_total:
             raise ValueError("view.csat feedback response number exceeds total")
-        if response_total > counts["response_count"]:
-            raise ValueError("view.csat feedback response total is invalid")
         if not isinstance(entry["is_latest_for_ticket"], bool):
             raise ValueError("view.csat feedback latest marker is invalid")
         if entry["is_latest_for_ticket"] != (response_number == response_total):
             raise ValueError("view.csat feedback latest marker is inconsistent")
         ticket_id = entry["ticket_id"]
+        if raw_key != f"{ticket_id}:{response_number}":
+            raise ValueError("view.csat feedback key does not match its entry")
         metadata = (
             response_total,
             entry["outcome"],
@@ -942,6 +969,8 @@ def _validate_csat_bucket(
             raise ValueError("view.csat feedback response number is duplicated")
         ticket_metadata[ticket_id] = metadata
         ticket_numbers[ticket_id].add(response_number)
+        validated[raw_key] = entry
+    return validated
 
 
 def _validate_outcome_reconciliation(

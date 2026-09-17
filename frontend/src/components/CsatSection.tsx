@@ -170,7 +170,7 @@ function aggregateWeeks(weeks: readonly CsatWeek[]): CsatWeek | null {
       issue_category: aggregateDimension("issue_category", true),
       app: aggregateDimension("app", true),
     },
-    feedback_entries: weeks.flatMap((week) => week.feedback_entries),
+    feedback_entry_keys: weeks.flatMap((week) => week.feedback_entry_keys),
   };
 }
 
@@ -329,6 +329,7 @@ function FeedbackDisclosure({
   allBucketsLabel,
   formatBucketOption,
   data,
+  feedbackPool,
   grouping,
   activeValue,
   onActiveValueChange,
@@ -340,6 +341,8 @@ function FeedbackDisclosure({
   readonly allBucketsLabel: string;
   readonly formatBucketOption: (key: string) => string;
   readonly data: CsatWeek;
+  /** The view's shared comment pool; buckets reference it by key (v32). */
+  readonly feedbackPool: Csat["feedback_pool"];
   readonly grouping: CsatGrouping;
   readonly activeValue: string;
   readonly onActiveValueChange: (value: string) => void;
@@ -358,14 +361,19 @@ function FeedbackDisclosure({
   const feedback = useMemo<FeedbackWithBucket[]>(
     () =>
       buckets.flatMap(([bucketKey, bucket]) =>
-        bucket.feedback_entries.map((comment) => ({ ...comment, bucketKey })),
+        bucket.feedback_entry_keys.flatMap((key) => {
+          // Entries live once per view in `feedback_pool` (storage v32); a
+          // bucket only references them by key.
+          const comment = feedbackPool[key];
+          return comment === undefined ? [] : [{ ...comment, bucketKey }];
+        }),
       ),
     [buckets],
   );
   const availableWeeks = useMemo(
     () =>
       buckets
-        .filter(([, bucket]) => bucket.feedback_entries.length > 0)
+        .filter(([, bucket]) => bucket.feedback_entry_keys.length > 0)
         .map(([bucketKey]) => bucketKey)
         .sort((left, right) => right.localeCompare(left)),
     [buckets],
@@ -827,6 +835,7 @@ export function CsatSection({
                   : `Tuần ${formatWeekRange(key, weekDefinition)}`
               }
               data={data}
+              feedbackPool={csat.feedback_pool}
               grouping={grouping}
               activeValue={activeValue}
               onActiveValueChange={(value) => onBreakdownSelect(grouping, value)}

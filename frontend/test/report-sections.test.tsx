@@ -40,6 +40,7 @@ type CsatPayload = NonNullable<
   DashboardSnapshot["views"]["mon_sun"]["csat"]
 >;
 type CsatWeek = CsatPayload["by_week"][string];
+type CsatFeedbackEntry = CsatPayload["feedback_pool"][string];
 
 function weekRow(
   overrides: Partial<WeeklyReportRow> & Pick<WeeklyReportRow, "cohort_week">,
@@ -103,7 +104,24 @@ function snapshotWithActiveSegmentBuckets(
   };
 }
 
-function csatWeek(overrides: Partial<CsatWeek> = {}): CsatWeek {
+/** Entries handed to `csatWeek` are recorded here and hoisted into the view's
+ * `feedback_pool` by `csatPayload` -- storage v32 stores each comment once and
+ * has buckets reference it by key. */
+const FEEDBACK_POOL: Record<string, CsatFeedbackEntry> = {};
+
+function feedbackKey(entry: CsatFeedbackEntry): string {
+  return `${entry.ticket_id}:${entry.response_number}`;
+}
+
+function csatWeek(
+  overrides: Partial<Omit<CsatWeek, "feedback_entry_keys">> & {
+    feedback_entries?: readonly CsatFeedbackEntry[];
+  } = {},
+): CsatWeek {
+  const { feedback_entries: entries = [], ...rest } = overrides;
+  for (const entry of entries) {
+    FEEDBACK_POOL[feedbackKey(entry)] = entry;
+  }
   const positive = overrides.positive ?? 23;
   const neutral = overrides.neutral ?? 4;
   const negative = overrides.negative ?? 4;
@@ -126,12 +144,12 @@ function csatWeek(overrides: Partial<CsatWeek> = {}): CsatWeek {
       issue_category: [{ value: "Chuyển tiền", ...counts }],
       app: [],
     },
-    feedback_entries: [],
-    ...overrides,
+    feedback_entry_keys: entries.map(feedbackKey),
+    ...rest,
   };
 }
 
-function csatComments(count: number): CsatWeek["feedback_entries"] {
+function csatComments(count: number): CsatFeedbackEntry[] {
   const buckets = ["positive", "neutral", "negative"] as const;
   return Array.from({ length: count }, (_, index) => ({
     ticket_id: String(7_000_000 + index + 1),
@@ -178,6 +196,7 @@ function snapshotWithCsat(
           fetched_at: fetchedAt,
           by_week: byWeek,
           ...(byDay === undefined ? {} : { by_day: byDay }),
+          feedback_pool: { ...FEEDBACK_POOL },
         },
       },
     },

@@ -99,8 +99,10 @@ describe("DashboardScreen", () => {
           { value: "Chưa ghi nhận", ticket_count: 1, positive: 0, neutral: 0, negative: 1 },
         ],
       },
-      feedback_entries: [
-        {
+      feedback_entry_keys: ["6991254:1", "6991255:1"],
+    };
+    const feedbackPool = {
+      "6991254:1": {
           ticket_id: "6991254",
           responded_at: "2026-07-21T01:00:00Z",
           satisfaction_bucket: "positive" as const,
@@ -113,7 +115,7 @@ describe("DashboardScreen", () => {
           response_total: 1,
           is_latest_for_ticket: true,
         },
-        {
+      "6991255:1": {
           ticket_id: "6991255",
           responded_at: "2026-07-22T01:00:00Z",
           satisfaction_bucket: "negative" as const,
@@ -126,7 +128,6 @@ describe("DashboardScreen", () => {
           response_total: 1,
           is_latest_for_ticket: true,
         },
-      ],
     };
     const patchView = (view: typeof dashboardEnvelopeFixture.snapshot.views.mon_fri) => ({
       ...view,
@@ -181,6 +182,7 @@ describe("DashboardScreen", () => {
         source: "freshdesk" as const,
         fetched_at: "2026-08-03T01:00:00Z",
         by_week: { "2026-07-20": week },
+        feedback_pool: feedbackPool,
       },
     });
     return {

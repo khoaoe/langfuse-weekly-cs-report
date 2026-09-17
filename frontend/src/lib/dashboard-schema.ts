@@ -886,7 +886,10 @@ export const CsatWeekSchema = z
       })
       .strict()
       .optional(),
-    feedback_entries: z.array(CsatFeedbackEntrySchema),
+    /** Keys into the view's `feedback_pool`. Entries are stored once per view,
+     * not inlined per bucket -- a comment belongs to both its week and its day
+     * bucket, which duplicated all responses 3.5x in storage (v32). */
+    feedback_entry_keys: z.array(z.string()),
   })
   .strict()
   .superRefine((value, context) => {
@@ -906,10 +909,10 @@ export const CsatWeekSchema = z
         message: "CSAT ticket count exceeds the response count.",
       });
     }
-    if (value.feedback_entries.length > value.response_count) {
+    if (value.feedback_entry_keys.length > value.response_count) {
       context.addIssue({
         code: "custom",
-        path: ["feedback_entries"],
+        path: ["feedback_entry_keys"],
         message: "CSAT feedback count exceeds the response count.",
       });
     }
@@ -947,35 +950,16 @@ export const CsatWeekSchema = z
         }
       }
     }
-    const metadataByTicket = new Map<string, string>();
-    const numbersByTicket = new Map<string, Set<number>>();
-    for (const entry of value.feedback_entries) {
-      const metadata = JSON.stringify([
-        entry.response_total,
-        entry.outcome,
-        entry.skill,
-        entry.issue_category,
-        entry.app,
-      ]);
-      const existing = metadataByTicket.get(entry.ticket_id);
-      if (existing !== undefined && existing !== metadata) {
+    const seen = new Set<string>();
+    for (const key of value.feedback_entry_keys) {
+      if (seen.has(key)) {
         context.addIssue({
           code: "custom",
-          path: ["feedback_entries"],
-          message: "CSAT feedback ticket metadata is inconsistent.",
+          path: ["feedback_entry_keys"],
+          message: "CSAT feedback key is duplicated.",
         });
       }
-      metadataByTicket.set(entry.ticket_id, metadata);
-      const numbers = numbersByTicket.get(entry.ticket_id) ?? new Set<number>();
-      if (numbers.has(entry.response_number)) {
-        context.addIssue({
-          code: "custom",
-          path: ["feedback_entries"],
-          message: "CSAT response number is duplicated.",
-        });
-      }
-      numbers.add(entry.response_number);
-      numbersByTicket.set(entry.ticket_id, numbers);
+      seen.add(key);
     }
   });
 export type CsatWeek = z.infer<typeof CsatWeekSchema>;
@@ -991,8 +975,31 @@ export const CsatSchema = z
      * fall back to `by_week` when it is absent.
      */
     by_day: z.record(IsoDateSchema, CsatWeekSchema).optional(),
+    /** Every distinct comment in this view, stored once and referenced by
+     * buckets through `feedback_entry_keys` (storage v32). */
+    feedback_pool: z.record(z.string(), CsatFeedbackEntrySchema),
   })
-  .strict();
+  .strict()
+  .superRefine((value, context) => {
+    // Every bucket key must resolve to a pooled entry. Without this a bucket
+    // could reference a comment that does not exist and the panel would
+    // silently render fewer comments than the count claims.
+    const buckets = [
+      ...Object.values(value.by_week),
+      ...Object.values(value.by_day ?? {}),
+    ];
+    for (const bucket of buckets) {
+      for (const key of bucket.feedback_entry_keys) {
+        if (!(key in value.feedback_pool)) {
+          context.addIssue({
+            code: "custom",
+            path: ["feedback_pool"],
+            message: `CSAT feedback key ${key} is not in the pool.`,
+          });
+        }
+      }
+    }
+  });
 export type Csat = z.infer<typeof CsatSchema>;
 
 const OutcomeReconciliationWeekSchema = z

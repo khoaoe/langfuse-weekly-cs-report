@@ -905,7 +905,7 @@ def test_successful_refresh_emits_allowlisted_snapshot_aggregates(tmp_path: Path
     success = next(event for event in events if event["event"] == "refresh_success")
     assert success.items() >= {
         "event": "refresh_success",
-        "schema_version": 31,
+        "schema_version": 32,
         "ticket_count": 0,
         "trace_count": 0,
         "observation_count": 0,

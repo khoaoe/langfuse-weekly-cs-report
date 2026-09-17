@@ -255,12 +255,18 @@ describe("dashboard API envelope", () => {
         },
       ],
     },
-    feedback_entries: [csatFeedbackEntry],
+    feedback_entry_keys: [
+      `${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`,
+    ],
   };
   const csat = {
     source: "freshdesk" as const,
     fetched_at: "2026-08-01T03:00:00Z",
     by_week: { "2026-07-20": csatWeek },
+    feedback_pool: {
+      [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+        csatFeedbackEntry,
+    },
   };
 
   function envelopeWithSamePeriod(
@@ -542,8 +548,8 @@ describe("dashboard API envelope", () => {
     expect(DashboardEnvelopeSchema.safeParse(malformed).success).toBe(false);
   });
 
-  it("requires a feedback_entries array in every CSAT week", () => {
-    const { feedback_entries: removedEntries, ...withoutEntries } = csatWeek;
+  it("requires a feedback_entry_keys array in every CSAT week", () => {
+    const { feedback_entry_keys: removedEntries, ...withoutEntries } = csatWeek;
     expect(removedEntries).toHaveLength(1);
 
     expect(
@@ -574,7 +580,7 @@ describe("dashboard API envelope", () => {
         by_week: {
           "2026-07-20": {
             ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, feedback: "raw" }],
+            feedback_entry_keys: ["missing:1"],
           },
         },
       },
@@ -592,13 +598,9 @@ describe("dashboard API envelope", () => {
         DashboardEnvelopeSchema.safeParse(
           envelopeWithCsat({
             ...csat,
-            by_week: {
-              "2026-07-20": {
-                ...csatWeek,
-                feedback_entries: [
-                  { ...csatFeedbackEntry, [field]: "private" },
-                ],
-              },
+            feedback_pool: {
+              [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+                { ...csatFeedbackEntry, [field]: "private" },
             },
           }),
         ).success,
@@ -660,11 +662,9 @@ describe("dashboard API envelope", () => {
       "an invalid feedback ticket",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, ticket_id: "ticket-1" }],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, ticket_id: "ticket-1" },
         },
       },
     ],
@@ -672,13 +672,9 @@ describe("dashboard API envelope", () => {
       "an unknown satisfaction bucket",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [
-              { ...csatFeedbackEntry, satisfaction_bucket: "satisfied" },
-            ],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, satisfaction_bucket: "satisfied" },
         },
       },
     ],
@@ -686,11 +682,9 @@ describe("dashboard API envelope", () => {
       "feedback longer than the approved limit",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, text: "x".repeat(201) }],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, text: "x".repeat(201) },
         },
       },
     ],
@@ -698,13 +692,9 @@ describe("dashboard API envelope", () => {
       "feedback containing a URL",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [
-              { ...csatFeedbackEntry, text: "Xem https://private.example/a" },
-            ],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, text: "Xem https://private.example/a" },
         },
       },
     ],
@@ -773,11 +763,9 @@ describe("dashboard API envelope", () => {
       "response number zero",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, response_number: 0 }],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, response_number: 0 },
         },
       },
     ],
@@ -785,11 +773,9 @@ describe("dashboard API envelope", () => {
       "response number greater than total",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, response_number: 3 }],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, response_number: 3 },
         },
       },
     ],
@@ -797,11 +783,9 @@ describe("dashboard API envelope", () => {
       "a mismatched latest marker",
       {
         ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entries: [{ ...csatFeedbackEntry, is_latest_for_ticket: true }],
-          },
+        feedback_pool: {
+          [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+            { ...csatFeedbackEntry, is_latest_for_ticket: true },
         },
       },
     ],
@@ -822,11 +806,9 @@ describe("dashboard API envelope", () => {
       DashboardEnvelopeSchema.safeParse(
         envelopeWithCsat({
           ...csat,
-          by_week: {
-            "2026-07-20": {
-              ...csatWeek,
-              feedback_entries: [{ ...csatFeedbackEntry, text }],
-            },
+          feedback_pool: {
+            [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
+              { ...csatFeedbackEntry, text },
           },
         }),
       ).success,

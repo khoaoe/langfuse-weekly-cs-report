@@ -26,6 +26,17 @@ from weekly_cs_report.dashboard_schema import (
 )
 from weekly_cs_report.ai_review import AIReviewRecord
 from weekly_cs_report.ai_review_cache import AIReviewCache
+
+
+def _feedback_entries(csat: dict, bucket: dict) -> list[dict]:
+    """Entries of one bucket, resolved through the view's shared pool.
+
+    Storage v32 stores each comment once per view under `feedback_pool` and
+    has buckets reference it by `"<ticket_id>:<response_number>"`, so a comment
+    in both its week and its day bucket is no longer duplicated.
+    """
+    return [csat["feedback_pool"][key] for key in bucket["feedback_entry_keys"]]
+
 from weekly_cs_report.ai_tag_cache import AiTagCache, AiTagRecord
 from weekly_cs_report.entry_coverage_cache import (
     EntryCoverageCache,
@@ -139,7 +150,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 31
+    assert snapshot.storage_dict()["schema_version"] == 32
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -189,7 +200,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 31
+    value["schema_version"] = 32
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
@@ -507,7 +518,7 @@ def test_csat_v11_projects_latest_ticket_rating_outcomes_dimensions_and_feedback
             item["skill"],
             item["issue_category"],
         )
-        for item in week["feedback_entries"]
+        for item in _feedback_entries(mon_fri, week)
     ] == [
         ("145665", 1, 2, False, "ai_end_to_end", "interbank-fund-transfer", "Chuyển tiền"),
         ("145665", 2, 2, True, "ai_end_to_end", "interbank-fund-transfer", "Chuyển tiền"),
@@ -578,7 +589,8 @@ def test_csat_buckets_by_vietnam_cohort_day_and_sums_back_to_its_week():
     ) == mon_fri["by_week"]["2026-07-20"]["ticket_count"]
 
     assert [
-        item["ticket_id"] for item in by_day["2026-07-21"]["feedback_entries"]
+        item["ticket_id"]
+        for item in _feedback_entries(mon_fri, by_day["2026-07-21"])
     ] == ["145665", "145665"]
 
 
@@ -1178,9 +1190,8 @@ def test_safe_dashboard_label_allows_a_dotted_product_name():
 )
 def test_csat_payload_rejects_unredacted_comment_text(unsafe_text: str):
     value = _csat_v11_snapshot().storage_dict()
-    entry = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
-        "2026-07-20"
-    ]["feedback_entries"][0]
+    _csat = value["dashboard"]["views"]["mon_sun"]["csat"]
+    entry = _feedback_entries(_csat, _csat["by_week"]["2026-07-20"])[0]
     entry["text"] = unsafe_text
 
     with pytest.raises(ValueError, match="unsafe"):
@@ -1190,37 +1201,38 @@ def test_csat_payload_rejects_unredacted_comment_text(unsafe_text: str):
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
-        (lambda week: week.__setitem__("ticket_count", 999), "ticket count"),
+        (lambda week, csat: week.__setitem__("ticket_count", 999), "ticket count"),
         (
-            lambda week: week["by_outcome"]["ai_end_to_end"].__setitem__(
+            lambda week, csat: week["by_outcome"]["ai_end_to_end"].__setitem__(
                 "positive", 999
             ),
             "outcome",
         ),
         (
-            lambda week: week["feedback_entries"][0].__setitem__(
+            lambda week, csat: _feedback_entries(csat, week)[0].__setitem__(
                 "response_number", 0
             ),
             "response number",
         ),
         (
-            lambda week: week["by_dimension"]["skill"][0].__setitem__(
+            lambda week, csat: week["by_dimension"]["skill"][0].__setitem__(
                 "ticket_count", 999
             ),
             "dimension",
         ),
         (
-            lambda week: week["feedback_entries"][0].__setitem__("agent_id", 42),
+            lambda week, csat: _feedback_entries(csat, week)[0].__setitem__(
+                "agent_id", 42
+            ),
             "unsupported or missing fields",
         ),
     ],
 )
 def test_csat_v11_rejects_nonreconciling_or_extra_fields(mutate, message):
     value = _csat_v11_snapshot().storage_dict()
-    week = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
-        "2026-07-20"
-    ]
-    mutate(week)
+    csat = value["dashboard"]["views"]["mon_sun"]["csat"]
+    week = csat["by_week"]["2026-07-20"]
+    mutate(week, csat)
 
     with pytest.raises(ValueError, match=message):
         DashboardSnapshot.from_storage_dict(value)
@@ -1232,9 +1244,8 @@ def test_csat_v11_rejects_nonreconciling_or_extra_fields(mutate, message):
 )
 def test_csat_feedback_rejects_private_cache_fields(private_field: str):
     value = _csat_v11_snapshot().storage_dict()
-    entry = value["dashboard"]["views"]["mon_sun"]["csat"]["by_week"][
-        "2026-07-20"
-    ]["feedback_entries"][0]
+    _csat = value["dashboard"]["views"]["mon_sun"]["csat"]
+    entry = _feedback_entries(_csat, _csat["by_week"]["2026-07-20"])[0]
     entry[private_field] = "private"
 
     with pytest.raises(ValueError, match="unsupported or missing fields"):
