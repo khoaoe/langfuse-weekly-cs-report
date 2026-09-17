@@ -1,4 +1,10 @@
 from __future__ import annotations
+from .cache_store import (
+    atomic_private_json,
+    read_private_json,
+    validate_monday,
+    validate_utc_timestamp,
+)
 
 """Strict private cache for the Freshdesk-to-Langfuse entry comparison."""
 
@@ -43,10 +49,6 @@ class EntryCoverageCacheError(RuntimeError):
     """A sanitized private-cache contract error."""
 
 
-class _DuplicateJSONKey(ValueError):
-    pass
-
-
 @dataclass(frozen=True)
 class EntryCoverageRecord:
     ticket_id: str
@@ -67,8 +69,8 @@ class EntryCoverageRecord:
             )
         ):
             raise EntryCoverageCacheError("Entry coverage cache record is invalid")
-        _validate_utc_timestamp(self.opened_at, "opened timestamp")
-        _validate_monday(self.cohort_week, "record cohort week")
+        validate_utc_timestamp(self.opened_at, "opened timestamp", EntryCoverageCacheError)
+        validate_monday(self.cohort_week, "record cohort week", EntryCoverageCacheError)
 
 
 @dataclass(frozen=True)
@@ -81,8 +83,8 @@ class EntryCoverageCache:
             raise EntryCoverageCacheError("Entry coverage fetched weeks are invalid")
         normalized_weeks: dict[str, str] = {}
         for week, fetched_at in self.fetched_weeks.items():
-            _validate_monday(week, "fetched week")
-            _validate_utc_timestamp(fetched_at, "fetched timestamp")
+            validate_monday(week, "fetched week", EntryCoverageCacheError)
+            validate_utc_timestamp(fetched_at, "fetched timestamp", EntryCoverageCacheError)
             normalized_weeks[week] = fetched_at
 
         try:
@@ -108,42 +110,19 @@ class EntryCoverageCache:
 
 
 def load_entry_coverage_cache(path: Path) -> EntryCoverageCache | None:
-    source = Path(path)
-    try:
-        source_status = source.lstat()
-    except FileNotFoundError:
+    value = read_private_json(Path(path), EntryCoverageCacheError, "Freshdesk entry coverage cache is invalid")
+    if value is None:
         return None
-    except OSError:
-        raise EntryCoverageCacheError("Entry coverage cache is invalid") from None
-    if not _is_private_owner_file(source_status):
-        raise EntryCoverageCacheError("Entry coverage cache is invalid")
-
-    descriptor: int | None = None
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(source, flags)
-        opened_status = os.fstat(descriptor)
-        if (
-            not _is_private_owner_file(opened_status)
-            or source_status.st_dev != opened_status.st_dev
-            or source_status.st_ino != opened_status.st_ino
-        ):
-            raise EntryCoverageCacheError("Entry coverage cache is invalid")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
-            descriptor = None
-            value = json.load(stream, object_pairs_hook=_strict_json_object)
-    except EntryCoverageCacheError:
-        raise
-    except (OSError, UnicodeError, json.JSONDecodeError, _DuplicateJSONKey):
-        raise EntryCoverageCacheError("Entry coverage cache is invalid") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
     return _cache_from_value(value)
 
 
 def write_entry_coverage_cache(path: Path, cache: EntryCoverageCache) -> None:
-    _atomic_private_json(Path(path), _cache_to_value(cache))
+    atomic_private_json(
+        Path(path),
+        _cache_to_value(cache),
+        EntryCoverageCacheError,
+        "Freshdesk entry coverage cache could not be written",
+    )
 
 
 def _cache_from_value(value: object) -> EntryCoverageCache:
@@ -192,72 +171,3 @@ def _cache_to_value(cache: EntryCoverageCache) -> dict[str, object]:
         ],
     }
 
-
-def _validate_monday(value: object, label: str) -> None:
-    if not isinstance(value, str) or _ISO_DATE.fullmatch(value) is None:
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid")
-    try:
-        parsed = date.fromisoformat(value)
-    except ValueError:
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid") from None
-    if parsed.isoformat() != value or parsed.weekday() != 0:
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid")
-    if value < ENTRY_COVERAGE_START_WEEK:
-        raise EntryCoverageCacheError(f"Entry coverage {label} is outside the supported range")
-
-
-def _validate_utc_timestamp(value: object, label: str) -> None:
-    if not isinstance(value, str):
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid")
-    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
-    try:
-        parsed = datetime.fromisoformat(normalized)
-    except ValueError:
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid") from None
-    if parsed.tzinfo is None or parsed.utcoffset() != timedelta(0):
-        raise EntryCoverageCacheError(f"Entry coverage {label} is invalid")
-
-
-def _is_private_owner_file(details: os.stat_result) -> bool:
-    return (
-        stat.S_ISREG(details.st_mode)
-        and details.st_uid == os.geteuid()
-        and stat.S_IMODE(details.st_mode) == 0o600
-    )
-
-
-def _strict_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise _DuplicateJSONKey(key)
-        result[key] = value
-    return result
-
-
-def _atomic_private_json(path: Path, payload: object) -> None:
-    directory = path.parent
-    descriptor: int | None = None
-    temporary: Path | None = None
-    try:
-        if not directory.exists():
-            directory.mkdir(mode=0o700, parents=True)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=directory
-        )
-        temporary = Path(temporary_name)
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            descriptor = None
-            json.dump(payload, stream, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        temporary = None
-    except OSError:
-        raise EntryCoverageCacheError("Entry coverage cache could not be written") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if temporary is not None:
-            temporary.unlink(missing_ok=True)

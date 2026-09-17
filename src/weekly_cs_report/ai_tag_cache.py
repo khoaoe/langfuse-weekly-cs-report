@@ -14,14 +14,11 @@ from pathlib import Path
 import re
 from types import MappingProxyType
 
-from .entry_coverage_cache import (
-    EntryCoverageCacheError,
-    _atomic_private_json,
-    _DuplicateJSONKey,
-    _is_private_owner_file,
-    _strict_json_object,
-    _validate_monday,
-    _validate_utc_timestamp,
+from .cache_store import (
+    atomic_private_json,
+    read_private_json,
+    validate_monday,
+    validate_utc_timestamp,
 )
 
 
@@ -44,11 +41,8 @@ class AiTagRecord:
     def __post_init__(self) -> None:
         if not isinstance(self.ticket_id, str) or _TICKET_ID.fullmatch(self.ticket_id) is None:
             raise AiTagCacheError("AI tag cache record is invalid")
-        try:
-            _validate_utc_timestamp(self.opened_at, "opened timestamp")
-            _validate_monday(self.cohort_week, "record cohort week")
-        except EntryCoverageCacheError as error:
-            raise AiTagCacheError(str(error)) from error
+        validate_utc_timestamp(self.opened_at, "opened timestamp", AiTagCacheError)
+        validate_monday(self.cohort_week, "record cohort week", AiTagCacheError)
 
 
 @dataclass(frozen=True)
@@ -60,13 +54,10 @@ class AiTagCache:
         if not isinstance(self.fetched_weeks, Mapping):
             raise AiTagCacheError("AI tag fetched weeks are invalid")
         normalized_weeks: dict[str, str] = {}
-        try:
-            for week, fetched_at in self.fetched_weeks.items():
-                _validate_monday(week, "fetched week")
-                _validate_utc_timestamp(fetched_at, "fetched timestamp")
-                normalized_weeks[week] = fetched_at
-        except EntryCoverageCacheError as error:
-            raise AiTagCacheError(str(error)) from error
+        for week, fetched_at in self.fetched_weeks.items():
+            validate_monday(week, "fetched week", AiTagCacheError)
+            validate_utc_timestamp(fetched_at, "fetched timestamp", AiTagCacheError)
+            normalized_weeks[week] = fetched_at
 
         try:
             source_records = tuple(self.records)
@@ -91,45 +82,19 @@ class AiTagCache:
 
 
 def load_ai_tag_cache(path: Path) -> AiTagCache | None:
-    source = Path(path)
-    try:
-        source_status = source.lstat()
-    except FileNotFoundError:
+    value = read_private_json(Path(path), AiTagCacheError, "AI tag cache is invalid")
+    if value is None:
         return None
-    except OSError:
-        raise AiTagCacheError("AI tag cache is invalid") from None
-    if not _is_private_owner_file(source_status):
-        raise AiTagCacheError("AI tag cache is invalid")
-
-    descriptor: int | None = None
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        descriptor = os.open(source, flags)
-        opened_status = os.fstat(descriptor)
-        if (
-            not _is_private_owner_file(opened_status)
-            or source_status.st_dev != opened_status.st_dev
-            or source_status.st_ino != opened_status.st_ino
-        ):
-            raise AiTagCacheError("AI tag cache is invalid")
-        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
-            descriptor = None
-            value = json.load(stream, object_pairs_hook=_strict_json_object)
-    except AiTagCacheError:
-        raise
-    except (OSError, UnicodeError, json.JSONDecodeError, _DuplicateJSONKey):
-        raise AiTagCacheError("AI tag cache is invalid") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
     return _cache_from_value(value)
 
 
 def write_ai_tag_cache(path: Path, cache: AiTagCache) -> None:
-    try:
-        _atomic_private_json(Path(path), _cache_to_value(cache))
-    except EntryCoverageCacheError as error:
-        raise AiTagCacheError(str(error)) from error
+    atomic_private_json(
+        Path(path),
+        _cache_to_value(cache),
+        AiTagCacheError,
+        "AI tag cache could not be written",
+    )
 
 
 def _cache_from_value(value: object) -> AiTagCache:
