@@ -302,14 +302,15 @@ class LangfuseClient:
         *,
         deadline: float | None = None,
         cancel_event: threading.Event | None = None,
+        max_workers: int = 8,
     ) -> Iterator[dict]:
         """Read one observation name in bounded pages (the API caps at 100)."""
         if not isinstance(name, str) or not name:
             raise ValueError("name must be a non-empty string")
         from_utc = _serialize_utc(from_start_time, "from_start_time")
         to_utc = _serialize_utc(to_start_time, "to_start_time")
-        page_number = 1
-        while True:
+
+        def fetch_page(page_number: int) -> tuple[list[dict], int]:
             _raise_if_cancelled(
                 cancel_event,
                 "GET",
@@ -329,18 +330,35 @@ class LangfuseClient:
                 deadline=deadline,
                 cancel_event=cancel_event,
             )
-            data, total_pages = self._parse_page(
-                response, "GET", "/api/public/observations"
-            )
-            yield from data
-            _raise_if_cancelled(
-                cancel_event,
-                "GET",
-                "/api/public/observations",
-            )
-            if page_number >= total_pages:
-                return
-            page_number += 1
+            return self._parse_page(response, "GET", "/api/public/observations")
+
+        first_page_data, total_pages = fetch_page(1)
+        yield from first_page_data
+        _raise_if_cancelled(cancel_event, "GET", "/api/public/observations")
+        if total_pages <= 1:
+            return
+
+        # Same shape as iter_traces: pages 2..N are independent GETs keyed by
+        # page number. Sequentially this lane was one round trip per 100 rows,
+        # so a ~300k-observation window cost thousands of serial requests and
+        # the refresh ran ~20 minutes -- longer than the 300s TTL, which is
+        # what made the dashboard lag 30-60 minutes behind real time.
+        remaining_pages = range(2, total_pages + 1)
+        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(remaining_pages)))
+        try:
+            futures = {pool.submit(fetch_page, page): page for page in remaining_pages}
+            results: dict[int, list[dict]] = {}
+            for future in as_completed(futures):
+                data, _ = future.result()
+                results[futures[future]] = data
+        except BaseException:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            pool.shutdown(wait=True)
+        for page_number in remaining_pages:
+            _raise_if_cancelled(cancel_event, "GET", "/api/public/observations")
+            yield from results[page_number]
 
     def fetch_metrics(
         self,

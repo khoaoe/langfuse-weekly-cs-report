@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from datetime import datetime, timezone
+import time
 import socket
 import threading
 from zoneinfo import ZoneInfo
@@ -525,3 +526,33 @@ def test_list_traces_by_session_rejects_non_numeric_session_id_before_request(se
         client.list_traces_by_session(session_id)
 
     assert transport.requests == []
+
+
+def test_iter_observations_by_name_returns_all_pages_in_page_order():
+    """Pages 2..N are fetched concurrently; rows must stay complete and ordered.
+
+    Concurrency here fails silently -- a dropped or reordered page still
+    returns plausible-looking rows -- so assert the full sequence, and make
+    page 2 the slowest so completion order differs from page order.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page_number = int(request.url.params["page"])
+        if page_number == 2:
+            time.sleep(0.05)
+        return httpx.Response(
+            200,
+            json=page([{"traceId": f"trace-{page_number}"}], 5),
+            request=request,
+        )
+
+    client = client_for(handler)
+    rows = list(
+        client.iter_observations_by_name(
+            "route",
+            datetime(2026, 7, 1, tzinfo=timezone.utc),
+            datetime(2026, 7, 2, tzinfo=timezone.utc),
+        )
+    )
+
+    assert rows == [{"traceId": f"trace-{n}"} for n in range(1, 6)]
