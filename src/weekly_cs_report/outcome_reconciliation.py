@@ -8,7 +8,7 @@ only the final tri-state result for one ticket.
 """
 
 from collections.abc import Callable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -531,13 +531,18 @@ def _fetch_reconciliation_week(
                 raise _FetchDurationReached
             records.append(classify(ticket_id))
     else:
+        # Freshdesk per-ticket latency varies widely, so a lock-step batch
+        # would run at the slowest ticket's pace instead of the pool's.
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for start in range(0, len(ticket_ids), max_workers):
-                if should_stop():
-                    raise _FetchDurationReached
-                batch = ticket_ids[start : start + max_workers]
-                futures = tuple(executor.submit(classify, item) for item in batch)
-                records.extend(future.result() for future in futures)
+            futures = [executor.submit(classify, item) for item in ticket_ids]
+            try:
+                for future in as_completed(futures):
+                    if should_stop():
+                        raise _FetchDurationReached
+                    records.append(future.result())
+            finally:
+                for future in futures:
+                    future.cancel()
     return tuple(records)
 
 

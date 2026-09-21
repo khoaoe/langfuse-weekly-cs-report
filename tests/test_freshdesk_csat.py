@@ -645,3 +645,52 @@ def test_survey_comment_redaction_removes_bare_url(comment: str):
 )
 def test_survey_comment_redaction_preserves_non_pii_phrases(comment: str):
     assert redact_survey_comment(comment) == comment
+
+
+def test_worker_pool_stays_saturated_across_varied_ticket_latency():
+    """Workers must pick up the next ticket instead of waiting on a batch.
+
+    Freshdesk per-ticket latency has a long tail (conversation-heavy tickets
+    cost multiples of the median). Lock-step batching pays that tail once per
+    batch, so it lands near 2x the saturated-pool time on this distribution;
+    measured 7.38s vs 3.71s at max_workers=4 before this was fixed.
+    """
+    import random
+    import time
+
+    random.seed(7)
+    ticket_count = 60
+    latency = {
+        str(100 + index): random.lognormvariate(-3.0, 0.9)
+        for index in range(ticket_count)
+    }
+    serial_seconds = sum(latency.values())
+
+    class FakeClient:
+        def get_satisfaction_ratings(self, ticket_id: str):
+            time.sleep(latency[ticket_id])
+            return ()
+
+    started = time.monotonic()
+    result = fetch_csat_population(
+        FakeClient(),
+        {"2026-07-27": tuple(latency)},
+        load_agent_config_from_values(),
+        existing=CSATCache(
+            fetched_weeks={},
+            fetch_stats=CSATCacheStats(0, 0, 0, 0),
+            responses=(),
+        ),
+        as_of=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        max_workers=4,
+    )
+    elapsed = time.monotonic() - started
+
+    assert result.complete is True
+    # A saturated 4-worker pool approaches serial/4; lock-step stalls near
+    # serial/2. Assert the midpoint so the test is immune to timing jitter
+    # but still fails on a regression back to batching.
+    assert elapsed < serial_seconds / 2.8, (
+        f"pool stalled: {elapsed:.2f}s for {serial_seconds:.2f}s of work "
+        f"across 4 workers"
+    )

@@ -8,7 +8,7 @@ or performs a Freshdesk request.
 """
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 import hashlib
@@ -1436,21 +1436,21 @@ def _fetch_week(
                 raise _FetchDurationReached
             results.append(collect_ticket_ratings(client, (ticket_id,), config))
     else:
+        # Freshdesk per-ticket latency varies widely, so a lock-step batch
+        # would run at the slowest ticket's pace instead of the pool's.
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for start in range(0, len(ticket_ids), max_workers):
-                if should_stop():
-                    raise _FetchDurationReached
-                batch = ticket_ids[start : start + max_workers]
-                futures = tuple(
-                    executor.submit(
-                        collect_ticket_ratings,
-                        client,
-                        (ticket_id,),
-                        config,
-                    )
-                    for ticket_id in batch
-                )
-                results.extend(future.result() for future in futures)
+            futures = [
+                executor.submit(collect_ticket_ratings, client, (ticket_id,), config)
+                for ticket_id in ticket_ids
+            ]
+            try:
+                for future in as_completed(futures):
+                    if should_stop():
+                        raise _FetchDurationReached
+                    results.append(future.result())
+            finally:
+                for future in futures:
+                    future.cancel()
     responses = tuple(
         response for result in results for response in result.responses
     )
