@@ -845,7 +845,7 @@ export function CsatSection({
 
         {csat === null ? null : (
           <p id="csat-source" className={csatStyles.source}>
-            CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật{" "}
+            CSAT: Freshdesk · cập nhật{" "}
             <time dateTime={csat.fetched_at}>
               {formatUpdatedAt(csat.fetched_at)}
             </time>
@@ -923,7 +923,7 @@ export function CsatSection({
 
         {aiReview === null ? null : (
           <p id="ai-review-source" className={csatStyles.source}>
-            Hậu kiểm: Freshdesk · chỉ Admin CS ZaloPay · cập nhật{" "}
+            Hậu kiểm: Freshdesk · cập nhật{" "}
             <time dateTime={aiReview.fetched_at}>
               {formatUpdatedAt(aiReview.fetched_at)}
             </time>

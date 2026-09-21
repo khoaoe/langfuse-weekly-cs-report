@@ -83,7 +83,7 @@ def test_approved_agent_config_is_private_strict_and_round_trips(tmp_path: Path)
 
     write_approved_agent_config(
         destination,
-        bot_agent_id=73_001,
+        bot_agent_ids=[73_001, 73_004],
         approved_at=date(2026, 8, 2),
         survey_scales={
             "43000076179": {
@@ -95,7 +95,7 @@ def test_approved_agent_config_is_private_strict_and_round_trips(tmp_path: Path)
     )
 
     config = load_agent_config(destination)
-    assert config.bot_agent_ids == frozenset({73_001})
+    assert config.bot_agent_ids == frozenset({73_001, 73_004})
     assert config.bucket_for(43000076179, 103) == "positive"
     assert config.bucket_for(43000076179, 100) == "neutral"
     assert config.bucket_for(43000076179, -103) == "negative"
@@ -117,7 +117,7 @@ def test_approved_agent_config_preserves_existing_shared_directory_mode(
 
     write_approved_agent_config(
         parent / "freshdesk_agents.v1.json",
-        bot_agent_id=73_001,
+        bot_agent_ids=[73_001],
         approved_at=date(2026, 8, 2),
         survey_scales={
             "43000076179": {

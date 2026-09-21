@@ -1799,13 +1799,19 @@ def _run_discover_agents_command(args: argparse.Namespace) -> dict[str, object]:
     population = _csat_population(Path(args.runtime_dir), args.weeks)
     settings = _freshdesk_settings()
     with FreshdeskClient(settings) as client:
-        bot_agent_id = resolve_exact_agent_id(
-            client.get_ticket_fields(),
-            "Admin CS ZaloPay",
-        )
+        ticket_fields = client.get_ticket_fields()
+        bot_agent_ids: set[int] = set()
+        for name in ("Admin CS ZaloPay", "AI Zalopay"):
+            try:
+                bot_agent_ids.add(resolve_exact_agent_id(ticket_fields, name))
+            except FreshdeskCSATError:
+                continue
+        if not bot_agent_ids:
+            raise FreshdeskCSATError("Freshdesk agent name did not resolve uniquely")
+        bot_agent_ids = frozenset(bot_agent_ids)
         survey_scales = FRESHDESK_SEED_SURVEY_SCALES
         candidate = FreshdeskAgentConfig(
-            bot_agent_ids=frozenset({bot_agent_id}),
+            bot_agent_ids=bot_agent_ids,
             survey_scales=survey_scales,
         )
         result = fetch_csat_population(
@@ -1821,7 +1827,7 @@ def _run_discover_agents_command(args: argparse.Namespace) -> dict[str, object]:
         raise FreshdeskCSATError("Freshdesk agent discovery reached its duration limit")
     write_approved_agent_config(
         FRESHDESK_AGENT_CONFIG_PATH,
-        bot_agent_id=bot_agent_id,
+        bot_agent_ids=bot_agent_ids,
         approved_at=date.today(),
         survey_scales=survey_scales,
     )

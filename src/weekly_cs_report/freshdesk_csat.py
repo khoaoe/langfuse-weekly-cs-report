@@ -7,7 +7,7 @@ serving path never imports it and therefore never reads Freshdesk credentials
 or performs a Freshdesk request.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -1679,7 +1679,7 @@ def load_agent_config(path: Path) -> FreshdeskAgentConfig:
     raw_ids = value["bot_agent_ids"]
     if (
         not isinstance(raw_ids, list)
-        or len(raw_ids) != 1
+        or not raw_ids
         or any(
             not isinstance(item, int) or isinstance(item, bool) or item <= 0
             for item in raw_ids
@@ -1696,14 +1696,16 @@ def load_agent_config(path: Path) -> FreshdeskAgentConfig:
 def write_approved_agent_config(
     path: Path,
     *,
-    bot_agent_id: int,
+    bot_agent_ids: Iterable[int],
     approved_at: date,
     survey_scales: Mapping[str, Mapping[str, Sequence[int]]],
 ) -> None:
-    if (
+    ids = sorted(set(bot_agent_ids))
+    if not ids or any(
         not isinstance(bot_agent_id, int)
         or isinstance(bot_agent_id, bool)
         or bot_agent_id <= 0
+        for bot_agent_id in ids
     ):
         raise FreshdeskCSATError("Freshdesk agent ID is invalid")
     normalized_scales = _parse_survey_scales(survey_scales)
@@ -1711,7 +1713,7 @@ def write_approved_agent_config(
         "schema_version": 1,
         "approved_by": "PO",
         "approved_at": approved_at.isoformat(),
-        "bot_agent_ids": [bot_agent_id],
+        "bot_agent_ids": ids,
         "survey_scales": {
             survey_id: {
                 bucket: list(scale[bucket]) for bucket in _BUCKETS
@@ -1719,7 +1721,7 @@ def write_approved_agent_config(
             for survey_id, scale in normalized_scales.items()
         },
         "notes": (
-            "Chi tinh response gan truc tiep cho Admin CS ZaloPay; "
+            "Chi tinh response gan truc tiep cho Admin CS ZaloPay / AI Zalopay; "
             "ID/survey moi phai discovery va duyet lai"
         ),
     }

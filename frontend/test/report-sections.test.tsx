@@ -1029,7 +1029,7 @@ describe("Below-fold analysis", () => {
       }
       const source = document.getElementById("csat-source");
       expect(source).toHaveTextContent(
-        /^CSAT: Freshdesk · chỉ Admin CS ZaloPay · cập nhật .+\.$/,
+        /^CSAT: Freshdesk · cập nhật .+\.$/,
       );
       expect(source?.tagName).toBe("P");
       expect(document.getElementById("csat-attribution")).toBeNull();
