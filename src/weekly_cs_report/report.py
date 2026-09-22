@@ -9,9 +9,10 @@ import threading
 from typing import Callable, Mapping, Sequence
 
 from .categories import Taxonomy, load_taxonomy
-from .cohort import LOOKBACK_DAYS, VIETNAM_TIMEZONE, build_cohort_window
+from .cohort import VIETNAM_TIMEZONE, build_cohort_window
 from .enrichment import ENRICHMENT_NAMES, TraceEnrichment, build_trace_enrichment
 from .langfuse_client import (
+    LangfuseAPIError,
     LangfuseClient,
     LangfuseDeadlineExceeded,
     LangfuseRequestCancelled,
@@ -97,18 +98,73 @@ def _fetch_start(
 ) -> datetime:
     """Earliest timestamp this run must ask Langfuse for.
 
-    Starts at the first week not served from cache, minus the same lookback
-    `build_cohort_window` applies, so a session whose canonical first trace
-    predates that week is still visible and cannot be reassigned to a later
-    cohort week from a partial view of its turns.
+    Starts exactly where the cache stops. No lookback margin is needed here:
+    a session whose first trace predates this boundary is recognised by its id
+    already being cached, and `_refetch_carried_sessions` then pulls its whole
+    trace history by session id. That is both cheaper than widening the window
+    by a fixed margin and strictly more correct -- a margin only catches
+    sessions that carried over by less than its own length.
     """
     if not reusable:
         return window.query_from_utc
     first_fetched_week = max(reusable) + timedelta(weeks=1)
     start_local = datetime.combine(
         first_fetched_week, time_of_day.min, tzinfo=VIETNAM_TIMEZONE
-    ) - timedelta(days=LOOKBACK_DAYS)
+    )
     return max(start_local.astimezone(timezone.utc), window.query_from_utc)
+
+
+def _refetch_carried_sessions(
+    client: LangfuseClient,
+    raw_traces: Sequence[Mapping[str, object]],
+    reusable: Mapping[date, Sequence[SessionMetrics]],
+) -> tuple[list[Mapping[str, object]], set[str], set[str]]:
+    """Pull the full trace history of sessions that carried into this window.
+
+    A ticket opened in a cached week can take another turn later. The narrowed
+    fetch sees only that later turn, which on its own would analyze as a brand
+    new ticket in the wrong cohort week with a turn count of one. Its session
+    id is already in the cache, so it is recognisable: fetch the session whole,
+    let it be analyzed from its real first trace, and drop the cached copy it
+    supersedes.
+
+    Returns the extra raw traces, the session ids whose cached copies must not
+    be merged back in, and the session ids whose partial traces must be dropped
+    because their refetch failed -- analyzing those would book the ticket into
+    the wrong week, and that wrong copy would then win over the cached one.
+    """
+    cached_ids = {
+        session.session_id
+        for sessions in reusable.values()
+        for session in sessions
+    }
+    if not cached_ids:
+        return [], set(), set()
+
+    carried = {
+        session_id
+        for raw in raw_traces
+        if isinstance(session_id := raw.get("sessionId"), str)
+        and session_id in cached_ids
+    }
+    extra: list[Mapping[str, object]] = []
+    superseded: set[str] = set()
+    unresolved: set[str] = set()
+    for session_id in sorted(carried):
+        try:
+            traces = client.list_traces_by_session(session_id)
+        except (LangfuseAPIError, ValueError):
+            # Fall back to the cached copy: it is a complete analysis of
+            # everything up to its own fetch, which beats a partial view built
+            # from the later turns alone.
+            unresolved.add(session_id)
+            continue
+        if traces:
+            extra.extend(traces)
+            superseded.add(session_id)
+        else:
+            unresolved.add(session_id)
+    return extra, superseded, unresolved
 
 
 def _is_ticket_trace(raw: Mapping[str, object]) -> bool:
@@ -159,7 +215,15 @@ def compute_report(
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     enrichment_job = _start_enrichment(
         client,
-        from_start_time=fetch_from_utc,
+        # Deliberately NOT narrowed to `fetch_from_utc`. Enrichment lanes are
+        # keyed by observation start time, not by the ticket's cohort week, so
+        # a ticket opened just before the narrowed boundary would lose the
+        # observations that carry its skill and TPE signals -- measured in
+        # production as coverage_skill 0.9001 -> 0.8979 and coverage_tpe
+        # 0.7701 -> 0.7667 when this used the narrowed bound. Observation lanes
+        # are also far cheaper than trace pagination, so widening them back
+        # costs little of what the narrowing saves.
+        from_start_time=window.query_from_utc,
         to_start_time=window.query_to_utc,
         deadline=enrichment_deadline,
         cancel_event=cancel_event,
@@ -178,6 +242,22 @@ def compute_report(
             )
             if _is_ticket_trace(raw)
         ]
+        _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
+        carried_traces, superseded, unresolved = _refetch_carried_sessions(
+            client, raw_traces, reusable
+        )
+        if unresolved:
+            # Their later turns alone would analyze into the wrong cohort week,
+            # and that copy would then take precedence over the correct cached
+            # one. Drop them and let the cache stand.
+            raw_traces = [
+                raw
+                for raw in raw_traces
+                if raw.get("sessionId") not in unresolved
+            ]
+        # Ordering is irrelevant: `normalize_raw_traces` deduplicates by trace
+        # id and `select_candidate_sessions` sorts each session's turns itself.
+        raw_traces.extend(carried_traces)
         _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
         records, issues, deduplicated_count = normalize_raw_traces(raw_traces)
         selection = select_candidate_sessions(records, issues, window)
@@ -206,6 +286,7 @@ def compute_report(
                 session
                 for sessions in reusable.values()
                 for session in sessions
+                if session.session_id not in superseded
             ),
         )
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)

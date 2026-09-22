@@ -35,6 +35,8 @@ class WindowedClient:
     def __init__(self, traces: list[dict]) -> None:
         self._traces = traces
         self.bounds: list[tuple[datetime, datetime]] = []
+        self.enrichment_bounds: list[tuple[datetime, datetime]] = []
+        self.session_lookups: list[str] = []
 
     def iter_traces(
         self,
@@ -51,6 +53,12 @@ class WindowedClient:
             if from_timestamp <= stamp <= to_timestamp:
                 yield raw
 
+    def list_traces_by_session(self, session_id: str) -> list[dict]:
+        self.session_lookups.append(session_id)
+        return [
+            raw for raw in self._traces if raw.get("sessionId") == session_id
+        ]
+
     def list_observations(self, trace_id: str) -> list[dict]:
         return []
 
@@ -63,6 +71,7 @@ class WindowedClient:
         deadline: float | None = None,
         cancel_event: threading.Event | None = None,
     ):
+        self.enrichment_bounds.append((_from_start_time, _to_start_time))
         return iter(())
 
 
@@ -184,6 +193,97 @@ def test_a_session_analyzed_now_wins_over_its_cached_copy():
     )
     assert survivor.turn_count == fresh.turn_count
     assert survivor.outcome == fresh.outcome
+
+
+def _carried_traces() -> list[dict]:
+    """A ticket opened in a week the cache owns that takes a later turn.
+
+    Its first turn is far enough back that a narrowed fetch cannot see it --
+    the whole point is that only the later turn falls inside the window.
+    """
+    return [
+        *_traces(),
+        trace("carry-0", "ticket-carry", 0, "2026-06-24T03:00:00Z", "First turn"),
+        trace("carry-1", "ticket-carry", 1, "2026-07-28T03:00:00Z", "Later turn"),
+    ]
+
+
+def test_a_session_carried_into_the_window_keeps_its_original_cohort_week():
+    """The later turn alone would file the ticket under the wrong week.
+
+    Without refetching the session whole, `select_candidate_sessions` treats
+    the later turn as the ticket's first trace and books it into the current
+    week with a turn count of one.
+    """
+    full = _run(WindowedClient(_carried_traces()))
+    cached = _by_week(full)
+    expected = next(
+        s for s in full.result.sessions if s.session_id == "ticket-carry"
+    )
+
+    client = WindowedClient(_carried_traces())
+    narrowed = _run(client, cached=cached)
+    actual = next(
+        s for s in narrowed.result.sessions if s.session_id == "ticket-carry"
+    )
+
+    assert "ticket-carry" in client.session_lookups
+    assert actual.cohort_week == expected.cohort_week
+    assert actual.turn_count == expected.turn_count
+    assert actual.outcome == expected.outcome
+
+
+def test_a_carried_session_is_not_counted_twice():
+    """Its cached copy must give way to the freshly analyzed one."""
+    full = _run(WindowedClient(_carried_traces()))
+    narrowed = _run(WindowedClient(_carried_traces()), cached=_by_week(full))
+
+    identifiers = [s.session_id for s in narrowed.result.sessions]
+    assert identifiers.count("ticket-carry") == 1
+    assert len(identifiers) == len(set(identifiers))
+
+
+def test_a_carried_session_keeps_its_cached_copy_when_the_refetch_fails():
+    """A failed lookup must not downgrade the ticket to a partial view."""
+    from weekly_cs_report.langfuse_client import LangfuseAPIError
+
+    full = _run(WindowedClient(_carried_traces()))
+    cached = _by_week(full)
+    expected = next(
+        s for s in full.result.sessions if s.session_id == "ticket-carry"
+    )
+
+    class FailingLookup(WindowedClient):
+        def list_traces_by_session(self, session_id: str) -> list[dict]:
+            raise LangfuseAPIError("GET", "/api/public/traces", 500)
+
+    narrowed = _run(FailingLookup(_carried_traces()), cached=cached)
+    actual = next(
+        s for s in narrowed.result.sessions if s.session_id == "ticket-carry"
+    )
+
+    assert actual.cohort_week == expected.cohort_week
+    assert actual.turn_count == expected.turn_count
+
+
+def test_enrichment_still_covers_the_whole_window_when_traces_are_narrowed():
+    """Narrowing enrichment too drops skill and TPE signals from real tickets.
+
+    Enrichment lanes are keyed by observation start time, not by the ticket's
+    cohort week, so a ticket opened just before the narrowed trace boundary
+    still has observations behind it. Narrowing this bound measurably moved
+    coverage_skill and coverage_tpe in production.
+    """
+    full_client = WindowedClient(_traces())
+    full = _run(full_client)
+    full_enrichment_start = full_client.enrichment_bounds[0][0]
+
+    cached_client = WindowedClient(_traces())
+    _run(cached_client, cached=_by_week(full))
+
+    # Traces narrow; observations must not.
+    assert cached_client.bounds[0][0] > full_client.bounds[0][0]
+    assert cached_client.enrichment_bounds[0][0] == full_enrichment_start
 
 
 def test_cache_round_trip_preserves_every_session_field(tmp_path):
