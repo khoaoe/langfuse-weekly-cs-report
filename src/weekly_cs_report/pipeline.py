@@ -565,6 +565,63 @@ def _is_in_same_period_slice(
     return start <= local_date < end
 
 
+def merge_cached_sessions(
+    result: AnalysisResult,
+    cached: Sequence[SessionMetrics],
+) -> AnalysisResult:
+    """Fold sessions analyzed by an earlier run back into a narrowed result.
+
+    `analyze_sessions` only ever sees the weeks the current refresh fetched.
+    Closed weeks come from the session cache instead, and are folded in here so
+    every aggregate below is computed over the full reporting window again.
+    Aggregates are recomputed rather than merged: `_summarize_sessions` and
+    `_evaluate_gate_inputs` are pure functions of the session tuple, so running
+    them over the union is exactly what an unnarrowed run would have produced.
+
+    A session the current fetch analyzed wins over its cached copy: it was
+    built from traces that include everything the cached one saw, plus whatever
+    arrived since.
+
+    ponytail: `validate_invariants` is deliberately not re-run on the merged
+    result. It asserts `sessions == selection.eligible`, and `eligible` holds
+    raw `TraceRecord`s that the cache cannot carry (raw traces never reach
+    disk). Ticket-grain uniqueness -- the invariant that actually guards
+    against double counting -- is checked directly instead. Restoring the full
+    check needs `eligible` to become reconstructible without raw traces.
+    """
+    analyzed_ids = {session.session_id for session in result.sessions}
+    merged = list(result.sessions)
+    merged.extend(
+        session for session in cached if session.session_id not in analyzed_ids
+    )
+    sessions = tuple(sorted(merged, key=lambda item: item.session_id))
+
+    identifiers = [session.session_id for session in sessions]
+    if len(identifiers) != len(set(identifiers)):
+        raise InvariantError("sessions must be unique at ticket grain")
+
+    transfers = dict(result.transfers)
+    for session in sessions:
+        if (
+            session.first_transfer_trace_id is not None
+            and session.session_id not in transfers
+        ):
+            transfers[session.session_id] = _v2_transfer_categories(session)
+
+    window = result.selection.window
+    weekly_mon_sun = _summarize_sessions(sessions, window, "mon_sun")
+    weekly_mon_fri = _summarize_sessions(sessions, window, "mon_fri")
+    return replace(
+        result,
+        sessions=sessions,
+        transfers=transfers,
+        weekly=weekly_mon_sun,
+        weekly_mon_sun=weekly_mon_sun,
+        weekly_mon_fri=weekly_mon_fri,
+        gate_status=_evaluate_gate_inputs(sessions, transfers, result.selection),
+    )
+
+
 def evaluate_gates(result: AnalysisResult) -> GateStatus:
     return _evaluate_gate_inputs(result.sessions, result.transfers, result.selection)
 

@@ -8,7 +8,9 @@ from .models import CohortWindow
 
 VIETNAM_TIMEZONE = ZoneInfo("Asia/Ho_Chi_Minh")
 WeekDefinition = Literal["mon_sun", "mon_fri"]
-_LOOKBACK_DAYS = 14
+# Days fetched before the reporting window so a session's canonical first trace
+# stays visible. A narrowed refresh must apply the same margin.
+LOOKBACK_DAYS = 14
 
 
 def _require_aware(value: datetime, field_name: str) -> None:
@@ -44,7 +46,7 @@ def build_cohort_window(as_of: datetime, weeks: int, include_wtd: bool) -> Cohor
         # Fetching this fixed lookback makes its canonical first trace visible,
         # so it cannot be assigned to the wrong reporting week.
         query_from_utc=(
-            complete_start_local - timedelta(days=_LOOKBACK_DAYS)
+            complete_start_local - timedelta(days=LOOKBACK_DAYS)
         ).astimezone(timezone.utc),
         query_to_utc=query_to_utc,
     )
