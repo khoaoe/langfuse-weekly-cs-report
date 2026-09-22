@@ -219,8 +219,8 @@ def test_first_get_starts_one_blocking_load_and_transitions_to_ready(tmp_path: P
         assert calls == ["load"]
 
 
-def test_repeated_get_inside_default_900_second_ttl_does_not_reload(tmp_path: Path):
-    """Using a TTL shorter than 900 seconds causes unnecessary upstream reads."""
+def test_repeated_get_inside_default_300_second_ttl_does_not_reload(tmp_path: Path):
+    """Using a TTL shorter than 300 seconds causes unnecessary upstream reads."""
     calls: list[datetime] = []
     clock = FakeClock(NOW)
 
@@ -236,7 +236,7 @@ def test_repeated_get_inside_default_900_second_ttl_does_not_reload(tmp_path: Pa
         manager.get()
         assert manager.wait_for_idle(2) is True
 
-        clock.advance(timedelta(seconds=899))
+        clock.advance(timedelta(seconds=299))
         views = [manager.get() for _ in range(10)]
 
         assert all(view.status == "ready" for view in views)
@@ -264,7 +264,7 @@ def test_background_refresh_reloads_a_stale_snapshot_with_no_reader(tmp_path: Pa
         assert manager.wait_for_idle(2) is True
         assert len(calls) == 1
 
-        clock.advance(timedelta(seconds=900))
+        clock.advance(timedelta(seconds=300))
         manager.start_background_refresh(interval_seconds=0.01)
 
         # Nothing calls get() from here on: the reload has to come from the
@@ -293,7 +293,7 @@ def test_background_refresh_respects_the_ttl_instead_of_looping_on_langfuse(
         manager.get()
         assert manager.wait_for_idle(2) is True
 
-        clock.advance(timedelta(seconds=899))
+        clock.advance(timedelta(seconds=299))
         manager.start_background_refresh(interval_seconds=0.01)
         assert threading.Event().wait(0.3) is False
 
@@ -355,14 +355,14 @@ def test_long_refresh_ttl_starts_when_the_refresh_began_not_when_it_committed(
         assert manager.get().status == "loading"
         assert first_started.wait(2)
 
-        # Refresh #1 takes 901s to commit -- longer than the TTL itself.
-        clock.advance(timedelta(seconds=901))
+        # Refresh #1 takes 301s to commit -- longer than the TTL itself.
+        clock.advance(timedelta(seconds=301))
         first_release.set()
         assert manager.wait_for_idle(2) is True
 
         # TTL was already exhausted by the time refresh #1 committed, so the
         # very next get() should kick off refresh #2 immediately instead of
-        # granting it a fresh 900s window from the commit.
+        # granting it a fresh 300s window from the commit.
         boundary = manager.get()
         assert boundary.status == "refreshing"
         assert second_started.wait(2)
@@ -398,7 +398,7 @@ def test_persisted_recent_commit_mtime_overrides_old_generated_at(tmp_path: Path
         assert manager.get().status == "ready"
         assert calls == []
 
-        clock.advance(timedelta(seconds=899))
+        clock.advance(timedelta(seconds=299))
         assert manager.get().status == "ready"
         assert calls == []
 
@@ -419,7 +419,7 @@ def test_persisted_old_commit_mtime_starts_refresh(tmp_path: Path):
     persisted = _snapshot(NOW - timedelta(days=1))
     store.save(persisted)
     snapshot_path = tmp_path / "cache" / "dashboard_snapshot.json"
-    old_commit = NOW - timedelta(seconds=1800)
+    old_commit = NOW - timedelta(seconds=600)
     os.utime(snapshot_path, (old_commit.timestamp(), old_commit.timestamp()))
     started = threading.Event()
     release = threading.Event()
@@ -447,7 +447,7 @@ def test_future_commit_mtime_falls_back_to_generated_at(tmp_path: Path):
     """Trusting a future file mtime grants an unbounded freshness window."""
     clock = FakeClock(NOW)
     store = ProtectedSnapshotStore(tmp_path / "cache")
-    persisted = _snapshot(NOW - timedelta(seconds=300))
+    persisted = _snapshot(NOW - timedelta(seconds=100))
     store.save(persisted)
     snapshot_path = tmp_path / "cache" / "dashboard_snapshot.json"
     future_commit = NOW + timedelta(hours=1)
@@ -468,7 +468,7 @@ def test_future_commit_mtime_falls_back_to_generated_at(tmp_path: Path):
         assert manager.get().status == "ready"
         assert calls == []
 
-        clock.advance(timedelta(seconds=600))
+        clock.advance(timedelta(seconds=200))
         assert manager.get().status == "refreshing"
         assert started.wait(2)
         assert calls == ["load"]
@@ -482,7 +482,7 @@ def test_twenty_simultaneous_stale_gets_start_one_loader(tmp_path: Path):
     """Missing single-flight locking permits concurrent refresh jobs."""
     clock = FakeClock(NOW)
     initial = _snapshot(NOW)
-    refreshed = _snapshot(NOW + timedelta(seconds=901))
+    refreshed = _snapshot(NOW + timedelta(seconds=301))
     started = threading.Event()
     release = threading.Event()
     start_gate = threading.Barrier(21)
@@ -505,7 +505,7 @@ def test_twenty_simultaneous_stale_gets_start_one_loader(tmp_path: Path):
     ) as manager:
         manager.get()
         assert manager.wait_for_idle(2) is True
-        clock.advance(timedelta(seconds=901))
+        clock.advance(timedelta(seconds=301))
 
         def concurrent_get(_: int):
             start_gate.wait(timeout=5)
@@ -633,7 +633,7 @@ def test_failed_refresh_gets_manual_cooldown_and_keeps_automatic_retry(
     """A failure must not permit force-spam or suppress the existing 60-second retry."""
     clock = FakeClock(NOW)
     store = ProtectedSnapshotStore(tmp_path / "cache")
-    last_good = _snapshot(NOW - timedelta(seconds=901))
+    last_good = _snapshot(NOW - timedelta(seconds=301))
     store.save(last_good)
     calls: list[datetime] = []
 
@@ -822,7 +822,7 @@ def test_secret_failure_is_not_persisted_and_automatic_retry_waits_60_seconds(
     secret = "upstream body sk-secret-value for 0901234567"
     clock = FakeClock(NOW)
     store = ProtectedSnapshotStore(tmp_path / "cache")
-    last_good = _snapshot(NOW - timedelta(seconds=901))
+    last_good = _snapshot(NOW - timedelta(seconds=301))
     store.save(last_good)
     calls = 0
 
