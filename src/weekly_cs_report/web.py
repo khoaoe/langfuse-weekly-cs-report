@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import argparse
 import base64
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
 import hashlib
 import ipaddress
@@ -37,7 +37,9 @@ from .ai_review_cache import AIReviewCacheError, load_ai_review_cache
 from .ai_tag_cache import AiTagCacheError, load_ai_tag_cache
 from .csat_cache import CSATCacheError, load_csat_cache
 from .dashboard_cache import CacheView, ProtectedSnapshotStore, SnapshotManager
+from .cohort import cohort_week_for
 from .dashboard_schema import (
+    _STORAGE_VERSION,
     entry_coverage_ticket_page,
     project_dashboard,
     ticket_day_aggregate,
@@ -58,6 +60,7 @@ from .explain_context import load_explain_config
 from .narration_validator import validate as validate_narration
 from .langfuse_client import LangfuseAPIError, LangfuseClient
 from .model_discovery import discover_first_seen, list_recent_models
+from .models import SessionMetrics
 from .model_list_cache import (
     CachedModelList,
     ModelListCacheError,
@@ -75,7 +78,12 @@ from .reconciliation_cache import (
     ReconciliationCacheError,
     load_reconciliation_cache,
 )
-from .report import compute_report
+from .report import ReportRun, compute_report
+from .session_cache import (
+    SessionCacheError,
+    load_session_cache,
+    write_session_cache,
+)
 from .runtime_logging import configure_json_logging, emit_event
 from .skill_rules import parse_snapshot
 from .trace_explainer import build_trace_explanation
@@ -190,6 +198,7 @@ _RECONCILIATION_CACHE_FILENAME = "outcome_reconciliation_cache.json"
 _ENTRY_COVERAGE_CACHE_FILENAME = "entry_coverage_cache.json"
 _AI_REVIEW_CACHE_FILENAME = "ai_review_cache.json"
 _AI_TAG_CACHE_FILENAME = "ai_tag_cache.json"
+_SESSION_CACHE_FILENAME = "session_cache.json"
 _MODEL_SEEN_CACHE_FILENAME = "model_seen_cache.json"
 _AB_TEST_CACHE_FILENAME = "ab_test_snapshot_cache.json"
 _MODEL_LIST_CACHE_FILENAME = "model_list_cache.json"
@@ -1256,8 +1265,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         vietnam = ZoneInfo("Asia/Ho_Chi_Minh")
 
+        session_cache_path = runtime_directory / _SESSION_CACHE_FILENAME
+
         def load_snapshot():
             as_of = datetime.now(vietnam)
+            try:
+                cached_sessions = load_session_cache(
+                    session_cache_path, storage_version=_STORAGE_VERSION
+                )
+            except SessionCacheError:
+                emit_event("session_cache_load_ignored", code="invalid_cache")
+                cached_sessions = {}
             report = compute_report(
                 client,
                 as_of=as_of,
@@ -1267,6 +1285,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 refresh_timeout_seconds=refresh_timeout_seconds,
                 max_trace_pages=max_trace_pages,
                 cancel_event=refresh_cancel_event,
+                cached_sessions=cached_sessions,
             )
             if report.enrichment_status != "complete":
                 emit_event(
@@ -1277,6 +1296,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     observation_count=report.observations_fetched,
                 )
                 raise InvariantError("enrichment is incomplete")
+            _store_closed_weeks(
+                session_cache_path, report, as_of=as_of, previous=cached_sessions
+            )
             try:
                 csat_cache = load_csat_cache(
                     runtime_directory / _CSAT_CACHE_FILENAME
@@ -1454,6 +1476,47 @@ def _has_identity(request: Request, header_name: str) -> bool:
             for character in value
         )
     )
+
+
+def _store_closed_weeks(
+    path: Path,
+    report: ReportRun,
+    *,
+    as_of: datetime,
+    previous: Mapping[date, Sequence[SessionMetrics]],
+) -> None:
+    """Persist settled cohort weeks so the next refresh can skip fetching them.
+
+    Only weeks this run could see in full are written. A run that already
+    reused a week from cache re-persists the cached copy untouched rather than
+    the partial view it just fetched: outside the fetch window a session shows
+    up with only its later turns, which would analyze to a lower turn count and
+    the wrong outcome. The open week is never stored -- it is still moving.
+    """
+    current_week = cohort_week_for(as_of)
+    grouped: dict[date, list[SessionMetrics]] = {}
+    for session in report.result.sessions:
+        if session.cohort_status != "complete" or session.cohort_week >= current_week:
+            continue
+        grouped.setdefault(session.cohort_week, []).append(session)
+
+    weeks: dict[date, Sequence[SessionMetrics]] = {
+        week: tuple(sessions) for week, sessions in grouped.items()
+    }
+    weeks.update(previous)
+    if not weeks:
+        return
+    try:
+        write_session_cache(
+            path,
+            weeks,
+            storage_version=_STORAGE_VERSION,
+            fetched_at=datetime.now(timezone.utc),
+        )
+    except SessionCacheError:
+        # A cache that cannot be written costs the next refresh time, never
+        # correctness: it falls back to fetching the full window.
+        emit_event("session_cache_write_failed", code="write_failed")
 
 
 def _background_refresh_enabled() -> bool:

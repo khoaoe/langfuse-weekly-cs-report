@@ -20,7 +20,7 @@ from .runtime_logging import emit_event
 _SNAPSHOT_FILENAME = "dashboard_snapshot.json"
 _AUTOMATIC_RETRY_DELAY = timedelta(seconds=60)
 # The heartbeat only *asks*; the TTL still decides. Asking every minute
-# keeps a settled snapshot within a minute of its 300s expiry without
+# keeps a settled snapshot within a minute of its 900s expiry without
 # adding a single extra upstream read.
 _HEARTBEAT_INTERVAL_SECONDS = 60.0
 _MANUAL_REFRESH_COOLDOWN = timedelta(seconds=60)
@@ -170,7 +170,7 @@ class SnapshotManager:
         loader: Callable[[], DashboardSnapshot],
         store: ProtectedSnapshotStore,
         *,
-        ttl: timedelta = timedelta(seconds=300),
+        ttl: timedelta = timedelta(seconds=900),
         clock: Callable[[], datetime] = utc_now,
         cancel_event: threading.Event | None = None,
         monotonic: Callable[[], float] = time.monotonic,

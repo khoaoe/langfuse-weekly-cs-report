@@ -1,24 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, time as time_of_day, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import time
 import threading
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Sequence
 
 from .categories import Taxonomy, load_taxonomy
-from .cohort import build_cohort_window
+from .cohort import LOOKBACK_DAYS, VIETNAM_TIMEZONE, build_cohort_window
 from .enrichment import ENRICHMENT_NAMES, TraceEnrichment, build_trace_enrichment
 from .langfuse_client import (
     LangfuseClient,
     LangfuseDeadlineExceeded,
     LangfuseRequestCancelled,
 )
-from .models import AnalysisResult
+from .models import AnalysisResult, CohortWindow, SessionMetrics
 from .pipeline import (
     analyze_sessions,
+    merge_cached_sessions,
     normalize_raw_traces,
     select_candidate_sessions,
     validate_invariants,
@@ -66,6 +67,50 @@ class _CombinedCancellationEvent(threading.Event):
         return super().is_set() or any(event.is_set() for event in self._events)
 
 
+def _reusable_cached_sessions(
+    cached: Mapping[date, Sequence[SessionMetrics]] | None,
+    window: CohortWindow,
+) -> dict[date, tuple[SessionMetrics, ...]]:
+    """Keep only cached weeks this run is allowed to skip fetching.
+
+    A week qualifies when it is inside the reporting window and closed early
+    enough that nothing in it can still move: the week that just closed is
+    refetched rather than reused, because a session that started in it may
+    still be taking turns, and `reopen_within_7d` counts a 168-hour window from
+    the first trace. Anything older is settled.
+    """
+    if not cached:
+        return {}
+    first_week = window.complete_start_local.date()
+    # Exclusive: the most recently closed week is refetched, not reused.
+    last_reusable = window.complete_end_exclusive_local.date() - timedelta(weeks=2)
+    return {
+        week: tuple(sessions)
+        for week, sessions in sorted(cached.items())
+        if first_week <= week <= last_reusable and sessions
+    }
+
+
+def _fetch_start(
+    window: CohortWindow,
+    reusable: Mapping[date, Sequence[SessionMetrics]],
+) -> datetime:
+    """Earliest timestamp this run must ask Langfuse for.
+
+    Starts at the first week not served from cache, minus the same lookback
+    `build_cohort_window` applies, so a session whose canonical first trace
+    predates that week is still visible and cannot be reassigned to a later
+    cohort week from a partial view of its turns.
+    """
+    if not reusable:
+        return window.query_from_utc
+    first_fetched_week = max(reusable) + timedelta(weeks=1)
+    start_local = datetime.combine(
+        first_fetched_week, time_of_day.min, tzinfo=VIETNAM_TIMEZONE
+    ) - timedelta(days=LOOKBACK_DAYS)
+    return max(start_local.astimezone(timezone.utc), window.query_from_utc)
+
+
 def _is_ticket_trace(raw: Mapping[str, object]) -> bool:
     input_data = raw.get("input")
     return (
@@ -85,7 +130,17 @@ def compute_report(
     max_trace_pages: int = 500,
     cancel_event: threading.Event | None = None,
     monotonic: Callable[[], float] = time.monotonic,
+    cached_sessions: Mapping[date, Sequence[SessionMetrics]] | None = None,
 ) -> ReportRun:
+    """Analyze the reporting window, reusing cached closed weeks when given.
+
+    With `cached_sessions`, only the weeks that can still change are fetched
+    from Langfuse -- the open week, the week that just closed, and the
+    fourteen-day lookback that keeps a session's canonical first trace
+    visible. Everything older is folded back in from the cache, which is what
+    it already analyzed to. Without it the full window is fetched, exactly as
+    before.
+    """
     refresh_start = monotonic()
     refresh_deadline = refresh_start + refresh_timeout_seconds
     # Enrichment runs alongside trace pagination.  A fixed 110-second cap made
@@ -95,11 +150,16 @@ def compute_report(
     enrichment_deadline = refresh_deadline - _ENRICHMENT_DRAIN_SECONDS
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     window = build_cohort_window(as_of, weeks, include_current_wtd)
+    reusable = _reusable_cached_sessions(cached_sessions, window)
+    # The reporting window stays the full `weeks`; only the Langfuse query
+    # narrows. Aggregates are keyed off `window`, so shrinking it here would
+    # drop the cached weeks from every breakdown instead of reusing them.
+    fetch_from_utc = _fetch_start(window, reusable)
     taxonomy = load_taxonomy(taxonomy_path)
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     enrichment_job = _start_enrichment(
         client,
-        from_start_time=window.query_from_utc,
+        from_start_time=fetch_from_utc,
         to_start_time=window.query_to_utc,
         deadline=enrichment_deadline,
         cancel_event=cancel_event,
@@ -110,7 +170,7 @@ def compute_report(
         raw_traces = [
             raw
             for raw in client.iter_traces(
-                window.query_from_utc,
+                fetch_from_utc,
                 window.query_to_utc,
                 deadline=refresh_deadline,
                 cancel_event=cancel_event,
@@ -139,6 +199,15 @@ def compute_report(
         trace_enrichment=trace_enrichment,
     )
     validate_invariants(result)
+    if reusable:
+        result = merge_cached_sessions(
+            result,
+            tuple(
+                session
+                for sessions in reusable.values()
+                for session in sessions
+            ),
+        )
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     try:
         shadow = pending_shadow(
