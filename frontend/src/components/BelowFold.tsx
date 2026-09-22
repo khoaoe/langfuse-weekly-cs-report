@@ -1010,8 +1010,18 @@ export function BelowFold({
     weeklySnapshot === undefined
       ? weeks
       : selectWeekly(selectView(weeklySnapshot, weekDefinition));
+  // `same_period` is a fixed comparison anchored to today's running week, not
+  // to whatever subset of weeks the report is scoped to — the scoping
+  // projections (report-scope.ts) null it out because they can't recompute
+  // it, not because it stops applying. Read it from the unscoped snapshot so
+  // the button stays live regardless of report scope.
+  const samePeriod =
+    view.same_period ??
+    (weeklySnapshot === undefined
+      ? null
+      : selectView(weeklySnapshot, weekDefinition).same_period);
   const [trendMode, setTrendMode] = useState<"full" | "same_period">("full");
-  const hasSamePeriod = view.same_period !== null;
+  const hasSamePeriod = samePeriod !== null;
   useEffect(() => {
     setTrendMode("full");
   }, [weekDefinition, hasSamePeriod]);
@@ -1019,10 +1029,10 @@ export function BelowFold({
     hasSamePeriod && trendMode === "same_period" ? "same_period" : "full";
   const trendWeeks = useMemo(
     () =>
-      effectiveTrendMode === "same_period" && view.same_period !== null
-        ? samePeriodTrendWeeks(weeks, view.same_period)
+      effectiveTrendMode === "same_period" && samePeriod !== null
+        ? samePeriodTrendWeeks(fullWeeks, samePeriod)
         : fullWeeks,
-    [effectiveTrendMode, view.same_period, weeks, fullWeeks],
+    [effectiveTrendMode, samePeriod, fullWeeks],
   );
   const weekTrendPoints = useMemo(
     () => trendWeeks.map((week) => trendWeekToPoint(week, weekDefinition)),
@@ -1164,11 +1174,9 @@ export function BelowFold({
               disabled={!hasSamePeriod}
               onClick={() => setTrendMode("same_period")}
             >
-              {view.same_period === null
+              {samePeriod === null
                 ? "Cùng kỳ đến ..."
-                : `Cùng kỳ đến ${formatWeekdayCode(
-                    view.same_period.cutoff_weekday,
-                  )}`}
+                : `Cùng kỳ đến ${formatWeekdayCode(samePeriod.cutoff_weekday)}`}
             </button>
             <button
               type="button"
@@ -1180,11 +1188,10 @@ export function BelowFold({
             </button>
           </div>
         </div>
-        {effectiveTrendMode === "same_period" &&
-        view.same_period !== null ? (
+        {effectiveTrendMode === "same_period" && samePeriod !== null ? (
           <p className={styles.sectionNote}>
             {`Mọi tuần đều cắt tới ${formatWeekdayName(
-              view.same_period.cutoff_weekday,
+              samePeriod.cutoff_weekday,
             )} để so cùng kỳ.`}
           </p>
         ) : null}
