@@ -1152,32 +1152,33 @@ export function BelowFold({
               Volume và tỷ lệ theo tuần
             </h2>
           </div>
-          {view.same_period === null ? null : (
-            <div
-              className={styles.segmented}
-              role="group"
-              aria-label="Phạm vi biểu đồ"
+          <div
+            className={styles.segmented}
+            role="group"
+            aria-label="Phạm vi biểu đồ"
+          >
+            <button
+              type="button"
+              className={styles.segmentedButton}
+              aria-pressed={effectiveTrendMode === "same_period"}
+              disabled={!hasSamePeriod}
+              onClick={() => setTrendMode("same_period")}
             >
-              <button
-                type="button"
-                className={styles.segmentedButton}
-                aria-pressed={effectiveTrendMode === "same_period"}
-                onClick={() => setTrendMode("same_period")}
-              >
-                {`Cùng kỳ đến ${formatWeekdayCode(
-                  view.same_period.cutoff_weekday,
-                )}`}
-              </button>
-              <button
-                type="button"
-                className={styles.segmentedButton}
-                aria-pressed={effectiveTrendMode === "full"}
-                onClick={() => setTrendMode("full")}
-              >
-                Tuần đủ
-              </button>
-            </div>
-          )}
+              {view.same_period === null
+                ? "Cùng kỳ đến ..."
+                : `Cùng kỳ đến ${formatWeekdayCode(
+                    view.same_period.cutoff_weekday,
+                  )}`}
+            </button>
+            <button
+              type="button"
+              className={styles.segmentedButton}
+              aria-pressed={effectiveTrendMode === "full"}
+              onClick={() => setTrendMode("full")}
+            >
+              Tuần đủ
+            </button>
+          </div>
         </div>
         {effectiveTrendMode === "same_period" &&
         view.same_period !== null ? (
