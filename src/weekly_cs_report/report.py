@@ -10,7 +10,12 @@ from typing import Callable, Mapping, Sequence
 
 from .categories import Taxonomy, load_taxonomy
 from .cohort import VIETNAM_TIMEZONE, build_cohort_window
-from .enrichment import ENRICHMENT_NAMES, TraceEnrichment, build_trace_enrichment
+from .enrichment import (
+    ENRICHMENT_NAMES,
+    TraceEnrichment,
+    build_trace_enrichment,
+    slim_observation,
+)
 from .langfuse_client import (
     LangfuseAPIError,
     LangfuseClient,
@@ -41,6 +46,13 @@ class ReportRun:
 
 
 _ENRICHMENT_DRAIN_SECONDS = 5.0
+# Observations start at their trace's timestamp or later. Sampled 2026-09-24
+# over 42 traces spread across 12 weeks: the earliest observation led its
+# trace by at most 3 ms. A day of margin is several orders of magnitude of
+# headroom for ~1% more observation pages.
+_ENRICHMENT_MARGIN = timedelta(days=1)
+_ENRICHMENT_NAME_SET = frozenset(ENRICHMENT_NAMES)
+_CARRIED_LANE = "carried_trace_observations"
 
 
 @dataclass
@@ -191,10 +203,11 @@ def compute_report(
     """Analyze the reporting window, reusing cached closed weeks when given.
 
     With `cached_sessions`, only the weeks that can still change are fetched
-    from Langfuse -- the open week, the week that just closed, and the
-    fourteen-day lookback that keeps a session's canonical first trace
-    visible. Everything older is folded back in from the cache, which is what
-    it already analyzed to. Without it the full window is fetched, exactly as
+    from Langfuse -- the open week and the week that just closed -- for both
+    traces and observations. Sessions that carried over from a cached week are
+    refetched whole by id, and their older traces' observations by trace id.
+    Everything older is folded back in from the cache, which is what it
+    already analyzed to. Without it the full window is fetched, exactly as
     before.
     """
     refresh_start = monotonic()
@@ -215,15 +228,15 @@ def compute_report(
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     enrichment_job = _start_enrichment(
         client,
-        # Deliberately NOT narrowed to `fetch_from_utc`. Enrichment lanes are
-        # keyed by observation start time, not by the ticket's cohort week, so
-        # a ticket opened just before the narrowed boundary would lose the
-        # observations that carry its skill and TPE signals -- measured in
-        # production as coverage_skill 0.9001 -> 0.8979 and coverage_tpe
-        # 0.7701 -> 0.7667 when this used the narrowed bound. Observation lanes
-        # are also far cheaper than trace pagination, so widening them back
-        # costs little of what the narrowing saves.
-        from_start_time=window.query_from_utc,
+        # Narrowed with the traces: a full-window observation crawl is ~3,500
+        # requests per refresh (~350k rows over 13 weeks), the bulk of what a
+        # refresh costs Langfuse. Every trace fetched here starts at or after
+        # `fetch_from_utc`, so its observations do too (see the margin). The
+        # traces that do not -- the older turns of carried sessions -- get
+        # their observations by trace id in `_fetch_carried_observations`.
+        # Narrowing without that lookup is what once moved coverage_skill
+        # 0.9001 -> 0.8979 and coverage_tpe 0.7701 -> 0.7667 in production.
+        from_start_time=_enrichment_start(window, fetch_from_utc),
         to_start_time=window.query_to_utc,
         deadline=enrichment_deadline,
         cancel_event=cancel_event,
@@ -259,6 +272,14 @@ def compute_report(
         # id and `select_candidate_sessions` sorts each session's turns itself.
         raw_traces.extend(carried_traces)
         _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
+        carried_observations = _fetch_carried_observations(
+            client,
+            carried_traces,
+            fetch_from_utc,
+            cancel_event,
+            refresh_deadline,
+            monotonic,
+        )
         records, issues, deduplicated_count = normalize_raw_traces(raw_traces)
         selection = select_candidate_sessions(records, issues, window)
         (
@@ -266,7 +287,7 @@ def compute_report(
             enrichment_status,
             observations_fetched,
             failed_enrichment_lanes,
-        ) = _finish_enrichment(enrichment_job, taxonomy)
+        ) = _finish_enrichment(enrichment_job, taxonomy, carried_observations)
         enrichment_finished = True
         _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     except BaseException:
@@ -307,6 +328,62 @@ def compute_report(
         failed_enrichment_lanes=failed_enrichment_lanes,
         reopen_shadow=shadow,
     )
+
+
+def _enrichment_start(window: CohortWindow, fetch_from_utc: datetime) -> datetime:
+    """Earliest observation start time the enrichment lanes must read."""
+    return max(fetch_from_utc - _ENRICHMENT_MARGIN, window.query_from_utc)
+
+
+def _fetch_carried_observations(
+    client: LangfuseClient,
+    carried_traces: Sequence[Mapping[str, object]],
+    fetch_from_utc: datetime,
+    cancel_event: threading.Event | None,
+    deadline: float,
+    monotonic: Callable[[], float],
+) -> dict[str, list[dict[str, object]]] | None:
+    """Observations of carried traces that predate the narrowed lanes.
+
+    Only a carried session's older turns fall outside the lanes; there are
+    few, so one request per trace is far cheaper than widening every lane back
+    to the full window. Returns None when a lookup fails, and the caller fails
+    enrichment closed exactly as it does for a failed lane: a ticket missing
+    its skill/TPE signal would silently lower coverage instead.
+    """
+    rows: dict[str, list[dict[str, object]]] = {}
+    seen: set[str] = set()
+    for raw in carried_traces:
+        trace_id = raw.get("id")
+        if (
+            not isinstance(trace_id, str)
+            or trace_id in seen
+            or not _starts_before(raw, fetch_from_utc)
+        ):
+            continue
+        seen.add(trace_id)
+        _raise_if_refresh_stopped(cancel_event, deadline, monotonic)
+        try:
+            observations = client.list_observations(trace_id)
+        except LangfuseAPIError:
+            return None
+        for observation in observations:
+            name = observation.get("name")
+            if name in _ENRICHMENT_NAME_SET:
+                rows.setdefault(name, []).append(slim_observation(observation))
+    return rows
+
+
+def _starts_before(raw: Mapping[str, object], boundary: datetime) -> bool:
+    """True unless the trace provably starts at or after `boundary`."""
+    value = raw.get("timestamp")
+    if not isinstance(value, str):
+        return True
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    return stamp.tzinfo is None or stamp < boundary
 
 
 def _abort_enrichment(job: _EnrichmentJob) -> None:
@@ -358,11 +435,16 @@ def _start_enrichment(
 def _finish_enrichment(
     job: _EnrichmentJob,
     taxonomy: Taxonomy,
+    carried: Mapping[str, Sequence[dict[str, object]]] | None = None,
 ) -> tuple[dict[str, TraceEnrichment], str, int, tuple[str, ...]]:
-    """Drain all lanes by the shared deadline and discard biased partial data."""
+    """Drain all lanes by the shared deadline and discard biased partial data.
+
+    `carried` holds per-trace observations of carried sessions' older turns;
+    None means that lookup failed and counts as a failed lane.
+    """
     pending = set(job.futures)
-    failed = False
-    failed_lanes: set[str] = set()
+    failed = carried is None
+    failed_lanes: set[str] = {_CARRIED_LANE} if carried is None else set()
     try:
         while pending:
             remaining = job.deadline - job.monotonic()
@@ -409,17 +491,31 @@ def _finish_enrichment(
         failed = True
 
     states = tuple(job.futures.values())
-    observations_fetched = sum(len(state.rows) for state in states)
+    observations = {
+        state.name: _with_carried(state.rows, (carried or {}).get(state.name, ()))
+        for state in states
+    }
+    observations_fetched = sum(len(rows) for rows in observations.values())
     failed_lanes.update(state.name for state in states if state.error is not None)
     if failed or any(state.error is not None for state in states):
         return {}, "partial", observations_fetched, tuple(sorted(failed_lanes))
-    observations = {state.name: state.rows for state in states}
     return (
         build_trace_enrichment(observations, taxonomy),
         "complete",
         observations_fetched,
         (),
     )
+
+
+def _with_carried(
+    lane_rows: list[dict],
+    carried_rows: Sequence[dict[str, object]],
+) -> list[dict]:
+    """Lane rows plus carried rows the lane's margin did not already return."""
+    if not carried_rows:
+        return lane_rows
+    seen = {row.get("id") for row in lane_rows}
+    return lane_rows + [row for row in carried_rows if row.get("id") not in seen]
 
 
 def _fetch_enrichment_lane(
@@ -440,7 +536,7 @@ def _fetch_enrichment_lane(
         ):
             if cancel_event.is_set():
                 break
-            state.rows.append(row)
+            state.rows.append(slim_observation(row))
     except Exception as error:
         state.error = error
         cancel_event.set()

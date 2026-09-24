@@ -556,3 +556,62 @@ def test_iter_observations_by_name_returns_all_pages_in_page_order():
     )
 
     assert rows == [{"traceId": f"trace-{n}"} for n in range(1, 6)]
+
+
+def test_concurrent_iterators_never_exceed_the_client_request_cap():
+    """Enrichment stacks lanes x page workers; Langfuse must see the cap only."""
+    lock = threading.Lock()
+    in_flight = peak = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal in_flight, peak
+        with lock:
+            in_flight += 1
+            peak = max(peak, in_flight)
+        time.sleep(0.01)
+        with lock:
+            in_flight -= 1
+        return httpx.Response(200, json=page([{"id": "x"}], 6), request=request)
+
+    client = LangfuseClient(
+        BASE_URL,
+        PUBLIC_KEY,
+        SECRET_KEY,
+        transport=httpx.MockTransport(handler),
+        max_concurrent_requests=3,
+    )
+    bounds = (
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 2, tzinfo=timezone.utc),
+    )
+    threads = [
+        threading.Thread(target=lambda: list(client.iter_observations_by_name("route", *bounds)))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert peak == 3
+
+
+def test_pages_stream_in_bounded_batches_instead_of_buffering_the_lane():
+    """Holding every page of a lane before yielding is what exhausted memory."""
+    fetched: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page_number = int(request.url.params["page"])
+        fetched.append(page_number)
+        return httpx.Response(200, json=page([{"id": page_number}], 50), request=request)
+
+    rows = client_for(handler).iter_observations_by_name(
+        "route",
+        datetime(2026, 7, 1, tzinfo=timezone.utc),
+        datetime(2026, 7, 2, tzinfo=timezone.utc),
+        max_workers=4,
+    )
+    assert [next(rows)["id"] for _ in range(2)] == [1, 2]
+    # Page 1, then only the first batch of 4 -- not all 50.
+    assert len(fetched) <= 5
+    assert [row["id"] for row in rows] == list(range(3, 51))

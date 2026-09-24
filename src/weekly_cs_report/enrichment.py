@@ -122,6 +122,52 @@ class TraceEnrichment:
     tool_error_codes: tuple[str, ...] = ()
 
 
+_SLIM_SCALAR_MAX_CHARS = 128
+
+
+def slim_observation(observation: Mapping[str, object]) -> dict[str, object]:
+    """Keep only what `build_trace_enrichment` reads, as each row arrives.
+
+    A 13-week window is ~350k observations and ~1 GB of JSON (measured
+    2026-09-24; `execute` alone averages 10.6 KB). Holding those raw dicts
+    until every lane finishes is what pushed a refresh past the 4 GB container
+    limit. Every signal read downstream is an identity key, a metadata
+    intent/skill list, an input stage/skill, or a short scalar in `output` /
+    `output.result`; nested payloads and long strings are never read.
+    """
+    slim: dict[str, object] = {
+        key: observation[key]
+        for key in ("id", "traceId", "startTime", "timestamp")
+        if key in observation
+    }
+    metadata = observation.get("metadata")
+    if isinstance(metadata, Mapping):
+        slim["metadata"] = {
+            key: metadata[key] for key in ("intent", "skills_used") if key in metadata
+        }
+    inputs = observation.get("input")
+    if isinstance(inputs, Mapping):
+        slim["input"] = {key: inputs[key] for key in ("stage", "skill") if key in inputs}
+    output = observation.get("output")
+    if isinstance(output, Mapping):
+        slim_output = _short_scalars(output)
+        result = output.get("result")
+        if isinstance(result, Mapping):
+            slim_output["result"] = _short_scalars(result)
+        slim["output"] = slim_output
+    return slim
+
+
+def _short_scalars(value: Mapping[str, object]) -> dict[str, object]:
+    return {
+        key: item
+        for key, item in value.items()
+        if item is None
+        or isinstance(item, (bool, int, float))
+        or (isinstance(item, str) and len(item) <= _SLIM_SCALAR_MAX_CHARS)
+    }
+
+
 def build_trace_enrichment(
     observations_by_name: Mapping[str, Sequence[Mapping[str, object]]],
     taxonomy: Taxonomy,

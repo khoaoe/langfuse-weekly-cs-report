@@ -32,11 +32,13 @@ class WindowedClient:
     whole point is that the narrowed run never sees the older traces.
     """
 
-    def __init__(self, traces: list[dict]) -> None:
+    def __init__(self, traces: list[dict], observations: list[dict] = ()) -> None:
         self._traces = traces
+        self._observations = list(observations)
         self.bounds: list[tuple[datetime, datetime]] = []
         self.enrichment_bounds: list[tuple[datetime, datetime]] = []
         self.session_lookups: list[str] = []
+        self.observation_lookups: list[str] = []
 
     def iter_traces(
         self,
@@ -60,7 +62,8 @@ class WindowedClient:
         ]
 
     def list_observations(self, trace_id: str) -> list[dict]:
-        return []
+        self.observation_lookups.append(trace_id)
+        return [o for o in self._observations if o["traceId"] == trace_id]
 
     def iter_observations_by_name(
         self,
@@ -72,7 +75,36 @@ class WindowedClient:
         cancel_event: threading.Event | None = None,
     ):
         self.enrichment_bounds.append((_from_start_time, _to_start_time))
-        return iter(())
+        return iter([
+            o
+            for o in self._observations
+            if o["name"] == name
+            and _from_start_time <= _stamp(o["startTime"]) <= _to_start_time
+        ])
+
+
+def _stamp(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _observations_for(traces: list[dict], *, tpe_only: set[str] = frozenset()) -> list[dict]:
+    """A skill and a TPE observation per trace, starting with the trace.
+
+    Traces named in `tpe_only` carry TPE alone, so a ticket's TPE signal can
+    be pinned to exactly one of its turns.
+    """
+    rows = []
+    for raw in traces:
+        trace_id, start = raw["id"], raw["timestamp"]
+        rows.append({
+            "id": f"tpe-{trace_id}", "traceId": trace_id, "startTime": start,
+            "name": "tool:get_transaction_processing_engine_data",
+            "output": {"result": {"transstatus": 1, "stepresult": "-49"}},
+        } if trace_id in tpe_only else {
+            "id": f"exec-{trace_id}", "traceId": trace_id, "startTime": start,
+            "name": "execute", "metadata": {"skills_used": ["ibft"]},
+        })
+    return rows
 
 
 def _traces() -> list[dict]:
@@ -266,24 +298,76 @@ def test_a_carried_session_keeps_its_cached_copy_when_the_refetch_fails():
     assert actual.turn_count == expected.turn_count
 
 
-def test_enrichment_still_covers_the_whole_window_when_traces_are_narrowed():
-    """Narrowing enrichment too drops skill and TPE signals from real tickets.
+def _signal_traces() -> tuple[list[dict], list[dict]]:
+    """Carried ticket whose TPE signal lives only on its first, cached-week turn."""
+    traces = _carried_traces()
+    return traces, _observations_for(traces, tpe_only={"carry-0"})
 
-    Enrichment lanes are keyed by observation start time, not by the ticket's
-    cohort week, so a ticket opened just before the narrowed trace boundary
-    still has observations behind it. Narrowing this bound measurably moved
-    coverage_skill and coverage_tpe in production.
-    """
-    full_client = WindowedClient(_traces())
+
+def test_cached_refresh_with_observations_matches_a_full_refresh():
+    """Narrowed traces AND observations must still reproduce every figure."""
+    traces, observations = _signal_traces()
+    full = _run(WindowedClient(traces, observations))
+    expected = project_dashboard(full).dashboard_dict()
+
+    client = WindowedClient(traces, observations)
+    cached = _run(client, cached=_by_week(full))
+    actual = project_dashboard(cached).dashboard_dict()
+
+    assert cached.enrichment_status == "complete"
+    for key in expected:
+        if key == "source":
+            continue
+        assert actual[key] == expected[key], key
+    assert actual["source"]["observations_fetched"] < expected["source"]["observations_fetched"]
+
+
+def test_enrichment_lanes_narrow_with_the_traces_plus_one_day():
+    """A full-window observation crawl is most of what a refresh costs Langfuse."""
+    traces, observations = _signal_traces()
+    full_client = WindowedClient(traces, observations)
     full = _run(full_client)
-    full_enrichment_start = full_client.enrichment_bounds[0][0]
 
-    cached_client = WindowedClient(_traces())
-    _run(cached_client, cached=_by_week(full))
+    client = WindowedClient(traces, observations)
+    _run(client, cached=_by_week(full))
 
-    # Traces narrow; observations must not.
-    assert cached_client.bounds[0][0] > full_client.bounds[0][0]
-    assert cached_client.enrichment_bounds[0][0] == full_enrichment_start
+    trace_start = client.bounds[0][0]
+    enrichment_start = client.enrichment_bounds[0][0]
+    assert enrichment_start == trace_start - timedelta(days=1)
+    assert enrichment_start > full_client.enrichment_bounds[0][0]
+
+
+def test_a_carried_session_keeps_the_signals_of_its_older_turns():
+    """The narrowed lanes never see the first turn; its trace id lookup must."""
+    traces, observations = _signal_traces()
+    full = _run(WindowedClient(traces, observations))
+    expected = next(s for s in full.result.sessions if s.session_id == "ticket-carry")
+    assert expected.dimensions.tpe_signals  # the fixture pins TPE to carry-0
+
+    client = WindowedClient(traces, observations)
+    narrowed = _run(client, cached=_by_week(full))
+    actual = next(s for s in narrowed.result.sessions if s.session_id == "ticket-carry")
+
+    assert actual.dimensions == expected.dimensions
+    # Only the turn outside the lanes is looked up, never one they cover.
+    assert client.observation_lookups == ["carry-0"]
+
+
+def test_a_failed_carried_observation_lookup_fails_enrichment_closed():
+    """Silently missing a carried ticket's signals would lower coverage."""
+    from weekly_cs_report.langfuse_client import LangfuseAPIError
+
+    traces, observations = _signal_traces()
+    full = _run(WindowedClient(traces, observations))
+
+    class FailingObservations(WindowedClient):
+        def list_observations(self, trace_id: str) -> list[dict]:
+            raise LangfuseAPIError("GET", "/api/public/observations", 500)
+
+    narrowed = _run(FailingObservations(traces, observations), cached=_by_week(full))
+
+    assert narrowed.enrichment_status == "partial"
+    assert "carried_trace_observations" in narrowed.failed_enrichment_lanes
 
 
 def test_cache_round_trip_preserves_every_session_field(tmp_path):

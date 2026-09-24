@@ -7,7 +7,7 @@ import socket
 import time
 import threading
 from collections.abc import Callable, Iterator, Sequence
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
@@ -139,6 +139,7 @@ class LangfuseClient:
         max_attempts: int = 3,
         backoff_base_s: float = 0.5,
         poll_interval_s: float = 0.5,
+        max_concurrent_requests: int = 8,
     ) -> None:
         if not 1 <= max_attempts <= 3:
             raise ValueError("max_attempts must be between 1 and 3")
@@ -160,6 +161,15 @@ class LangfuseClient:
         self._max_attempts = max_attempts
         self._backoff_base_s = backoff_base_s
         self._poll_interval_s = poll_interval_s
+        # One ceiling for everything this client sends, however many pools sit
+        # above it. A refresh stacks 4 enrichment lanes x 8 page workers on top
+        # of 8 trace page workers: 40 requests in flight against Langfuse at
+        # once (measured 2026-09-24). Protecting Langfuse is the top priority;
+        # wall time is not.
+        # ponytail: fixed per-client cap, calibrate against Langfuse latency.
+        if max_concurrent_requests < 1:
+            raise ValueError("max_concurrent_requests must be positive")
+        self._in_flight = threading.BoundedSemaphore(max_concurrent_requests)
 
     def close(self) -> None:
         self._client.close()
@@ -226,24 +236,11 @@ class LangfuseClient:
             return
 
         # Pages 2..N are independent GET requests keyed by page number, so
-        # fetching them concurrently (bounded pool) turns a ~300s sequential
-        # crawl of a large trace window into one that finishes in the time
-        # of the slowest single page instead of the sum of all of them.
-        remaining_pages = range(2, total_pages + 1)
-        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(remaining_pages)))
-        try:
-            futures = {pool.submit(fetch_page, page): page for page in remaining_pages}
-            results: dict[int, list[dict]] = {}
-            for future in as_completed(futures):
-                data, _ = future.result()
-                results[futures[future]] = data
-        except BaseException:
-            pool.shutdown(wait=False, cancel_futures=True)
-            raise
-        else:
-            pool.shutdown(wait=True)
-        for page_number in remaining_pages:
-            yield from results[page_number]
+        # fetching them concurrently turns a ~300s sequential crawl of a large
+        # trace window into one bounded by the slowest page of each batch.
+        yield from _remaining_pages(
+            fetch_page, total_pages, max_workers, cancel_event, "/api/public/traces"
+        )
 
     def list_traces_by_session(self, session_id: str) -> list[dict]:
         """Read every trace of one session, sorted by timestamp ascending."""
@@ -343,22 +340,9 @@ class LangfuseClient:
         # so a ~300k-observation window cost thousands of serial requests and
         # the refresh ran ~20 minutes -- longer than the 300s TTL, which is
         # what made the dashboard lag 30-60 minutes behind real time.
-        remaining_pages = range(2, total_pages + 1)
-        pool = ThreadPoolExecutor(max_workers=min(max_workers, len(remaining_pages)))
-        try:
-            futures = {pool.submit(fetch_page, page): page for page in remaining_pages}
-            results: dict[int, list[dict]] = {}
-            for future in as_completed(futures):
-                data, _ = future.result()
-                results[futures[future]] = data
-        except BaseException:
-            pool.shutdown(wait=False, cancel_futures=True)
-            raise
-        else:
-            pool.shutdown(wait=True)
-        for page_number in remaining_pages:
-            _raise_if_cancelled(cancel_event, "GET", "/api/public/observations")
-            yield from results[page_number]
+        yield from _remaining_pages(
+            fetch_page, total_pages, max_workers, cancel_event, "/api/public/observations"
+        )
 
     def fetch_metrics(
         self,
@@ -436,7 +420,8 @@ class LangfuseClient:
                     raise LangfuseDeadlineExceeded(method, path)
                 request_kwargs["timeout"] = httpx.Timeout(min(30.0, remaining))
             try:
-                response = self._client.request(method, path, **request_kwargs)
+                with self._in_flight:
+                    response = self._client.request(method, path, **request_kwargs)
             except httpx.TransportError:
                 _raise_if_cancelled(cancel_event, method, path)
                 if deadline is not None and self._monotonic() >= deadline:
@@ -536,6 +521,28 @@ def _serialize_utc(value: datetime, field_name: str) -> str:
         raise ValueError(f"{field_name} must be timezone-aware")
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
+
+
+def _remaining_pages(
+    fetch_page: Callable[[int], tuple[list[dict], int]],
+    total_pages: int,
+    max_workers: int,
+    cancel_event: threading.Event | None,
+    path: str,
+) -> Iterator[dict]:
+    """Yield pages 2..N in order, holding at most one batch of pages at once.
+
+    Collecting every page before yielding held a whole lane's raw JSON in
+    memory -- ~400 MB for `execute` over 13 weeks -- on top of what the caller
+    kept. Batches of `max_workers` keep the same parallelism with a bounded
+    buffer. The batch barrier costs a little wall time; memory is the limit.
+    """
+    pages = list(range(2, total_pages + 1))
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(pages))) as pool:
+        for start in range(0, len(pages), max_workers):
+            _raise_if_cancelled(cancel_event, "GET", path)
+            for data, _ in pool.map(fetch_page, pages[start : start + max_workers]):
+                yield from data
 
 def _raise_if_cancelled(
     cancel_event: threading.Event | None,

@@ -5,6 +5,7 @@ from weekly_cs_report.enrichment import (
     TraceEnrichment,
     apply_trace_enrichment,
     build_trace_enrichment,
+    slim_observation,
     transfer_trigger_for_trace,
 )
 from weekly_cs_report.categories import load_taxonomy
@@ -542,3 +543,72 @@ def _empty_dimensions() -> TicketDimensions:
         tpe_status_canonical=None, tpe_step=None, tpe_case=None, skill=None,
         intent=None, guardrail_rule=None, escalation_guard_blocked=False,
     )
+
+
+def test_slimmed_observations_enrich_exactly_like_the_raw_rows():
+    """The lanes keep `slim_observation(row)`, never the raw row.
+
+    That only holds if every signal `build_trace_enrichment` reads survives
+    the projection. Each row carries the bulky payload production sends
+    (nested prompt/response, long strings) next to the signal it matters for.
+    """
+    noise = {"messages": [{"role": "user", "content": "x" * 5000}], "blob": "y" * 500}
+    stamp = "2026-07-01T00:00:00.000Z"
+
+    def row(name, trace_id, **fields):
+        base = {
+            "id": f"{name}-{trace_id}",
+            "traceId": trace_id,
+            "startTime": stamp,
+            "metadata": {"noise": noise},
+            "input": {"noise": noise},
+            "output": {"noise": noise, "response": "z" * 2000},
+        }
+        for container, values in fields.items():
+            base[container] = {**base[container], **values}
+        return base
+
+    observations = {
+        "route": [row("route", "t1", metadata={"intent": "ibft_pending"})],
+        "execute": [row("execute", "t1", metadata={"skills_used": ["ibft", "topup"]})],
+        "input_guardrail": [
+            row("input_guardrail", "t2", output={"rule": "prompt_injection", "blocked": True})
+        ],
+        "skill_guardrail_checked": [
+            row(
+                "skill_guardrail_checked",
+                "t3",
+                input={"stage": "output", "skill": "ibft"},
+                output={"rule": "cs_escalation", "passed": False},
+            )
+        ],
+        "output_guardrail": [
+            row("output_guardrail", "t4", output={"rule": "cs_escalation", "violation": True})
+        ],
+        "escalation_history_guard": [
+            row("escalation_history_guard", "t5", output={"blocked": True})
+        ],
+        "tool:get_transaction_processing_engine_data": [
+            row(
+                "tool:get_transaction_processing_engine_data",
+                "t6",
+                output={"result": {"transstatus": 1, "stepresult": "-49", "raw": noise}},
+            )
+        ],
+        "tool:get_bank_info": [
+            row("tool:get_bank_info", "t7", output={"result": {"error": "NOT_FOUND"}})
+        ],
+        "tool:get_bank_name": [row("tool:get_bank_name", "t8", output={"error": "TIMEOUT"})],
+    }
+    taxonomy = load_taxonomy(TAXONOMY_V2_PATH)
+
+    raw = build_trace_enrichment(observations, taxonomy)
+    slim = build_trace_enrichment(
+        {name: [slim_observation(o) for o in rows] for name, rows in observations.items()},
+        taxonomy,
+    )
+
+    assert slim == raw
+    assert len(raw) >= 7
+    projected = str(slim_observation(observations["execute"][0]))
+    assert "x" * 100 not in projected and "z" * 100 not in projected

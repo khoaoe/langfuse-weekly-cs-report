@@ -23,7 +23,12 @@ from typing import Iterable, Mapping, Sequence
 from .categories import Taxonomy, extract_dimensions
 from .classification import classify_session, normalize_trace
 from .cohort import VIETNAM_TIMEZONE
-from .enrichment import TraceEnrichment, apply_trace_enrichment, build_trace_enrichment
+from .enrichment import (
+    TraceEnrichment,
+    apply_trace_enrichment,
+    build_trace_enrichment,
+    slim_observation,
+)
 from .langfuse_client import LangfuseClient
 from .models import CohortWindow, QualityIssue, TraceRecord
 
@@ -624,11 +629,12 @@ def compute_ab_test(
         llm_daily_rows = []
     try:
         observations_by_name = {
-            name: list(
-                client.iter_observations_by_name(
+            name: [
+                slim_observation(row)
+                for row in client.iter_observations_by_name(
                     name, window_start, window_end, deadline=deadline
                 )
-            )
+            ]
             for name in _ENRICHMENT_OBSERVATION_NAMES
         }
         trace_enrichment = build_trace_enrichment(observations_by_name, taxonomy)
