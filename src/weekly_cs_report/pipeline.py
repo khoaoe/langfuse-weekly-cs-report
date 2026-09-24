@@ -568,6 +568,7 @@ def _is_in_same_period_slice(
 def merge_cached_sessions(
     result: AnalysisResult,
     cached: Sequence[SessionMetrics],
+    selection: CandidateSelection,
 ) -> AnalysisResult:
     """Fold sessions analyzed by an earlier run back into a narrowed result.
 
@@ -581,6 +582,10 @@ def merge_cached_sessions(
     A session the current fetch analyzed wins over its cached copy: it was
     built from traces that include everything the cached one saw, plus whatever
     arrived since.
+
+    `selection` is the fresh selection with the cached exclusions folded in,
+    so the gate and data_quality count the whole window, not just the fetched
+    weeks. Its `eligible` still holds only the fetched records.
 
     ponytail: `validate_invariants` is deliberately not re-run on the merged
     result. It asserts `sessions == selection.eligible`, and `eligible` holds
@@ -608,7 +613,7 @@ def merge_cached_sessions(
         ):
             transfers[session.session_id] = _v2_transfer_categories(session)
 
-    window = result.selection.window
+    window = selection.window
     weekly_mon_sun = _summarize_sessions(sessions, window, "mon_sun")
     weekly_mon_fri = _summarize_sessions(sessions, window, "mon_fri")
     return replace(
@@ -618,7 +623,8 @@ def merge_cached_sessions(
         weekly=weekly_mon_sun,
         weekly_mon_sun=weekly_mon_sun,
         weekly_mon_fri=weekly_mon_fri,
-        gate_status=_evaluate_gate_inputs(sessions, transfers, result.selection),
+        selection=selection,
+        gate_status=_evaluate_gate_inputs(sessions, transfers, selection),
     )
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import threading
 from zoneinfo import ZoneInfo
@@ -14,6 +14,7 @@ from weekly_cs_report.session_cache import (
     load_session_cache,
     write_session_cache,
 )
+from dataclasses import replace
 
 
 VIETNAM = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -21,7 +22,6 @@ VIETNAM = ZoneInfo("Asia/Ho_Chi_Minh")
 # complete weeks behind it.
 AS_OF = datetime(2026, 7, 29, 12, tzinfo=VIETNAM)
 TAXONOMY_PATH = Path(__file__).parents[1] / "config" / "taxonomy.v2.json"
-STORAGE_VERSION = 32
 
 
 class WindowedClient:
@@ -125,23 +125,16 @@ def _traces() -> list[dict]:
     ]
 
 
-def _run(client, cached=None):
+def _run(client, cached=None, *, as_of=AS_OF):
     return compute_report(
         client,
-        as_of=AS_OF,
+        as_of=as_of,
         weeks=8,
         include_current_wtd=True,
         taxonomy_path=TAXONOMY_PATH,
         refresh_timeout_seconds=30.0,
-        cached_sessions=cached,
+        session_cache=cached,
     )
-
-
-def _by_week(run) -> dict[date, tuple]:
-    grouped: dict[date, list] = {}
-    for session in run.result.sessions:
-        grouped.setdefault(session.cohort_week, []).append(session)
-    return {week: tuple(sessions) for week, sessions in grouped.items()}
 
 
 def test_cached_refresh_produces_the_same_dashboard_as_a_full_refresh():
@@ -154,7 +147,7 @@ def test_cached_refresh_produces_the_same_dashboard_as_a_full_refresh():
     expected = project_dashboard(full).dashboard_dict()
 
     cached_client = WindowedClient(_traces())
-    cached = _run(cached_client, cached=_by_week(full))
+    cached = _run(cached_client, cached=full.session_cache)
     actual = project_dashboard(cached).dashboard_dict()
 
     # `source` counts the traces THIS run pulled, so a narrowed refresh
@@ -178,7 +171,7 @@ def test_cached_refresh_actually_narrows_the_langfuse_window():
     full_start = full_client.bounds[0][0]
 
     cached_client = WindowedClient(_traces())
-    _run(cached_client, cached=_by_week(full))
+    _run(cached_client, cached=full.session_cache)
 
     assert cached_client.bounds[0][0] > full_start
 
@@ -191,7 +184,7 @@ def test_the_most_recent_closed_week_is_refetched_not_reused():
     """
     full = _run(WindowedClient(_traces()))
     cached_client = WindowedClient(_traces())
-    _run(cached_client, cached=_by_week(full))
+    _run(cached_client, cached=full.session_cache)
 
     fetch_start = cached_client.bounds[0][0].astimezone(VIETNAM).date()
     last_complete_monday = date(2026, 7, 20)
@@ -204,10 +197,8 @@ def test_a_session_analyzed_now_wins_over_its_cached_copy():
     Feeds the merge a deliberately wrong cached copy of a session the narrowed
     run analyzes itself, and asserts the freshly analyzed values survive.
     """
-    from dataclasses import replace
-
     full = _run(WindowedClient(_traces()))
-    cached = _by_week(full)
+    cached = full.session_cache.weeks
     fresh_week = max(cached)
     fresh = cached[fresh_week][0]
 
@@ -215,6 +206,7 @@ def test_a_session_analyzed_now_wins_over_its_cached_copy():
     poisoned[fresh_week] = (
         replace(fresh, turn_count=fresh.turn_count + 99, outcome="unclassified"),
     )
+    poisoned = replace(full.session_cache, weeks=poisoned)
 
     merged = _run(WindowedClient(_traces()), cached=poisoned)
     identifiers = [s.session_id for s in merged.result.sessions]
@@ -248,7 +240,7 @@ def test_a_session_carried_into_the_window_keeps_its_original_cohort_week():
     week with a turn count of one.
     """
     full = _run(WindowedClient(_carried_traces()))
-    cached = _by_week(full)
+    cached = full.session_cache
     expected = next(
         s for s in full.result.sessions if s.session_id == "ticket-carry"
     )
@@ -268,7 +260,7 @@ def test_a_session_carried_into_the_window_keeps_its_original_cohort_week():
 def test_a_carried_session_is_not_counted_twice():
     """Its cached copy must give way to the freshly analyzed one."""
     full = _run(WindowedClient(_carried_traces()))
-    narrowed = _run(WindowedClient(_carried_traces()), cached=_by_week(full))
+    narrowed = _run(WindowedClient(_carried_traces()), cached=full.session_cache)
 
     identifiers = [s.session_id for s in narrowed.result.sessions]
     assert identifiers.count("ticket-carry") == 1
@@ -280,7 +272,7 @@ def test_a_carried_session_keeps_its_cached_copy_when_the_refetch_fails():
     from weekly_cs_report.langfuse_client import LangfuseAPIError
 
     full = _run(WindowedClient(_carried_traces()))
-    cached = _by_week(full)
+    cached = full.session_cache
     expected = next(
         s for s in full.result.sessions if s.session_id == "ticket-carry"
     )
@@ -311,7 +303,7 @@ def test_cached_refresh_with_observations_matches_a_full_refresh():
     expected = project_dashboard(full).dashboard_dict()
 
     client = WindowedClient(traces, observations)
-    cached = _run(client, cached=_by_week(full))
+    cached = _run(client, cached=full.session_cache)
     actual = project_dashboard(cached).dashboard_dict()
 
     assert cached.enrichment_status == "complete"
@@ -329,7 +321,7 @@ def test_enrichment_lanes_narrow_with_the_traces_plus_one_day():
     full = _run(full_client)
 
     client = WindowedClient(traces, observations)
-    _run(client, cached=_by_week(full))
+    _run(client, cached=full.session_cache)
 
     trace_start = client.bounds[0][0]
     enrichment_start = client.enrichment_bounds[0][0]
@@ -345,7 +337,7 @@ def test_a_carried_session_keeps_the_signals_of_its_older_turns():
     assert expected.dimensions.tpe_signals  # the fixture pins TPE to carry-0
 
     client = WindowedClient(traces, observations)
-    narrowed = _run(client, cached=_by_week(full))
+    narrowed = _run(client, cached=full.session_cache)
     actual = next(s for s in narrowed.result.sessions if s.session_id == "ticket-carry")
 
     assert actual.dimensions == expected.dimensions
@@ -364,61 +356,193 @@ def test_a_failed_carried_observation_lookup_fails_enrichment_closed():
         def list_observations(self, trace_id: str) -> list[dict]:
             raise LangfuseAPIError("GET", "/api/public/observations", 500)
 
-    narrowed = _run(FailingObservations(traces, observations), cached=_by_week(full))
+    narrowed = _run(FailingObservations(traces, observations), cached=full.session_cache)
 
     assert narrowed.enrichment_status == "partial"
     assert "carried_trace_observations" in narrowed.failed_enrichment_lanes
 
 
-def test_cache_round_trip_preserves_every_session_field(tmp_path):
-    full = _run(WindowedClient(_traces()))
+def _private_path(tmp_path: Path) -> Path:
     directory = tmp_path / "runtime"
     directory.mkdir(mode=0o700)
-    path = directory / "session_cache.json"
-
-    write_session_cache(
-        path,
-        _by_week(full),
-        storage_version=STORAGE_VERSION,
-        fetched_at=datetime(2026, 7, 29, tzinfo=timezone.utc),
-    )
-    restored = load_session_cache(path, storage_version=STORAGE_VERSION)
-
-    assert restored == _by_week(full)
+    return directory / "session_cache.json"
 
 
-def test_a_cache_from_another_storage_version_is_discarded(tmp_path):
-    """Stored sessions feed aggregates whose shape the projection version sets."""
+def _ledger_traces() -> list[dict]:
+    """Traces that exercise everything the cache must carry besides sessions."""
+    unkeyed = trace("unkeyed-0", None, 0, "2026-07-02T02:00:00Z", "No session")
+    return [
+        *_carried_traces(),
+        trace("bad-0", "ticket-bad", None, "2026-07-01T03:00:00Z", "No turn"),
+        unkeyed,
+    ]
+
+
+def test_cache_round_trip_preserves_everything_it_stores(tmp_path):
+    full = _run(WindowedClient(_ledger_traces()))
+    cache = full.session_cache
+    assert cache.invalid_keyed and cache.unkeyed and cache.seen
+    path = _private_path(tmp_path)
+
+    write_session_cache(path, cache)
+
+    assert load_session_cache(path) == cache
+
+
+def test_a_cache_from_other_analysis_code_is_not_reused():
+    """Stored outcomes are only as current as the code that classified them."""
     full = _run(WindowedClient(_traces()))
-    directory = tmp_path / "runtime"
-    directory.mkdir(mode=0o700)
-    path = directory / "session_cache.json"
+    stale = replace(full.session_cache, fingerprint="0" * 64)
 
-    write_session_cache(
+    client = WindowedClient(_traces())
+    _run(client, cached=stale)
+
+    full_client = WindowedClient(_traces())
+    _run(full_client)
+    assert client.bounds[0][0] == full_client.bounds[0][0]
+
+
+def test_a_cache_in_the_old_format_is_ignored_not_an_error(tmp_path):
+    from weekly_cs_report.cache_store import atomic_private_json
+
+    path = _private_path(tmp_path)
+    atomic_private_json(
         path,
-        _by_week(full),
-        storage_version=STORAGE_VERSION,
-        fetched_at=datetime(2026, 7, 29, tzinfo=timezone.utc),
+        {"schema_version": 1, "storage_version": 32, "weeks": {}},
+        SessionCacheError,
+        "session cache is invalid",
     )
 
-    assert load_session_cache(path, storage_version=STORAGE_VERSION + 1) == {}
+    assert load_session_cache(path) is None
 
 
 def test_a_week_holding_a_foreign_cohort_is_rejected(tmp_path):
     """A session filed under the wrong week would be counted in the wrong week."""
     full = _run(WindowedClient(_traces()))
-    directory = tmp_path / "runtime"
-    directory.mkdir(mode=0o700)
-    path = directory / "session_cache.json"
-
-    weeks = _by_week(full)
+    weeks = full.session_cache.weeks
     target = min(weeks)
     foreign = next(iter(weeks[max(weeks)]))
 
     with pytest.raises(SessionCacheError):
         write_session_cache(
-            path,
-            {target: (*weeks[target], foreign)},
-            storage_version=STORAGE_VERSION,
-            fetched_at=datetime(2026, 7, 29, tzinfo=timezone.utc),
+            _private_path(tmp_path),
+            replace(
+                full.session_cache,
+                weeks={**weeks, target: (*weeks[target], foreign)},
+            ),
         )
+
+
+def test_a_carried_sessions_chat_traces_are_not_analyzed():
+    """A session id is shared with chat follow-ups the ticket filter drops.
+
+    A full refresh never sees them. Refetching the session by id must not let
+    them in either: a chat trace without a turn quarantines the whole ticket.
+    """
+    chat = trace("carry-chat", "ticket-carry", None, "2026-07-28T04:00:00Z", "Chat")
+    chat["input"]["source"] = "chat"
+    traces = [*_carried_traces(), chat]
+    full = _run(WindowedClient(traces))
+    expected = project_dashboard(full).dashboard_dict()
+
+    narrowed = _run(WindowedClient(traces), cached=full.session_cache)
+    actual = project_dashboard(narrowed).dashboard_dict()
+
+    assert "ticket-carry" in {s.session_id for s in narrowed.result.sessions}
+    for key in expected:
+        if key != "source":
+            assert actual[key] == expected[key], key
+
+
+class LangfuseAt(WindowedClient):
+    """A Langfuse that only holds what had been written by `now`."""
+
+    def __init__(self, traces, observations=(), *, now: datetime) -> None:
+        visible = [
+            raw for raw in traces
+            if _stamp(raw["timestamp"]) <= now
+        ]
+        super().__init__(
+            visible,
+            [o for o in observations if _stamp(o["startTime"]) <= now],
+        )
+
+
+def _moving_traces() -> list[dict]:
+    """Tickets whose history keeps changing after their week closes.
+
+    - ticket-late opens on a Sunday and comes back mid-next-week; once that
+      later turn leaves the fetch window only the stored copy remembers it.
+    - ticket-bad is invalid in a settled week and takes a valid turn later;
+      that turn alone would analyze as a brand-new ticket.
+    - ticket-pre starts in a week that later slides out of the window; a full
+      refresh then reports it as starting before the window.
+    """
+    return [
+        *_ledger_traces(),
+        trace("late-a0", "ticket-sunday", 0, "2026-07-26T03:00:00Z", "Sunday"),
+        trace("late-a1", "ticket-sunday", 1, "2026-07-29T03:00:00Z", "Back again"),
+        trace("bad-1", "ticket-bad", 1, "2026-08-04T03:00:00Z", "Valid later"),
+        trace("pre-0", "ticket-pre", 0, "2026-06-10T03:00:00Z", "Early"),
+        trace("pre-1", "ticket-pre", 1, "2026-06-17T03:00:00Z", "Early again"),
+    ]
+
+
+def _comparable(run) -> dict:
+    payload = project_dashboard(run).dashboard_dict()
+    payload.pop("source")
+    return payload
+
+
+def test_refreshing_from_the_cache_matches_a_full_refresh_day_after_day():
+    """The cache is only safe if chaining it never drifts from a full refresh.
+
+    Steps across two Monday boundaries, feeding each run the cache the previous
+    one returned -- exactly what the serving process does -- against a Langfuse
+    that grows with time.
+    """
+    traces = _moving_traces()
+    observations = _observations_for(traces)
+    steps = [
+        datetime(2026, 7, 27, 9, tzinfo=VIETNAM),
+        datetime(2026, 7, 29, 12, tzinfo=VIETNAM),
+        datetime(2026, 8, 3, 9, tzinfo=VIETNAM),
+        datetime(2026, 8, 5, 12, tzinfo=VIETNAM),
+        datetime(2026, 8, 10, 9, tzinfo=VIETNAM),
+        datetime(2026, 8, 12, 12, tzinfo=VIETNAM),
+    ]
+    cache = None
+    narrowed = 0
+    for now in steps:
+        full_client = LangfuseAt(traces, observations, now=now)
+        full = _run(full_client, as_of=now)
+        client = LangfuseAt(traces, observations, now=now)
+        cached = _run(client, cache, as_of=now)
+        narrowed += client.bounds[0][0] > full_client.bounds[0][0]
+        assert cached.enrichment_status == "complete", now
+        assert _comparable(cached) == _comparable(full), now
+        cache = cached.session_cache
+    # Every step after the first must actually have reused the cache.
+    assert narrowed == len(steps) - 1
+
+
+def test_a_cache_left_over_from_an_outage_does_not_hide_the_gap():
+    """A cache only knows traces up to when it was written.
+
+    After two weeks without a refresh, the week it would normally reuse up to
+    took turns it never saw; the fetch must reach back far enough to see them.
+    """
+    traces = _moving_traces()
+    observations = _observations_for(traces)
+    before = datetime(2026, 7, 27, 9, tzinfo=VIETNAM)
+    after = datetime(2026, 8, 12, 12, tzinfo=VIETNAM)
+    stale = _run(LangfuseAt(traces, observations, now=before), as_of=before)
+
+    full = _run(LangfuseAt(traces, observations, now=after), as_of=after)
+    cached = _run(
+        LangfuseAt(traces, observations, now=after),
+        stale.session_cache,
+        as_of=after,
+    )
+
+    assert _comparable(cached) == _comparable(full)

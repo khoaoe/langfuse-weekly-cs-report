@@ -12,14 +12,21 @@ What is stored is the analyzed projection, never the raw traces it came from:
 the same grain already persisted in `dashboard_snapshot.json`. The architectural
 rule that raw trace/observation payloads never reach disk is unaffected.
 
+Valid sessions alone are not enough to reproduce a full refresh. The cache also
+keeps what the analysis set aside -- keyed and unkeyed quality issues -- and,
+for every session it saw, the timestamps of its first and last trace. Without
+them a cached refresh loses those sessions from the gate and data_quality,
+and books the later turn of an excluded session as a brand-new ticket.
+
 Structure mirrors the Freshdesk job caches; the hardened private-file I/O and
 validation helpers come from `cache_store` rather than being reimplemented.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import hashlib
 from pathlib import Path
-import re
 
 from .cache_store import (
     atomic_private_json,
@@ -28,20 +35,60 @@ from .cache_store import (
     validate_utc_timestamp,
 )
 from .models import (
+    QualityIssue,
     SessionMetrics,
     TicketDimensions,
     TransferTrigger,
 )
 
 
-_CACHE_SCHEMA_VERSION = 1
-_CACHE_KEYS = frozenset({"schema_version", "storage_version", "weeks"})
-_WEEK_KEYS = frozenset({"fetched_at", "sessions"})
-_FILENAME = re.compile(r"session_cache_(\d{4}-\d{2}-\d{2})\.json\Z")
+_CACHE_SCHEMA_VERSION = 2
+_CACHE_KEYS = frozenset({
+    "schema_version",
+    "fingerprint",
+    "fetched_at",
+    "weeks",
+    "seen",
+    "invalid_keyed",
+    "unkeyed",
+})
+_ISSUE_KEYS = frozenset({"reason", "session_id", "trace_id", "timestamp"})
+_PACKAGE_DIRECTORY = Path(__file__).resolve().parent
 
 
 class SessionCacheError(RuntimeError):
     """A sanitized private-cache contract error."""
+
+
+@dataclass(frozen=True)
+class SessionCache:
+    """Everything a refresh needs to skip refetching the weeks it settled.
+
+    ``fetched_at`` is how far the data reaches: every trace up to it was seen.
+    ``seen`` maps each session id to its first and last trace timestamps.
+    """
+
+    fingerprint: str
+    fetched_at: datetime
+    weeks: Mapping[date, tuple[SessionMetrics, ...]]
+    seen: Mapping[str, tuple[datetime, datetime]]
+    invalid_keyed: tuple[QualityIssue, ...]
+    unkeyed: tuple[QualityIssue, ...]
+
+
+def cache_fingerprint(taxonomy_path: Path) -> str:
+    """Hash of everything that decides what a session analyzes to.
+
+    Stored sessions carry classified outcomes and mapped dimensions, so a
+    change to the taxonomy or to any analysis code must not reuse them.
+    ponytail: hashes the whole package, so a web-only deploy also costs one
+    full refresh; narrow the file list if deploys get frequent.
+    """
+    digest = hashlib.sha256(Path(taxonomy_path).read_bytes())
+    for source in sorted(_PACKAGE_DIRECTORY.glob("*.py")):
+        digest.update(source.name.encode())
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
 
 
 def _utc_iso(value: datetime) -> str:
@@ -267,75 +314,118 @@ def _session_from(value: object) -> SessionMetrics:
         raise SessionCacheError("session is invalid") from None
 
 
-def load_session_cache(
-    path: Path, *, storage_version: int
-) -> dict[date, tuple[SessionMetrics, ...]]:
-    """Read cached sessions per cohort week, or `{}` when unusable.
+def _issue_dict(value: QualityIssue) -> dict[str, object]:
+    return {
+        "reason": value.reason,
+        "session_id": value.session_id,
+        "trace_id": value.trace_id,
+        "timestamp": None if value.timestamp is None else _utc_iso(value.timestamp),
+    }
 
-    A cache written against a different projection version is discarded rather
-    than migrated: the stored sessions feed aggregates whose shape that version
-    defines, so reusing them across a bump is how a silent miscount starts.
+
+def _issue_from(value: object) -> QualityIssue:
+    if not isinstance(value, dict) or set(value) != _ISSUE_KEYS:
+        raise SessionCacheError("quality issue is invalid")
+    return QualityIssue(
+        reason=_require(value["reason"], "issue reason", str),
+        session_id=_optional(value["session_id"], "issue session id", str),
+        trace_id=_optional(value["trace_id"], "issue trace id", str),
+        timestamp=(
+            None
+            if value["timestamp"] is None
+            else _parse_utc(value["timestamp"], "issue timestamp")
+        ),
+    )
+
+
+def _issues_from(value: object) -> tuple[QualityIssue, ...]:
+    if not isinstance(value, list):
+        raise SessionCacheError("session cache is invalid")
+    return tuple(_issue_from(item) for item in value)
+
+
+def load_session_cache(path: Path) -> SessionCache | None:
+    """Read the cache, or None when there is none or it predates this format.
+
+    Whether it may be reused is the caller's call (see `cache_fingerprint`):
+    this only guarantees the file is well formed.
     """
     value = read_private_json(Path(path), SessionCacheError, "session cache is invalid")
     if value is None:
-        return {}
-    if not isinstance(value, dict) or set(value) != _CACHE_KEYS:
+        return None
+    if not isinstance(value, dict):
         raise SessionCacheError("session cache is invalid")
-    if value["schema_version"] != _CACHE_SCHEMA_VERSION:
-        return {}
-    if value["storage_version"] != storage_version:
-        return {}
-    weeks = value["weeks"]
-    if not isinstance(weeks, dict):
+    if value.get("schema_version") != _CACHE_SCHEMA_VERSION:
+        return None
+    if set(value) != _CACHE_KEYS:
         raise SessionCacheError("session cache is invalid")
+    fingerprint = _require(value["fingerprint"], "fingerprint", str)
+    fetched_at = _parse_utc(value["fetched_at"], "fetched timestamp")
 
-    result: dict[date, tuple[SessionMetrics, ...]] = {}
-    for week, payload in weeks.items():
+    weeks_raw = value["weeks"]
+    if not isinstance(weeks_raw, dict):
+        raise SessionCacheError("session cache is invalid")
+    weeks: dict[date, tuple[SessionMetrics, ...]] = {}
+    identifiers: list[str] = []
+    for week, sessions_raw in weeks_raw.items():
         validate_monday(week, "cached week", SessionCacheError)
-        if not isinstance(payload, dict) or set(payload) != _WEEK_KEYS:
-            raise SessionCacheError("session cache is invalid")
-        validate_utc_timestamp(
-            payload["fetched_at"], "fetched timestamp", SessionCacheError
-        )
-        sessions_raw = payload["sessions"]
         if not isinstance(sessions_raw, list):
             raise SessionCacheError("session cache is invalid")
         sessions = tuple(_session_from(item) for item in sessions_raw)
         week_date = date.fromisoformat(week)
         if any(session.cohort_week != week_date for session in sessions):
             raise SessionCacheError("session cache is invalid")
-        identifiers = [session.session_id for session in sessions]
-        if len(identifiers) != len(set(identifiers)):
-            raise SessionCacheError("session cache contains duplicate sessions")
-        result[week_date] = sessions
-    return result
+        identifiers.extend(session.session_id for session in sessions)
+        weeks[week_date] = sessions
+    if len(identifiers) != len(set(identifiers)):
+        raise SessionCacheError("session cache contains duplicate sessions")
+
+    seen_raw = value["seen"]
+    if not isinstance(seen_raw, dict):
+        raise SessionCacheError("session cache is invalid")
+    seen: dict[str, tuple[datetime, datetime]] = {}
+    for session_id, span in seen_raw.items():
+        if not isinstance(span, list) or len(span) != 2:
+            raise SessionCacheError("session cache is invalid")
+        first = _parse_utc(span[0], "first trace timestamp")
+        last = _parse_utc(span[1], "last trace timestamp")
+        if last < first:
+            raise SessionCacheError("session cache is invalid")
+        seen[session_id] = (first, last)
+
+    return SessionCache(
+        fingerprint=fingerprint,  # type: ignore[arg-type]
+        fetched_at=fetched_at,
+        weeks=weeks,
+        seen=seen,
+        invalid_keyed=_issues_from(value["invalid_keyed"]),
+        unkeyed=_issues_from(value["unkeyed"]),
+    )
 
 
-def write_session_cache(
-    path: Path,
-    weeks: Mapping[date, Sequence[SessionMetrics]],
-    *,
-    storage_version: int,
-    fetched_at: datetime,
-) -> None:
-    """Replace the cache with `weeks`, atomically and `0600`."""
+def write_session_cache(path: Path, cache: SessionCache) -> None:
+    """Replace the cache with `cache`, atomically and `0600`."""
     payload_weeks: dict[str, object] = {}
-    for week, sessions in weeks.items():
+    for week, sessions in sorted(cache.weeks.items()):
         if not isinstance(week, date) or week.weekday() != 0:
             raise SessionCacheError("cached week is invalid")
         ordered = sorted(sessions, key=lambda item: item.session_id)
         if any(session.cohort_week != week for session in ordered):
             raise SessionCacheError("cached week is invalid")
-        payload_weeks[week.isoformat()] = {
-            "fetched_at": _utc_iso(fetched_at),
-            "sessions": [_session_dict(session) for session in ordered],
-        }
+        payload_weeks[week.isoformat()] = [_session_dict(s) for s in ordered]
     atomic_private_json(
         Path(path),
         {
             "schema_version": _CACHE_SCHEMA_VERSION,
-            "storage_version": storage_version,
+            "fingerprint": cache.fingerprint,
+            "fetched_at": _utc_iso(cache.fetched_at),
             "weeks": payload_weeks,
+            "seen": {
+                session_id: [_utc_iso(first), _utc_iso(last)]
+                for session_id, (first, last) in sorted(cache.seen.items())
+            },
+            "invalid_keyed": [_issue_dict(i) for i in cache.invalid_keyed],
+            "unkeyed": [_issue_dict(i) for i in cache.unkeyed],
         },
         SessionCacheError,
         "session cache is invalid",
