@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from tests.fixtures.traces import TRANSFER_HTML, trace
 from weekly_cs_report.dashboard_schema import project_dashboard
+from weekly_cs_report import report as report_module
 from weekly_cs_report.report import compute_report
 from weekly_cs_report.session_cache import (
     SessionCacheError,
@@ -176,19 +177,90 @@ def test_cached_refresh_actually_narrows_the_langfuse_window():
     assert cached_client.bounds[0][0] > full_start
 
 
-def test_the_most_recent_closed_week_is_refetched_not_reused():
-    """A just-closed week can still gain turns and reopen counts.
+def test_a_refresh_rereads_only_the_overlap_before_the_previous_one():
+    """Only what arrived since the last refresh, plus room for late writes.
 
-    `reopen_within_7d` counts a 168-hour window from the first trace, so the
-    week that closed yesterday is not settled yet.
+    Langfuse filters by a trace's own timestamp, not by when it was written,
+    and observations were measured landing up to ~23.5 h late. Rereading 48 h
+    before the previous refresh's reach picks those up on a later refresh.
     """
     full = _run(WindowedClient(_traces()))
-    cached_client = WindowedClient(_traces())
-    _run(cached_client, cached=full.session_cache)
+    client = WindowedClient(_traces())
+    _run(client, cached=full.session_cache)
 
-    fetch_start = cached_client.bounds[0][0].astimezone(VIETNAM).date()
-    last_complete_monday = date(2026, 7, 20)
-    assert fetch_start <= last_complete_monday
+    assert client.bounds[0][0] == full.session_cache.fetched_at - timedelta(hours=48)
+
+
+def _open_week_traces() -> list[dict]:
+    """An open-week ticket that opened more than the overlap before AS_OF."""
+    return [
+        *_traces(),
+        trace("open-0", "ticket-open", 0, "2026-07-27T01:00:00Z", "Opened Monday"),
+    ]
+
+
+def test_an_open_week_ticket_outside_the_overlap_is_reused_not_refetched():
+    """The open week is where most refreshes would otherwise spend requests."""
+    full = _run(WindowedClient(_open_week_traces()))
+    client = WindowedClient(_open_week_traces())
+    cached = _run(client, cached=full.session_cache)
+
+    assert client.bounds[0][0] > _stamp("2026-07-27T01:00:00Z")
+    reused = next(s for s in cached.result.sessions if s.session_id == "ticket-open")
+    assert reused.cohort_status == "wtd"
+    assert _comparable(cached) == _comparable(full)
+
+
+def test_a_cache_older_than_a_day_is_rebuilt_in_full():
+    """The safety net for what the overlap cannot see: writes later than it,
+    edits and deletions of old traces."""
+    before = datetime(2026, 7, 28, 9, tzinfo=VIETNAM)
+    after = before + timedelta(hours=25)
+    traces = _open_week_traces()
+    stale = _run(LangfuseAt(traces, now=before), as_of=before)
+    chained = _run(LangfuseAt(traces, now=before + timedelta(hours=12)),
+                   stale.session_cache, as_of=before + timedelta(hours=12))
+
+    full_client = LangfuseAt(traces, now=after)
+    _run(full_client, as_of=after)
+    client = LangfuseAt(traces, now=after)
+    _run(client, chained.session_cache, as_of=after)
+
+    # The chained run was incremental, but it does not reset the clock.
+    assert client.bounds[0][0] == full_client.bounds[0][0]
+
+
+def test_refreshing_every_few_hours_across_a_monday_matches_a_full_refresh():
+    """What production does: a refresh every few minutes, chained.
+
+    Crosses the Monday boundary, where open-week tickets reused from the cache
+    must turn into complete-week ones without being refetched.
+    """
+    traces = [
+        *_moving_traces(),
+        # Opens early in the week that closes mid-chain: far enough back that
+        # it is reused from the cache, never refetched, when Monday comes.
+        trace("tue-0", "ticket-tuesday", 0, "2026-07-28T05:00:00Z", "Tuesday"),
+    ]
+    observations = _observations_for(traces)
+    steps = [
+        datetime(2026, 8, 2, 20, tzinfo=VIETNAM),
+        datetime(2026, 8, 3, 1, tzinfo=VIETNAM),
+        datetime(2026, 8, 3, 9, tzinfo=VIETNAM),
+        datetime(2026, 8, 3, 18, tzinfo=VIETNAM),
+    ]
+    cache = None
+    for index, now in enumerate(steps):
+        full = _run(LangfuseAt(traces, observations, now=now), as_of=now)
+        client = LangfuseAt(traces, observations, now=now)
+        cached = _run(client, cache, as_of=now)
+        if index:
+            assert client.bounds[0][0] == cache.fetched_at - timedelta(hours=48), now
+        assert cached.enrichment_status == "complete", now
+        assert _comparable(cached) == _comparable(full), now
+        cache = cached.session_cache
+    tuesday = next(s for s in cached.result.sessions if s.session_id == "ticket-tuesday")
+    assert tuesday.cohort_status == "complete"
 
 
 def test_a_session_analyzed_now_wins_over_its_cached_copy():
@@ -494,13 +566,14 @@ def _comparable(run) -> dict:
     return payload
 
 
-def test_refreshing_from_the_cache_matches_a_full_refresh_day_after_day():
+def test_refreshing_from_the_cache_matches_a_full_refresh_day_after_day(monkeypatch):
     """The cache is only safe if chaining it never drifts from a full refresh.
 
     Steps across two Monday boundaries, feeding each run the cache the previous
     one returned -- exactly what the serving process does -- against a Langfuse
     that grows with time.
     """
+    monkeypatch.setattr(report_module, "_FULL_REBUILD_EVERY", timedelta(days=365))
     traces = _moving_traces()
     observations = _observations_for(traces)
     steps = [
@@ -526,12 +599,13 @@ def test_refreshing_from_the_cache_matches_a_full_refresh_day_after_day():
     assert narrowed == len(steps) - 1
 
 
-def test_a_cache_left_over_from_an_outage_does_not_hide_the_gap():
+def test_a_cache_left_over_from_an_outage_does_not_hide_the_gap(monkeypatch):
     """A cache only knows traces up to when it was written.
 
     After two weeks without a refresh, the week it would normally reuse up to
     took turns it never saw; the fetch must reach back far enough to see them.
     """
+    monkeypatch.setattr(report_module, "_FULL_REBUILD_EVERY", timedelta(days=365))
     traces = _moving_traces()
     observations = _observations_for(traces)
     before = datetime(2026, 7, 27, 9, tzinfo=VIETNAM)
@@ -545,4 +619,54 @@ def test_a_cache_left_over_from_an_outage_does_not_hide_the_gap():
         as_of=after,
     )
 
+    assert _comparable(cached) == _comparable(full)
+
+
+class LangfuseWithLateWrites(WindowedClient):
+    """A Langfuse where some observations are written hours after they start."""
+
+    def __init__(self, traces, observations, *, now: datetime, delays: dict) -> None:
+        super().__init__(
+            [raw for raw in traces if _stamp(raw["timestamp"]) <= now],
+            [
+                o for o in observations
+                if _stamp(o["startTime"]) + delays.get(o["id"], timedelta()) <= now
+            ],
+        )
+
+
+def test_an_observation_written_late_is_picked_up_by_a_later_refresh():
+    """Langfuse filters by event time, so a late write predates the last fetch.
+
+    The refresh that ran before the observation landed cached the ticket
+    without its TPE signal. Only rereading the overlap lets the next refresh
+    see it; a watermark at the previous refresh would freeze the gap.
+    """
+    traces = [*_traces(), trace("tpe-0", "ticket-tpe", 0, "2026-07-28T02:00:00Z", "Reply")]
+    observations = _observations_for(traces, tpe_only={"tpe-0"})
+    delays = {"tpe-tpe-0": timedelta(hours=20)}
+    before = datetime(2026, 7, 28, 12, tzinfo=VIETNAM)
+    after = before + timedelta(hours=20)
+
+    early = _run(
+        LangfuseWithLateWrites(traces, observations, now=before, delays=delays),
+        as_of=before,
+    )
+    assert not next(
+        s for s in early.result.sessions if s.session_id == "ticket-tpe"
+    ).dimensions.tpe_signals
+
+    full = _run(
+        LangfuseWithLateWrites(traces, observations, now=after, delays=delays),
+        as_of=after,
+    )
+    cached = _run(
+        LangfuseWithLateWrites(traces, observations, now=after, delays=delays),
+        early.session_cache,
+        as_of=after,
+    )
+
+    assert next(
+        s for s in cached.result.sessions if s.session_id == "ticket-tpe"
+    ).dimensions.tpe_signals
     assert _comparable(cached) == _comparable(full)

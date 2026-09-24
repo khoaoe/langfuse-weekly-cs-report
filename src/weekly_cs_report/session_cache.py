@@ -3,9 +3,9 @@ from __future__ import annotations
 """Strict private cache for analyzed Langfuse sessions, keyed by cohort week.
 
 Refreshing the dashboard refetched all twelve reporting weeks from Langfuse
-every cycle (~2,767 pages, ~15 minutes) even though a closed week's traces
-never change. This stores the `SessionMetrics` a closed week analyzed to, so a
-refresh only fetches the weeks that can still move.
+every cycle (~2,767 pages, ~15 minutes) even though almost none of it changes
+between two refreshes. This stores the `SessionMetrics` every ticket in the
+window analyzed to, so a refresh only fetches what arrived since the last one.
 
 What is stored is the analyzed projection, never the raw traces it came from:
 `SessionMetrics` holds classified scalars and mapped taxonomy values, which is
@@ -42,11 +42,12 @@ from .models import (
 )
 
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 _CACHE_KEYS = frozenset({
     "schema_version",
     "fingerprint",
     "fetched_at",
+    "built_at",
     "weeks",
     "seen",
     "invalid_keyed",
@@ -65,11 +66,14 @@ class SessionCache:
     """Everything a refresh needs to skip refetching the weeks it settled.
 
     ``fetched_at`` is how far the data reaches: every trace up to it was seen.
+    ``built_at`` is when the last full refresh ran; incremental refreshes carry
+    it forward, so it says how long the cache has gone without being rebuilt.
     ``seen`` maps each session id to its first and last trace timestamps.
     """
 
     fingerprint: str
     fetched_at: datetime
+    built_at: datetime
     weeks: Mapping[date, tuple[SessionMetrics, ...]]
     seen: Mapping[str, tuple[datetime, datetime]]
     invalid_keyed: tuple[QualityIssue, ...]
@@ -361,6 +365,7 @@ def load_session_cache(path: Path) -> SessionCache | None:
         raise SessionCacheError("session cache is invalid")
     fingerprint = _require(value["fingerprint"], "fingerprint", str)
     fetched_at = _parse_utc(value["fetched_at"], "fetched timestamp")
+    built_at = _parse_utc(value["built_at"], "built timestamp")
 
     weeks_raw = value["weeks"]
     if not isinstance(weeks_raw, dict):
@@ -396,6 +401,7 @@ def load_session_cache(path: Path) -> SessionCache | None:
     return SessionCache(
         fingerprint=fingerprint,  # type: ignore[arg-type]
         fetched_at=fetched_at,
+        built_at=built_at,
         weeks=weeks,
         seen=seen,
         invalid_keyed=_issues_from(value["invalid_keyed"]),
@@ -419,6 +425,7 @@ def write_session_cache(path: Path, cache: SessionCache) -> None:
             "schema_version": _CACHE_SCHEMA_VERSION,
             "fingerprint": cache.fingerprint,
             "fetched_at": _utc_iso(cache.fetched_at),
+            "built_at": _utc_iso(cache.built_at),
             "weeks": payload_weeks,
             "seen": {
                 session_id: [_utc_iso(first), _utc_iso(last)]

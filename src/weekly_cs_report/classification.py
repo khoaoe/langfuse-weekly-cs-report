@@ -179,7 +179,16 @@ def normalize_trace(raw: dict[str, object]) -> TraceRecord | QualityIssue:
 
 
 def _cohort_status(first: TraceRecord, window: CohortWindow) -> str:
-    local_timestamp = first.timestamp.astimezone(VIETNAM_TIMEZONE)
+    return cohort_status_for(first.timestamp, window)
+
+
+def cohort_status_for(first_timestamp: datetime, window: CohortWindow) -> str:
+    """Where a ticket whose canonical first trace is at `first_timestamp` falls.
+
+    Depends on the window alone, so a ticket reused from the session cache is
+    restamped with it rather than refetched when the week it opened closes.
+    """
+    local_timestamp = first_timestamp.astimezone(VIETNAM_TIMEZONE)
     if window.complete_start_local <= local_timestamp < window.complete_end_exclusive_local:
         return "complete"
     if (

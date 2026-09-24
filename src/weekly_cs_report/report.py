@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time as time_of_day, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 import time
@@ -9,7 +9,8 @@ import threading
 from typing import Callable, Mapping, Sequence
 
 from .categories import Taxonomy, load_taxonomy
-from .cohort import VIETNAM_TIMEZONE, build_cohort_window, cohort_week_for
+from .classification import cohort_status_for
+from .cohort import build_cohort_window
 from .dimension_verifier import is_ticket_trace
 from .enrichment import (
     ENRICHMENT_NAMES,
@@ -65,6 +66,16 @@ _ENRICHMENT_DRAIN_SECONDS = 5.0
 _ENRICHMENT_MARGIN = timedelta(days=1)
 _ENRICHMENT_NAME_SET = frozenset(ENRICHMENT_NAMES)
 _CARRIED_LANE = "carried_trace_observations"
+# Langfuse filters traces by their own timestamp, not by when they were
+# written, and writes land late: sampled 2026-09-24, observations arrived up to
+# ~23.5 h after their trace's timestamp. Each refresh rereads this much before
+# the previous refresh's reach, so a late write is picked up by a later one.
+_REFETCH_OVERLAP = timedelta(hours=48)
+# The safety net for what the overlap cannot see: writes later than it, and
+# edits or deletions of older traces.
+# ponytail: fixed daily -- one full refresh (~4k requests) per ~96
+# incremental ones; stretch it if Langfuse load matters more than drift.
+_FULL_REBUILD_EVERY = timedelta(hours=24)
 
 
 @dataclass
@@ -95,27 +106,18 @@ class _CombinedCancellationEvent(threading.Event):
 def _fetch_start(window: CohortWindow, cache: SessionCache | None) -> datetime:
     """Earliest timestamp this run must ask Langfuse for.
 
-    Every week up to and including the one before the week that just closed is
-    reused from the cache; that one and the open week are refetched, since a
-    session in the just-closed week can still take turns and `reopen_within_7d`
-    counts 168 hours from its first trace. The cache can stand in for a week
-    only if it was written after that week's successor began -- a cache left
-    over from a long outage would otherwise miss the turns in between.
+    Everything the previous refresh saw, less the overlap for late writes,
+    comes from the cache. A ticket with a new turn is recognised by its session
+    id and refetched whole, so nothing older has to be reread -- including the
+    open week and the week that just closed. Measured from the cache's own
+    reach, so a cache left over from an outage still covers the gap.
 
-    Returns `window.query_from_utc` when nothing can be reused.
+    Returns `window.query_from_utc` -- a full refresh -- when there is nothing
+    to reuse or the cache is due its daily rebuild.
     """
-    if cache is None:
+    if cache is None or window.as_of - cache.built_at > _FULL_REBUILD_EVERY:
         return window.query_from_utc
-    last_settled = min(
-        window.complete_end_exclusive_local.date() - timedelta(weeks=2),
-        cohort_week_for(cache.fetched_at) - timedelta(weeks=1),
-    )
-    if last_settled < window.complete_start_local.date():
-        return window.query_from_utc
-    start_local = datetime.combine(
-        last_settled + timedelta(weeks=1), time_of_day.min, tzinfo=VIETNAM_TIMEZONE
-    )
-    return start_local.astimezone(timezone.utc)
+    return max(cache.fetched_at - _REFETCH_OVERLAP, window.query_from_utc)
 
 
 def _parsed_timestamp(raw: Mapping[str, object]) -> datetime | None:
@@ -417,20 +419,19 @@ def compute_report(
         # Every session this fetch saw, including ones only an unstamped
         # issue names: for those the fresh analysis is authoritative.
         reseen = set(spans) | {i.session_id for i in issues if i.session_id}
-        fetch_from_week = cohort_week_for(fetch_from_utc)
         result = merge_cached_sessions(
             result,
-            tuple(
-                session
-                for week, sessions in cache.weeks.items()
-                if window.complete_start_local.date() <= week < fetch_from_week
-                for session in sessions
-                if session.session_id not in reseen
-            ),
+            _reusable_sessions(cache, reseen, fetch_from_utc, window),
             _merged_selection(selection, cache, reseen, fetch_from_utc),
         )
         spans = _merge_spans(cache.seen, spans, window.query_from_utc)
-    next_cache = _next_session_cache(result, spans, fingerprint, window)
+    next_cache = _next_session_cache(
+        result,
+        spans,
+        fingerprint,
+        window,
+        built_at=window.query_to_utc if cache is None else cache.built_at,
+    )
     _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
     try:
         shadow = pending_shadow(
@@ -452,25 +453,58 @@ def compute_report(
     )
 
 
+def _reusable_sessions(
+    cache: SessionCache,
+    reseen: set[str],
+    fetch_from_utc: datetime,
+    window: CohortWindow,
+) -> tuple[SessionMetrics, ...]:
+    """Cached tickets this fetch did not see again, restamped for `window`.
+
+    A ticket this fetch saw is analyzed fresh instead. One that opened inside
+    the fetch but was not seen is gone from Langfuse, as it would be from a
+    full refresh. `cohort_status` and `as_of` are the only fields that depend
+    on when the run happens rather than on the traces, so they are recomputed:
+    the open week's tickets become complete-week ones on Monday without a
+    refetch, and tickets whose week left the window drop out.
+    """
+    reusable: list[SessionMetrics] = []
+    for sessions in cache.weeks.values():
+        for session in sessions:
+            if (
+                session.session_id in reseen
+                or session.turn0_timestamp >= fetch_from_utc
+            ):
+                continue
+            status = cohort_status_for(session.turn0_timestamp, window)
+            if status in {"complete", "wtd"}:
+                reusable.append(
+                    replace(session, cohort_status=status, as_of=window.as_of)
+                )
+    return tuple(reusable)
+
+
 def _next_session_cache(
     result: AnalysisResult,
     spans: Mapping[str, tuple[datetime, datetime]],
     fingerprint: str,
     window: CohortWindow,
+    *,
+    built_at: datetime,
 ) -> SessionCache:
-    """The state a later refresh reuses: this run's own view, nothing older.
+    """The state a later refresh reuses: every ticket in the window.
 
-    Only complete weeks are stored. The just-closed one is written too even
-    though the next run refetches it: a week later it becomes reusable, and by
-    then the copy written here is the one that saw it longest.
+    The open week is stored too: most of its tickets take no new turn between
+    two refreshes, and refetching them is most of what a refresh would cost.
     """
     weeks: dict[date, list[SessionMetrics]] = {}
     for session in result.sessions:
-        if session.cohort_status == "complete":
+        if session.cohort_status in {"complete", "wtd"}:
             weeks.setdefault(session.cohort_week, []).append(session)
     return SessionCache(
         fingerprint=fingerprint,
         fetched_at=window.query_to_utc,
+        built_at=built_at,
         weeks={week: tuple(sessions) for week, sessions in weeks.items()},
         seen=spans,
         invalid_keyed=result.selection.invalid_keyed,
