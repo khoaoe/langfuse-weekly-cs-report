@@ -81,6 +81,11 @@ _LATE_OBSERVATION_GAP = timedelta(hours=1)
 # ponytail: fixed daily -- one full refresh (~4k requests) per ~96
 # incremental ones; stretch it if Langfuse load matters more than drift.
 _FULL_REBUILD_EVERY = timedelta(hours=24)
+# Carried-session lookups run after the enrichment lanes finish (see
+# `_late_written_sessions`), so matching the lanes' 4 workers keeps the peak
+# load on Langfuse where it already is. One at a time, they were ~50 s of a
+# ~55 s incremental refresh (measured 2026-09-25: 61 lookups at ~1 s each).
+_CARRIED_LOOKUP_WORKERS = 4
 
 
 @dataclass
@@ -161,13 +166,17 @@ def _refetch_carried_sessions(
     Returns the traces and the session ids whose lookup failed; their partial
     traces must be dropped so the cached state for them stands.
     """
-    extra: list[Mapping[str, object]] = []
-    unresolved: set[str] = set()
-    for session_id in session_ids:
+    def lookup(session_id: str) -> list[dict] | None:
         _raise_if_refresh_stopped(cancel_event, deadline, monotonic)
         try:
-            traces = client.list_traces_by_session(session_id)
+            return client.list_traces_by_session(session_id)
         except (LangfuseAPIError, ValueError):
+            return None
+
+    extra: list[Mapping[str, object]] = []
+    unresolved: set[str] = set()
+    for session_id, traces in zip(session_ids, _bounded_map(lookup, session_ids)):
+        if traces is None:
             unresolved.add(session_id)
             continue
         kept = [
@@ -596,27 +605,49 @@ def _fetch_carried_observations(
     enrichment closed exactly as it does for a failed lane: a ticket missing
     its skill/TPE signal would silently lower coverage instead.
     """
-    rows: dict[str, list[dict[str, object]]] = {}
-    seen: set[str] = set()
-    for raw in carried_traces:
-        trace_id = raw.get("id")
-        if (
-            not isinstance(trace_id, str)
-            or trace_id in seen
-            or not _starts_before(raw, fetch_from_utc)
-        ):
-            continue
-        seen.add(trace_id)
+    trace_ids = list(dict.fromkeys(
+        trace_id
+        for raw in carried_traces
+        if isinstance(trace_id := raw.get("id"), str)
+        and _starts_before(raw, fetch_from_utc)
+    ))
+
+    def lookup(trace_id: str) -> list[tuple[str, dict[str, object]]]:
         _raise_if_refresh_stopped(cancel_event, deadline, monotonic)
-        try:
-            observations = client.list_observations(trace_id)
-        except LangfuseAPIError:
-            return None
-        for observation in observations:
-            name = observation.get("name")
-            if name in _ENRICHMENT_NAME_SET:
-                rows.setdefault(name, []).append(slim_observation(observation))
+        # Slimmed in the worker: only the projection outlives the request.
+        return [
+            (name, slim_observation(observation))
+            for observation in client.list_observations(trace_id)
+            if (name := observation.get("name")) in _ENRICHMENT_NAME_SET
+        ]
+
+    try:
+        found = _bounded_map(lookup, trace_ids)
+    except LangfuseAPIError:
+        return None
+    rows: dict[str, list[dict[str, object]]] = {}
+    for observations in found:
+        for name, observation in observations:
+            rows.setdefault(name, []).append(observation)
     return rows
+
+
+def _bounded_map(function: Callable, items: Sequence) -> list:
+    """`function` over `items`, `_CARRIED_LOOKUP_WORKERS` at a time, in order.
+
+    The first error cancels the lookups not yet started and is re-raised once
+    the running ones return, so a failure never leaves requests in flight.
+    """
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=_CARRIED_LOOKUP_WORKERS) as pool:
+        futures = [pool.submit(function, item) for item in items]
+        try:
+            return [future.result() for future in futures]
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
 
 
 def _starts_before(raw: Mapping[str, object], boundary: datetime) -> bool:

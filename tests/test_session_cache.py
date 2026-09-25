@@ -720,3 +720,33 @@ def full_client_start(as_of: datetime) -> datetime:
     client = LangfuseAt([], now=as_of)
     _run(client, as_of=as_of)
     return client.bounds[0][0]
+
+
+def test_carried_lookups_run_four_at_a_time_in_order_and_stop_on_error():
+    """Parallel, but never above the lanes' peak; a failure starts nothing new."""
+    import time
+
+    active = peak = 0
+    lock = threading.Lock()
+    started: list[int] = []
+
+    def lookup(item: int) -> int:
+        nonlocal active, peak
+        with lock:
+            started.append(item)
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.02)
+        with lock:
+            active -= 1
+        if item == 5:
+            raise RuntimeError("lookup failed")
+        return item * 10
+
+    assert report_module._bounded_map(lookup, list(range(5))) == [0, 10, 20, 30, 40]
+    assert peak == report_module._CARRIED_LOOKUP_WORKERS == 4
+
+    started.clear()
+    with pytest.raises(RuntimeError):
+        report_module._bounded_map(lookup, list(range(40)))
+    assert len(started) < 40
