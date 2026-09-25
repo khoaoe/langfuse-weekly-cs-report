@@ -1603,6 +1603,20 @@ def test_runtime_directory_allows_freshdesk_cookie_files(tmp_path: Path):
     assert _validated_runtime_directory(runtime) == runtime
 
 
+def test_runtime_directory_allows_the_session_cache_it_writes(tmp_path: Path):
+    """Every refresh writes the session cache; a restart must not crash-loop
+    on it (2026-09-25: production went down on the first redeploy after it
+    existed), nor on the temp file a crash mid-write leaves behind."""
+    runtime = tmp_path / "runtime"
+    runtime.mkdir(mode=0o700)
+    for name in ("session_cache.json", ".session_cache.json.ab12cd.tmp"):
+        entry = runtime / name
+        entry.write_text("{}", encoding="utf-8")
+        entry.chmod(0o600)
+
+    assert _validated_runtime_directory(runtime) == runtime
+
+
 def test_runtime_directory_rejects_permissive_or_linked_csat_cache(tmp_path: Path):
     runtime = tmp_path / "runtime"
     runtime.mkdir(mode=0o700)

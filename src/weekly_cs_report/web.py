@@ -203,7 +203,8 @@ _MODEL_LIST_CACHE_FILENAME = "model_list_cache.json"
 _MODEL_LIST_BACKGROUND_INTERVAL_SECONDS = 300.0
 _FRESHDESK_COOKIE_FILENAME = "freshdesk_cookie"
 _FRESHDESK_COOKIE_STATE_FILENAME = "freshdesk_cookie_state.json"
-_TEMP_SNAPSHOT_NAME = re.compile(r"\.dashboard_snapshot\..+\.tmp\Z")
+# Every refresh rewrites both atomically; a crash mid-write leaves the temp.
+_TEMP_SNAPSHOT_NAME = re.compile(r"\.(?:dashboard_snapshot|session_cache)\..+\.tmp\Z")
 _RUNTIME_DIRECTORY_ERROR = "dashboard runtime directory is unsafe"
 _REFRESH_ACTION_HEADER = "X-Dashboard-Action"
 _REFRESH_ACTION_VALUE = "refresh"
@@ -1983,6 +1984,7 @@ def _validated_runtime_directory(value: Path) -> Path:
             raise ConfigurationError(_RUNTIME_DIRECTORY_ERROR) from None
         allowed_name = (
             entry.name == _SNAPSHOT_FILENAME
+            or entry.name == _SESSION_CACHE_FILENAME
             or entry.name == _CSAT_CACHE_FILENAME
             or entry.name == _RECONCILIATION_CACHE_FILENAME
             or entry.name == _ENTRY_COVERAGE_CACHE_FILENAME
