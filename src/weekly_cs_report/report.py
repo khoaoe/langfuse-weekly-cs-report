@@ -59,20 +59,25 @@ class ReportRun:
 
 
 _ENRICHMENT_DRAIN_SECONDS = 5.0
-# Observations start at their trace's timestamp or later. Sampled 2026-09-24
-# over 42 traces spread across 12 weeks: the earliest observation led its
-# trace by at most 3 ms. A day of margin is several orders of magnitude of
-# headroom for ~1% more observation pages.
-_ENRICHMENT_MARGIN = timedelta(days=1)
+# Observations start at their trace's timestamp or later. Sampled 2026-09-25
+# over 42,964 observations of 7 days: one led its trace, by 9.6 s.
+_ENRICHMENT_MARGIN = timedelta(hours=1)
 _ENRICHMENT_NAME_SET = frozenset(ENRICHMENT_NAMES)
 _CARRIED_LANE = "carried_trace_observations"
 # Langfuse filters traces by their own timestamp, not by when they were
-# written, and writes land late: sampled 2026-09-24, observations arrived up to
-# ~23.5 h after their trace's timestamp. Each refresh rereads this much before
-# the previous refresh's reach, so a late write is picked up by a later one.
-_REFETCH_OVERLAP = timedelta(hours=48)
-# The safety net for what the overlap cannot see: writes later than it, and
-# edits or deletions of older traces.
+# written, and writes land a little late. Sampled 2026-09-25 (13,645 traces of
+# 17 days, 42,964 observations of 7 days): a trace was written at most 1 min
+# after its timestamp, an observation at most 8 min after its start. Each
+# refresh rereads this much before the previous refresh's reach, so a late
+# write is picked up by a later one. Observations appended to a trace days
+# after it ran are a different thing; see `_late_written_sessions`.
+_REFETCH_OVERLAP = timedelta(hours=2)
+# An observation of a trace older than the fetch counts as appended late when
+# it starts this long after the fetch start; see `_late_written_sessions`.
+_LATE_OBSERVATION_GAP = timedelta(hours=1)
+# The safety net for what the overlap cannot see: edits or deletions of older
+# traces (sampled 2026-09-25, ~330 ticket traces a week are updated more than
+# an hour after their timestamp, for reasons the API does not say).
 # ponytail: fixed daily -- one full refresh (~4k requests) per ~96
 # incremental ones; stretch it if Langfuse load matters more than drift.
 _FULL_REBUILD_EVERY = timedelta(hours=24)
@@ -120,8 +125,10 @@ def _fetch_start(window: CohortWindow, cache: SessionCache | None) -> datetime:
     return max(cache.fetched_at - _REFETCH_OVERLAP, window.query_from_utc)
 
 
-def _parsed_timestamp(raw: Mapping[str, object]) -> datetime | None:
-    value = raw.get("timestamp")
+def _parsed_timestamp(
+    raw: Mapping[str, object], key: str = "timestamp"
+) -> datetime | None:
+    value = raw.get(key)
     if not isinstance(value, str):
         return None
     try:
@@ -339,17 +346,19 @@ def compute_report(
     enrichment_finished = False
     carried_traces: list[Mapping[str, object]] = []
     try:
-        raw_traces = [
-            raw
-            for raw in client.iter_traces(
-                fetch_from_utc,
-                window.query_to_utc,
-                deadline=refresh_deadline,
-                cancel_event=cancel_event,
-                max_pages=max_trace_pages,
-            )
-            if is_ticket_trace(raw)
-        ]
+        # Ids of chat traces too: their observations are not late writes.
+        fetched_ids: set[object] = set()
+        raw_traces = []
+        for raw in client.iter_traces(
+            fetch_from_utc,
+            window.query_to_utc,
+            deadline=refresh_deadline,
+            cancel_event=cancel_event,
+            max_pages=max_trace_pages,
+        ):
+            fetched_ids.add(raw.get("id"))
+            if is_ticket_trace(raw):
+                raw_traces.append(raw)
         _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
         if cache is not None:
             known = {
@@ -362,7 +371,10 @@ def compute_report(
                 for raw in raw_traces
                 if isinstance(session_id := raw.get("sessionId"), str)
                 and session_id in known
-            })
+            } | _late_written_sessions(
+                enrichment_job, fetched_ids, cache, known, fetch_from_utc
+            ))
+            _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
             carried_traces, unresolved = _refetch_carried_sessions(
                 client, carried, window, cancel_event, refresh_deadline, monotonic
             )
@@ -415,6 +427,7 @@ def compute_report(
     )
     validate_invariants(result)
     spans = _session_spans(records, issues)
+    trace_sessions = {record.id: record.session_id for record in records}
     if cache is not None:
         # Every session this fetch saw, including ones only an unstamped
         # issue names: for those the fresh analysis is authoritative.
@@ -425,9 +438,14 @@ def compute_report(
             _merged_selection(selection, cache, reseen, fetch_from_utc),
         )
         spans = _merge_spans(cache.seen, spans, window.query_from_utc)
+        trace_sessions = {
+            **{t: s for t, s in cache.traces.items() if s in spans},
+            **trace_sessions,
+        }
     next_cache = _next_session_cache(
         result,
         spans,
+        trace_sessions,
         fingerprint,
         window,
         built_at=window.query_to_utc if cache is None else cache.built_at,
@@ -487,6 +505,7 @@ def _reusable_sessions(
 def _next_session_cache(
     result: AnalysisResult,
     spans: Mapping[str, tuple[datetime, datetime]],
+    trace_sessions: Mapping[str, str],
     fingerprint: str,
     window: CohortWindow,
     *,
@@ -507,9 +526,53 @@ def _next_session_cache(
         built_at=built_at,
         weeks={week: tuple(sessions) for week, sessions in weeks.items()},
         seen=spans,
+        traces=trace_sessions,
         invalid_keyed=result.selection.invalid_keyed,
         unkeyed=result.selection.unkeyed,
     )
+
+
+def _late_written_sessions(
+    job: _EnrichmentJob,
+    fetched_ids: set[object],
+    cache: SessionCache,
+    known: set[str],
+    fetch_from_utc: datetime,
+) -> set[str]:
+    """Cached tickets whose older traces took observations since the last fetch.
+
+    Langfuse appends observations to a trace days after it ran, with no new
+    turn in the session: sampled 2026-09-25, 27 ticket traces a week, 2-305 h
+    after their timestamp, in the TPE/skill/guardrail lanes. The lanes return
+    those rows (they filter by start time), but their trace predates the fetch,
+    so nothing joins them and the stale cached ticket would stand until the
+    daily rebuild. Refetching the session as carried reanalyzes it; the trace
+    id to session lookup is local, so it costs no request to find them.
+
+    A row counts only from an hour past `fetch_from_utc`: its trace, older than
+    the fetch, then ran over an hour before it, longer than any turn takes. The
+    hour also covers rows the previous refresh could not see yet.
+
+    Waits for the lanes, which are small on an incremental refresh. Rows of a
+    lane that did not finish are skipped; enrichment fails closed on it anyway.
+    """
+    wait(job.futures, timeout=max(0.0, job.deadline - job.monotonic()))
+    late_from = fetch_from_utc + _LATE_OBSERVATION_GAP
+    sessions: set[str] = set()
+    for future, state in job.futures.items():
+        if not future.done() or state.error is not None:
+            continue
+        for row in state.rows:
+            trace_id = row.get("traceId")
+            if not isinstance(trace_id, str) or trace_id in fetched_ids:
+                continue
+            session_id = cache.traces.get(trace_id)
+            if session_id not in known:
+                continue
+            start = _parsed_timestamp(row, "startTime")
+            if start is not None and start >= late_from:
+                sessions.add(session_id)
+    return sessions
 
 
 def _enrichment_start(window: CohortWindow, fetch_from_utc: datetime) -> datetime:

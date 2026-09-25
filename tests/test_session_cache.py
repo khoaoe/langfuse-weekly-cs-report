@@ -181,14 +181,16 @@ def test_a_refresh_rereads_only_the_overlap_before_the_previous_one():
     """Only what arrived since the last refresh, plus room for late writes.
 
     Langfuse filters by a trace's own timestamp, not by when it was written,
-    and observations were measured landing up to ~23.5 h late. Rereading 48 h
+    and writes were measured landing up to 8 min late. Rereading the overlap
     before the previous refresh's reach picks those up on a later refresh.
     """
     full = _run(WindowedClient(_traces()))
     client = WindowedClient(_traces())
     _run(client, cached=full.session_cache)
 
-    assert client.bounds[0][0] == full.session_cache.fetched_at - timedelta(hours=48)
+    assert client.bounds[0][0] == (
+        full.session_cache.fetched_at - report_module._REFETCH_OVERLAP
+    )
 
 
 def _open_week_traces() -> list[dict]:
@@ -255,7 +257,9 @@ def test_refreshing_every_few_hours_across_a_monday_matches_a_full_refresh():
         client = LangfuseAt(traces, observations, now=now)
         cached = _run(client, cache, as_of=now)
         if index:
-            assert client.bounds[0][0] == cache.fetched_at - timedelta(hours=48), now
+            assert client.bounds[0][0] == (
+                cache.fetched_at - report_module._REFETCH_OVERLAP
+            ), now
         assert cached.enrichment_status == "complete", now
         assert _comparable(cached) == _comparable(full), now
         cache = cached.session_cache
@@ -269,18 +273,24 @@ def test_a_session_analyzed_now_wins_over_its_cached_copy():
     Feeds the merge a deliberately wrong cached copy of a session the narrowed
     run analyzes itself, and asserts the freshly analyzed values survive.
     """
-    full = _run(WindowedClient(_traces()))
+    full = _run(WindowedClient(_carried_traces()))
     cached = full.session_cache.weeks
-    fresh_week = max(cached)
-    fresh = cached[fresh_week][0]
+    fresh_week, fresh = next(
+        (week, s)
+        for week, sessions in cached.items()
+        for s in sessions
+        if s.session_id == "ticket-carry"
+    )
 
     poisoned = dict(cached)
-    poisoned[fresh_week] = (
-        replace(fresh, turn_count=fresh.turn_count + 99, outcome="unclassified"),
+    poisoned[fresh_week] = tuple(
+        replace(s, turn_count=s.turn_count + 99, outcome="unclassified")
+        if s is fresh else s
+        for s in cached[fresh_week]
     )
     poisoned = replace(full.session_cache, weeks=poisoned)
 
-    merged = _run(WindowedClient(_traces()), cached=poisoned)
+    merged = _run(WindowedClient(_carried_traces()), cached=poisoned)
     identifiers = [s.session_id for s in merged.result.sessions]
     assert len(identifiers) == len(set(identifiers))
 
@@ -300,7 +310,7 @@ def _carried_traces() -> list[dict]:
     return [
         *_traces(),
         trace("carry-0", "ticket-carry", 0, "2026-06-24T03:00:00Z", "First turn"),
-        trace("carry-1", "ticket-carry", 1, "2026-07-28T03:00:00Z", "Later turn"),
+        trace("carry-1", "ticket-carry", 1, "2026-07-29T04:00:00Z", "Later turn"),
     ]
 
 
@@ -386,7 +396,7 @@ def test_cached_refresh_with_observations_matches_a_full_refresh():
     assert actual["source"]["observations_fetched"] < expected["source"]["observations_fetched"]
 
 
-def test_enrichment_lanes_narrow_with_the_traces_plus_one_day():
+def test_enrichment_lanes_narrow_with_the_traces_plus_the_margin():
     """A full-window observation crawl is most of what a refresh costs Langfuse."""
     traces, observations = _signal_traces()
     full_client = WindowedClient(traces, observations)
@@ -397,7 +407,7 @@ def test_enrichment_lanes_narrow_with_the_traces_plus_one_day():
 
     trace_start = client.bounds[0][0]
     enrichment_start = client.enrichment_bounds[0][0]
-    assert enrichment_start == trace_start - timedelta(days=1)
+    assert enrichment_start == trace_start - report_module._ENRICHMENT_MARGIN
     assert enrichment_start > full_client.enrichment_bounds[0][0]
 
 
@@ -642,11 +652,12 @@ def test_an_observation_written_late_is_picked_up_by_a_later_refresh():
     without its TPE signal. Only rereading the overlap lets the next refresh
     see it; a watermark at the previous refresh would freeze the gap.
     """
-    traces = [*_traces(), trace("tpe-0", "ticket-tpe", 0, "2026-07-28T02:00:00Z", "Reply")]
+    traces = [*_traces(), trace("tpe-0", "ticket-tpe", 0, "2026-07-28T04:30:00Z", "Reply")]
     observations = _observations_for(traces, tpe_only={"tpe-0"})
-    delays = {"tpe-tpe-0": timedelta(hours=20)}
+    # Writes landed within 8 minutes when measured; an hour is well past that.
+    delays = {"tpe-tpe-0": timedelta(hours=1)}
     before = datetime(2026, 7, 28, 12, tzinfo=VIETNAM)
-    after = before + timedelta(hours=20)
+    after = before + timedelta(hours=3)
 
     early = _run(
         LangfuseWithLateWrites(traces, observations, now=before, delays=delays),
@@ -670,3 +681,42 @@ def test_an_observation_written_late_is_picked_up_by_a_later_refresh():
         s for s in cached.result.sessions if s.session_id == "ticket-tpe"
     ).dimensions.tpe_signals
     assert _comparable(cached) == _comparable(full)
+
+
+def test_an_observation_appended_to_an_old_trace_is_picked_up_without_a_new_turn():
+    """Langfuse appends observations to a trace days after it ran.
+
+    The session takes no new turn and the trace is far older than the overlap,
+    so only the observation itself says the cached ticket is stale.
+    """
+    traces = [*_traces(), trace("tpe-0", "ticket-tpe", 0, "2026-07-26T02:00:00Z", "Reply")]
+    appended = {
+        "id": "tpe-late", "traceId": "tpe-0", "startTime": "2026-07-28T20:00:00Z",
+        "name": "tool:get_transaction_processing_engine_data",
+        "output": {"result": {"transstatus": 1, "stepresult": "-49"}},
+    }
+    observations = [*_observations_for(_traces()), appended]
+    before = datetime(2026, 7, 28, 12, tzinfo=VIETNAM)
+    after = before + timedelta(hours=20)
+
+    early = _run(LangfuseAt(traces, observations, now=before), as_of=before)
+    assert not next(
+        s for s in early.result.sessions if s.session_id == "ticket-tpe"
+    ).dimensions.tpe_signals
+
+    full = _run(LangfuseAt(traces, observations, now=after), as_of=after)
+    client = LangfuseAt(traces, observations, now=after)
+    cached = _run(client, early.session_cache, as_of=after)
+
+    assert client.bounds[0][0] > full_client_start(after)
+    assert client.session_lookups == ["ticket-tpe"]
+    assert next(
+        s for s in cached.result.sessions if s.session_id == "ticket-tpe"
+    ).dimensions.tpe_signals
+    assert _comparable(cached) == _comparable(full)
+
+
+def full_client_start(as_of: datetime) -> datetime:
+    client = LangfuseAt([], now=as_of)
+    _run(client, as_of=as_of)
+    return client.bounds[0][0]

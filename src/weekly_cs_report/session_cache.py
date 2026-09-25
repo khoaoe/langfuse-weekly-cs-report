@@ -16,7 +16,9 @@ Valid sessions alone are not enough to reproduce a full refresh. The cache also
 keeps what the analysis set aside -- keyed and unkeyed quality issues -- and,
 for every session it saw, the timestamps of its first and last trace. Without
 them a cached refresh loses those sessions from the gate and data_quality,
-and books the later turn of an excluded session as a brand-new ticket.
+and books the later turn of an excluded session as a brand-new ticket. It keeps
+the trace ids of every ticket too: Langfuse sometimes appends observations to a
+trace days after it ran, and those rows name only their trace.
 
 Structure mirrors the Freshdesk job caches; the hardened private-file I/O and
 validation helpers come from `cache_store` rather than being reimplemented.
@@ -42,7 +44,7 @@ from .models import (
 )
 
 
-_CACHE_SCHEMA_VERSION = 3
+_CACHE_SCHEMA_VERSION = 4
 _CACHE_KEYS = frozenset({
     "schema_version",
     "fingerprint",
@@ -50,6 +52,7 @@ _CACHE_KEYS = frozenset({
     "built_at",
     "weeks",
     "seen",
+    "traces",
     "invalid_keyed",
     "unkeyed",
 })
@@ -69,6 +72,7 @@ class SessionCache:
     ``built_at`` is when the last full refresh ran; incremental refreshes carry
     it forward, so it says how long the cache has gone without being rebuilt.
     ``seen`` maps each session id to its first and last trace timestamps.
+    ``traces`` maps each ticket trace id to its session id.
     """
 
     fingerprint: str
@@ -76,6 +80,7 @@ class SessionCache:
     built_at: datetime
     weeks: Mapping[date, tuple[SessionMetrics, ...]]
     seen: Mapping[str, tuple[datetime, datetime]]
+    traces: Mapping[str, str]
     invalid_keyed: tuple[QualityIssue, ...]
     unkeyed: tuple[QualityIssue, ...]
 
@@ -398,12 +403,23 @@ def load_session_cache(path: Path) -> SessionCache | None:
             raise SessionCacheError("session cache is invalid")
         seen[session_id] = (first, last)
 
+    traces_raw = value["traces"]
+    if not isinstance(traces_raw, dict):
+        raise SessionCacheError("session cache is invalid")
+    traces: dict[str, str] = {}
+    for session_id, trace_ids in traces_raw.items():
+        for trace_id in _string_tuple(trace_ids, "trace ids"):
+            if trace_id in traces:
+                raise SessionCacheError("session cache is invalid")
+            traces[trace_id] = session_id
+
     return SessionCache(
         fingerprint=fingerprint,  # type: ignore[arg-type]
         fetched_at=fetched_at,
         built_at=built_at,
         weeks=weeks,
         seen=seen,
+        traces=traces,
         invalid_keyed=_issues_from(value["invalid_keyed"]),
         unkeyed=_issues_from(value["unkeyed"]),
     )
@@ -412,6 +428,10 @@ def load_session_cache(path: Path) -> SessionCache | None:
 def write_session_cache(path: Path, cache: SessionCache) -> None:
     """Replace the cache with `cache`, atomically and `0600`."""
     payload_weeks: dict[str, object] = {}
+    # Grouped by session on disk: a session id per trace would double the size.
+    trace_ids: dict[str, list[str]] = {}
+    for trace_id, session_id in sorted(cache.traces.items()):
+        trace_ids.setdefault(session_id, []).append(trace_id)
     for week, sessions in sorted(cache.weeks.items()):
         if not isinstance(week, date) or week.weekday() != 0:
             raise SessionCacheError("cached week is invalid")
@@ -431,6 +451,7 @@ def write_session_cache(path: Path, cache: SessionCache) -> None:
                 session_id: [_utc_iso(first), _utc_iso(last)]
                 for session_id, (first, last) in sorted(cache.seen.items())
             },
+            "traces": dict(sorted(trace_ids.items())),
             "invalid_keyed": [_issue_dict(i) for i in cache.invalid_keyed],
             "unkeyed": [_issue_dict(i) for i in cache.unkeyed],
         },
