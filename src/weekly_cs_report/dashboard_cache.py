@@ -11,6 +11,7 @@ from pathlib import Path
 import tempfile
 import threading
 import time
+import zlib
 
 from .cache_store import dump_json_gzip, load_json_file
 from .dashboard_schema import _STORAGE_VERSION, DashboardSnapshot
@@ -69,7 +70,7 @@ class ProtectedSnapshotStore:
                 )
                 return None
             return snapshot
-        except (json.JSONDecodeError, ValueError, EOFError, gzip.BadGzipFile):
+        except (json.JSONDecodeError, ValueError, EOFError, gzip.BadGzipFile, zlib.error):
             # Older schemas lack the current weekly privacy/metric contract.
             # Do not attempt a lossy conversion; bootstrap with a fresh run.
             emit_event("snapshot_load_ignored", code="invalid_snapshot")
@@ -151,7 +152,7 @@ class ProtectedSnapshotStore:
             return True, DashboardSnapshot.from_storage_dict(value)
         except FileNotFoundError:
             return True, None
-        except (OSError, EOFError, TypeError, ValueError):
+        except (OSError, EOFError, zlib.error, TypeError, ValueError):
             return False, None
 
 

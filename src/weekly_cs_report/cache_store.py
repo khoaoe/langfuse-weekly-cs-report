@@ -25,6 +25,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import zlib
 
 
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
@@ -234,7 +235,9 @@ def read_private_json(
         with os.fdopen(descriptor, "rb") as stream:
             descriptor = None
             return load_json_file(stream, object_pairs_hook=strict_json_object)
-    except (OSError, EOFError, UnicodeError, json.JSONDecodeError, DuplicateJSONKey):
+    except (
+        OSError, EOFError, zlib.error, UnicodeError, json.JSONDecodeError, DuplicateJSONKey
+    ):
         raise error(message) from None
     finally:
         if descriptor is not None:

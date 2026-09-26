@@ -1311,3 +1311,15 @@ def test_a_plain_json_snapshot_written_before_gzip_still_loads(tmp_path):
     path.write_bytes(gzip.decompress(path.read_bytes()))
 
     assert store.load() == snapshot
+
+
+def test_a_corrupt_gzip_snapshot_is_ignored_not_fatal(tmp_path):
+    """A damaged file must mean 'rebuild', never 'service will not start'."""
+    store = ProtectedSnapshotStore(tmp_path / "runtime")
+    store.save(_snapshot(NOW))
+    path = tmp_path / "runtime" / "dashboard_snapshot.json"
+    data = bytearray(path.read_bytes())
+    data[20:40] = b"\x00" * 20
+    path.write_bytes(bytes(data))
+
+    assert store.load() is None
