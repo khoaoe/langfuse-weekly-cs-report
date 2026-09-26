@@ -14,6 +14,7 @@ import { useFreshdeskCookieStatus } from "../hooks/useFreshdeskCookieStatus";
 import {
   ALL_WEEKS_SCOPE,
   SELECTED_WEEKS_SCOPE,
+  hideImmatureReopen,
   isObservedWeek,
   selectLatestWeek,
   selectView,
@@ -77,7 +78,10 @@ function DashboardBody() {
   const { state, refresh, refreshDisabled, refreshHint } = useDashboardRuntime();
   const { state: freshdeskCookie, submitCookie } = useFreshdeskCookieStatus();
   const [cookieDialogOpen, setCookieDialogOpen] = useState(false);
-  const snapshot = state.snapshot;
+  const snapshot = useMemo(
+    () => (state.snapshot === null ? null : hideImmatureReopen(state.snapshot)),
+    [state.snapshot],
+  );
   const isDayRangeMode = reportScope.mode === "range";
   const reportView =
     snapshot === null ? null : selectView(snapshot, weekDefinition);
@@ -143,10 +147,12 @@ function DashboardBody() {
     if (isDayRangeMode) {
       return dayRangeData === undefined
         ? null
-        : scopeSnapshotToDayRangeSnapshot(
-            snapshot,
-            weekDefinition,
-            dayRangeData.plottedDays,
+        : hideImmatureReopen(
+            scopeSnapshotToDayRangeSnapshot(
+              snapshot,
+              weekDefinition,
+              dayRangeData.plottedDays,
+            ),
           );
     }
     return allReportWeeksSelected

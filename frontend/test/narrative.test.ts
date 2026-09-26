@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { buildDeterministicNarrative } from "../src/lib/narrative";
+import { hideImmatureReopen, isReopenMature } from "../src/lib/selectors";
+import { DashboardEnvelopeSchema } from "../src/lib/dashboard-schema";
+import { dashboardEnvelopeFixture } from "./fixtures/dashboard";
 
 describe("deterministic narrative", () => {
   it("formats rates and deltas without calling an LLM", () => {
@@ -77,5 +80,28 @@ describe("deterministic narrative", () => {
     expect(narrative).toContain(
       "Lần đọc này chưa lấy đủ dữ liệu phụ từ Langfuse, nên Intent, Skill, Transstatus và Step result còn thiếu.",
     );
+  });
+});
+
+describe("reopen maturity", () => {
+  it("matches cohort.is_week_fully_mature: week end + 168 h, Vietnam time", () => {
+    // mon_sun week of 2026-07-20 ends 2026-07-27 00:00 +07; mature from 2026-08-03 00:00 +07.
+    expect(isReopenMature("2026-07-20", 7, "2026-08-02T16:59:59Z")).toBe(false);
+    expect(isReopenMature("2026-07-20", 7, "2026-08-02T17:00:00Z")).toBe(true);
+    // mon_fri ends two days earlier.
+    expect(isReopenMature("2026-07-20", 5, "2026-07-31T17:00:00Z")).toBe(true);
+  });
+
+  it("blanks only the immature weeks' lifetime rate", () => {
+    const snapshot = DashboardEnvelopeSchema.parse(dashboardEnvelopeFixture).snapshot;
+    if (snapshot === null) throw new Error("fixture must carry a snapshot");
+    const immature = hideImmatureReopen({ ...snapshot, generated_at: "2026-07-29T11:27:00Z" });
+    expect(immature.views.mon_sun.weekly.every((row) => row.reopen_lifetime_rate === null)).toBe(true);
+    // Counts stay: only the censored rate is hidden.
+    expect(immature.views.mon_sun.weekly[0]?.reopen_lifetime_numerator).toBe(
+      snapshot.views.mon_sun.weekly[0]?.reopen_lifetime_numerator,
+    );
+    const mature = { ...snapshot, generated_at: "2026-12-01T00:00:00Z" };
+    expect(hideImmatureReopen(mature)).toBe(mature);
   });
 });

@@ -464,6 +464,20 @@ describe("Weekly Report", () => {
     ]);
   });
 
+  it("divides weekly CSAT shares by rated tickets, not by survey responses", () => {
+    // Buckets are ticket-grain (latest response per ticket); a ticket can
+    // answer the survey more than once, so response_count > ticket_count.
+    const week = csatWeek({ positive: 145, neutral: 258, negative: 115, response_count: 711 });
+    const snapshot = snapshotWithCsat({ "2026-07-13": week, "2026-07-20": week });
+    renderWithQuery(<WeeklyReport snapshot={snapshot} weekDefinition="mon_sun" />);
+
+    const row = screen.getByRole("rowheader", { name: /^20\/07–26\/07/ }).closest("tr");
+    const cells = within(row as HTMLTableRowElement)
+      .getAllByRole("cell")
+      .map((cell) => cell.textContent);
+    expect(cells.slice(-6, -3)).toEqual(["28,0%", "49,8%", "22,2%"]);
+  });
+
   it("copies the rendered newest-first table as a header-first 14-column TSV", async () => {
     const user = userEvent.setup();
     const snapshot = snapshotWithWeeks([

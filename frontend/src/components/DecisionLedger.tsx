@@ -101,7 +101,6 @@ export function DecisionLedger({
               <p
                 key={line}
                 className={
-                  line.includes("khách nhiều khả năng đang mắc kẹt") ||
                   line.startsWith("Lần đọc này chưa lấy đủ dữ liệu phụ")
                     ? styles.narrativeAlert
                     : undefined
