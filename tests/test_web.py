@@ -1888,6 +1888,8 @@ def test_main_composes_fresh_vietnam_time_loader_and_one_worker(
     uvicorn_calls: list[dict[str, object]] = []
 
     class FakeLangfuseClient:
+        request_count = 0
+
         def __init__(self, base_url, public_key, secret_key):
             self.arguments = (base_url, public_key, secret_key)
             self.close_calls = 0
@@ -1975,6 +1977,8 @@ def test_main_forwards_in_range_refresh_control_overrides(tmp_path, monkeypatch)
     report_calls: list[dict[str, object]] = []
 
     class FakeLangfuseClient:
+        request_count = 0
+
         def __init__(self, *_args):
             pass
 

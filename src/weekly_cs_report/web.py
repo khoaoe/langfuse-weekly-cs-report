@@ -1299,6 +1299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except SessionCacheError:
                 emit_event("session_cache_load_ignored", code="invalid_cache")
                 session_cache = None
+            requests_before = client.request_count
             report = compute_report(
                 client,
                 as_of=as_of,
@@ -1309,6 +1310,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 max_trace_pages=max_trace_pages,
                 cancel_event=refresh_cancel_event,
                 session_cache=session_cache,
+            )
+            emit_event(
+                "langfuse_fetch_cost",
+                request_count=client.request_count - requests_before,
             )
             if report.enrichment_status != "complete":
                 emit_event(

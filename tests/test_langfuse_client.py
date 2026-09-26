@@ -615,3 +615,32 @@ def test_pages_stream_in_bounded_batches_instead_of_buffering_the_lane():
     # Page 1, then only the first batch of 4 -- not all 50.
     assert len(fetched) <= 5
     assert [row["id"] for row in rows] == list(range(3, 51))
+
+
+def test_a_429_waits_as_long_as_langfuse_asks_and_every_attempt_is_counted():
+    """Retrying on our 0.5 s backoff while Langfuse asks for 7 s adds load."""
+    responses = iter([429, 200])
+    slept: list[float] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        status = next(responses)
+        if status == 429:
+            return httpx.Response(429, headers={"Retry-After": "7"}, request=request)
+        return httpx.Response(200, json=page([]), request=request)
+
+    client = LangfuseClient(
+        BASE_URL,
+        PUBLIC_KEY,
+        SECRET_KEY,
+        transport=httpx.MockTransport(handler),
+        sleep=slept.append,
+    )
+
+    assert list(
+        client.iter_traces(
+            datetime(2026, 7, 1, tzinfo=timezone.utc),
+            datetime(2026, 7, 2, tzinfo=timezone.utc),
+        )
+    ) == []
+    assert slept == [7.0]
+    assert client.request_count == 2

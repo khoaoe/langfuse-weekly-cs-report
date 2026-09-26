@@ -44,6 +44,7 @@ _EVENT_FIELDS = {
         }
     ),
     "refresh_failure": frozenset({"code", "detail"}),
+    "langfuse_fetch_cost": frozenset({"request_count"}),
     "refresh_cancelled": frozenset({"code"}),
     "ab_test_background_refresh_success": frozenset(),
     "ab_test_background_refresh_failure": frozenset(),
@@ -72,7 +73,14 @@ _FIXED_CODES = {
 _BOOLEAN_FIELDS = frozenset({"has_snapshot"})
 _STRING_FIELDS = frozenset({"failed_lanes", "detail"})
 _INTEGER_FIELDS = frozenset(
-    {"duration_ms", "schema_version", "ticket_count", "trace_count", "observation_count"}
+    {
+        "duration_ms",
+        "schema_version",
+        "ticket_count",
+        "trace_count",
+        "observation_count",
+        "request_count",
+    }
 )
 _NUMBER_FIELDS = frozenset(
     {

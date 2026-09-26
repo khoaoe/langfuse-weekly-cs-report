@@ -5,6 +5,7 @@ import os
 import re
 import socket
 import time
+import math
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -170,6 +171,9 @@ class LangfuseClient:
         if max_concurrent_requests < 1:
             raise ValueError("max_concurrent_requests must be positive")
         self._in_flight = threading.BoundedSemaphore(max_concurrent_requests)
+        # Every HTTP attempt, retries included: the load Langfuse actually saw.
+        self.request_count = 0
+        self._count_lock = threading.Lock()
 
     def close(self) -> None:
         self._client.close()
@@ -419,6 +423,8 @@ class LangfuseClient:
                 if remaining <= 0:
                     raise LangfuseDeadlineExceeded(method, path)
                 request_kwargs["timeout"] = httpx.Timeout(min(30.0, remaining))
+            with self._count_lock:
+                self.request_count += 1
             try:
                 with self._in_flight:
                     response = self._client.request(method, path, **request_kwargs)
@@ -452,6 +458,7 @@ class LangfuseClient:
                     cancel_event,
                     method,
                     path,
+                    retry_after=_retry_after_seconds(response),
                 )
                 continue
             raise LangfuseAPIError(method, path, response.status_code)
@@ -465,9 +472,11 @@ class LangfuseClient:
         cancel_event: threading.Event | None,
         method: str,
         path: str,
+        *,
+        retry_after: float = 0.0,
     ) -> None:
         _raise_if_cancelled(cancel_event, method, path)
-        delay = self._backoff_base_s * (2**attempt)
+        delay = max(self._backoff_base_s * (2**attempt), retry_after)
         if deadline is not None:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
@@ -551,3 +560,21 @@ def _raise_if_cancelled(
 ) -> None:
     if cancel_event is not None and cancel_event.is_set():
         raise LangfuseRequestCancelled(method, path)
+
+
+_MAX_RETRY_AFTER_SECONDS = 30.0
+
+
+def _retry_after_seconds(response: httpx.Response) -> float:
+    """`Retry-After` delay-seconds (RFC 9110 §10.2.3), capped; 0 when absent.
+
+    The HTTP-date form is ignored: Langfuse sends seconds, and an unparsable
+    value must fall back to our own backoff rather than fail the refresh.
+    """
+    try:
+        seconds = float(response.headers.get("Retry-After", ""))
+    except ValueError:
+        return 0.0
+    if not math.isfinite(seconds):
+        return 0.0
+    return min(max(seconds, 0.0), _MAX_RETRY_AFTER_SECONDS)
