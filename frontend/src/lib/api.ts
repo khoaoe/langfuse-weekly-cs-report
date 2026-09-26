@@ -14,6 +14,11 @@ export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
 export const AB_TEST_ENDPOINT = "/api/ab-test";
 export const AB_TEST_DEFAULT_ENDPOINT = "/api/ab-test/default";
 export const AB_TEST_MODELS_ENDPOINT = "/api/ab-test/models";
+/**
+ * A/B is paused (2026-09-27). Re-enable together with `DASHBOARD_AB_TEST=1`
+ * on the backend, which otherwise answers every A/B route with 404.
+ */
+export const AB_TEST_ENABLED = false;
 
 /** The backend rejects a refresh that does not carry this exact header. */
 export const REFRESH_ACTION_HEADER = "X-Dashboard-Action";

@@ -185,6 +185,11 @@ _FRONTEND_MODES = frozenset({"spa", "legacy"})
 _REFRESH_DEADLINE_ENV = "DASHBOARD_REFRESH_BUDGET_SECONDS"
 _TRACE_PAGE_LIMIT_ENV = "DASHBOARD_MAX_TRACE_PAGES"
 _BACKGROUND_REFRESH_ENV = "DASHBOARD_BACKGROUND_REFRESH"
+# A/B is paused (2026-09-27): its two 5-minute loops re-read 14+ days of
+# Langfuse traces and were the largest load this service put on Langfuse.
+# Re-enable with DASHBOARD_AB_TEST=1 plus `AB_TEST_ENABLED` in
+# frontend/src/lib/api.ts.
+_AB_TEST_ENV = "DASHBOARD_AB_TEST"
 _REFRESH_DEADLINE_ERROR = "DASHBOARD_REFRESH_BUDGET_SECONDS must be between 30 and 2400"
 _TRACE_PAGE_LIMIT_ERROR = "DASHBOARD_MAX_TRACE_PAGES must be an integer between 1 and 500"
 
@@ -784,10 +789,17 @@ def create_app(
             }
         )
 
+    ab_test_on = _ab_test_enabled()
+
+    def ab_test_disabled() -> JSONResponse:
+        return JSONResponse({"detail": {"code": "ab_test_disabled"}}, status_code=404)
+
     @app.get("/api/ab-test")
     def ab_test(request: Request):
         # Deliberately sync, same reasoning as trace-explain: a live Langfuse
         # call must run in FastAPI's threadpool, not the shared event loop.
+        if not ab_test_on:
+            return ab_test_disabled()
         parsed = _parse_ab_test_query(request)
         if parsed is None:
             return JSONResponse(
@@ -834,6 +846,8 @@ def create_app(
     def ab_test_models(request: Request):
         # Deliberately sync, same reasoning as trace-explain: live Langfuse
         # calls must run in FastAPI's threadpool, not the shared event loop.
+        if not ab_test_on:
+            return ab_test_disabled()
         langfuse_client = getattr(request.app.state, "langfuse_client", None)
         if langfuse_client is None:
             return JSONResponse(
@@ -888,6 +902,8 @@ def create_app(
 
     @app.get("/api/ab-test/default")
     async def ab_test_default():
+        if not ab_test_on:
+            return ab_test_disabled()
         background = getattr(app.state, "ab_test_background", None)
         if background is None:
             return JSONResponse(
@@ -1379,67 +1395,68 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         app.state.langfuse_client = client
 
-        def load_ab_test_default() -> dict[str, object]:
-            now = datetime.now(timezone.utc)
-            deadline = time.monotonic() + _AB_TEST_DEADLINE_SECONDS
-            arms: tuple[str, ...] | None = None
-            window_start, window_end = default_window(now)
-            try:
-                recent_models = list_recent_models(client, now=now, deadline=deadline)
-            except LangfuseAPIError:
-                recent_models = []
-            if len(recent_models) >= 2:
-                # Most-active-first: the two arms actually being compared
-                # right now, not an alphabetical or hardcoded pair.
-                arms = tuple(recent_models[:2])
-                first_seen_candidates = []
-                for model in arms:
-                    entry = _get_or_discover_first_seen(
-                        client, runtime_directory, model, now=now, deadline=deadline
-                    )
-                    if entry.first_seen is not None:
-                        first_seen_candidates.append(
-                            datetime.fromisoformat(
-                                entry.first_seen.replace("Z", "+00:00")
-                            )
+        if _ab_test_enabled():
+            def load_ab_test_default() -> dict[str, object]:
+                now = datetime.now(timezone.utc)
+                deadline = time.monotonic() + _AB_TEST_DEADLINE_SECONDS
+                arms: tuple[str, ...] | None = None
+                window_start, window_end = default_window(now)
+                try:
+                    recent_models = list_recent_models(client, now=now, deadline=deadline)
+                except LangfuseAPIError:
+                    recent_models = []
+                if len(recent_models) >= 2:
+                    # Most-active-first: the two arms actually being compared
+                    # right now, not an alphabetical or hardcoded pair.
+                    arms = tuple(recent_models[:2])
+                    first_seen_candidates = []
+                    for model in arms:
+                        entry = _get_or_discover_first_seen(
+                            client, runtime_directory, model, now=now, deadline=deadline
                         )
-                if first_seen_candidates:
-                    # The window a true A/B comparison starts once BOTH arms
-                    # have traffic -- the later of the two first-seen times.
-                    window_start = max(first_seen_candidates)
-                    window_end = now
-            snapshot = compute_ab_test(
-                client,
-                window_start,
-                window_end,
-                _trace_explain_taxonomy(),
-                csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
-                ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
-                deadline=deadline,
-                arms=arms,
+                        if entry.first_seen is not None:
+                            first_seen_candidates.append(
+                                datetime.fromisoformat(
+                                    entry.first_seen.replace("Z", "+00:00")
+                                )
+                            )
+                    if first_seen_candidates:
+                        # The window a true A/B comparison starts once BOTH arms
+                        # have traffic -- the later of the two first-seen times.
+                        window_start = max(first_seen_candidates)
+                        window_end = now
+                snapshot = compute_ab_test(
+                    client,
+                    window_start,
+                    window_end,
+                    _trace_explain_taxonomy(),
+                    csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
+                    ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
+                    deadline=deadline,
+                    arms=arms,
+                )
+                return _ab_test_payload(snapshot)
+
+            ab_test_background = _AbTestBackgroundCache(
+                _serialized(load_ab_test_default),
+                cache_path=runtime_directory / _AB_TEST_CACHE_FILENAME,
             )
-            return _ab_test_payload(snapshot)
+            ab_test_background.start()
+            app.state.ab_test_background = ab_test_background
 
-        ab_test_background = _AbTestBackgroundCache(
-            _serialized(load_ab_test_default),
-            cache_path=runtime_directory / _AB_TEST_CACHE_FILENAME,
-        )
-        ab_test_background.start()
-        app.state.ab_test_background = ab_test_background
+            def load_recent_models() -> list[str]:
+                return list_recent_models(
+                    client,
+                    now=datetime.now(timezone.utc),
+                    deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+                )
 
-        def load_recent_models() -> list[str]:
-            return list_recent_models(
-                client,
-                now=datetime.now(timezone.utc),
-                deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
+            model_list_background = _ModelListBackgroundCache(
+                _serialized(load_recent_models),
+                cache_path=runtime_directory / _MODEL_LIST_CACHE_FILENAME,
             )
-
-        model_list_background = _ModelListBackgroundCache(
-            _serialized(load_recent_models),
-            cache_path=runtime_directory / _MODEL_LIST_CACHE_FILENAME,
-        )
-        model_list_background.start()
-        app.state.model_list_background = model_list_background
+            model_list_background.start()
+            app.state.model_list_background = model_list_background
         uvicorn.run(
             app,
             host=host,
@@ -1497,6 +1514,11 @@ def _background_refresh_enabled() -> bool:
 
     value = os.environ.get(_BACKGROUND_REFRESH_ENV, "").strip().lower()
     return value not in {"0", "off", "false", "no"}
+
+
+def _ab_test_enabled() -> bool:
+    value = os.environ.get(_AB_TEST_ENV, "").strip().lower()
+    return value in {"1", "on", "true", "yes"}
 
 
 def _refresh_timeout_seconds() -> float:

@@ -16,6 +16,7 @@ import {
   DATA_STALE_DISPLAY_MS,
   calculateDataQualityScore,
 } from "../lib/data-quality-score";
+import { AB_TEST_ENABLED } from "../lib/api";
 import { formatUpdatedAt } from "../lib/format";
 import type { DashboardRuntimeKind } from "../lib/runtime-state";
 import {
@@ -62,6 +63,9 @@ const SECTIONS = [
   { id: "tickets", label: "Ticket Explorer" },
   { id: "ab-test", label: "A/B Test" },
 ] as const;
+const NAV_SECTIONS = SECTIONS.filter(
+  (section) => AB_TEST_ENABLED || section.id !== "ab-test",
+);
 
 export interface AppShellProps {
   readonly weekDefinition: WeekDefinition;
@@ -408,7 +412,7 @@ export function AppShell({
           aria-label="Các phần của báo cáo"
         >
           <div className={styles.navInner}>
-            {SECTIONS.map((section) => (
+            {NAV_SECTIONS.map((section) => (
               <a
                 key={section.id}
                 className={styles.navLink}

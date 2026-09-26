@@ -327,6 +327,25 @@ def test_dashboard_returns_ready_snapshot_with_exact_state_envelope(manager_fact
     }
 
 
+@pytest.mark.parametrize(
+    "path", ["/api/ab-test/default", "/api/ab-test/models", "/api/ab-test"]
+)
+def test_ab_test_routes_are_off_unless_explicitly_enabled(
+    manager_factory, monkeypatch, path
+):
+    """A/B is paused: its routes must not reach Langfuse until switched back on."""
+    monkeypatch.delenv("DASHBOARD_AB_TEST", raising=False)
+    manager = manager_factory(initial=_snapshot())
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        response = client.get(path)
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": {"code": "ab_test_disabled"}}
+
+
 def test_dashboard_polls_reuse_one_validated_gzip_body_and_answer_304(
     manager_factory, monkeypatch
 ):

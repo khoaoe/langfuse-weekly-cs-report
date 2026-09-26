@@ -24,6 +24,7 @@ import {
   scopeSnapshotToDayRangeSnapshot,
   scopeSnapshotToWeeks,
 } from "../lib/report-scope";
+import { AB_TEST_ENABLED } from "../lib/api";
 import { formatDateRangeLabel } from "../lib/format";
 import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
@@ -466,11 +467,13 @@ function DashboardBody() {
       {/* Independent of the weekly snapshot: this reads Langfuse directly on
           its own time window, so it must not wait on the (slower, more
           fragile) full weekly pipeline. */}
-      <AbTestSection
-        selectedReportWeeks={selectedReportWeeks}
-        weekDefinition={weekDefinition}
-        reportRange={reportScope.mode === "range" ? reportScope : null}
-      />
+      {AB_TEST_ENABLED && (
+        <AbTestSection
+          selectedReportWeeks={selectedReportWeeks}
+          weekDefinition={weekDefinition}
+          reportRange={reportScope.mode === "range" ? reportScope : null}
+        />
+      )}
     </AppShell>
     <FreshdeskCookieDialog
       open={cookieDialogOpen}
