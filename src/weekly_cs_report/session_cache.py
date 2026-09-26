@@ -27,6 +27,7 @@ validation helpers come from `cache_store` rather than being reimplemented.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import ast
 import hashlib
 from pathlib import Path
 
@@ -90,14 +91,34 @@ def cache_fingerprint(taxonomy_path: Path) -> str:
 
     Stored sessions carry classified outcomes and mapped dimensions, so a
     change to the taxonomy or to any analysis code must not reuse them.
-    ponytail: hashes the whole package, so a web-only deploy also costs one
-    full refresh; narrow the file list if deploys get frequent.
+    Only the modules the analysis imports count: hashing the whole package
+    made every web/schema-only deploy cost a full Langfuse rebuild.
     """
     digest = hashlib.sha256(Path(taxonomy_path).read_bytes())
-    for source in sorted(_PACKAGE_DIRECTORY.glob("*.py")):
-        digest.update(source.name.encode())
-        digest.update(source.read_bytes())
+    for name in sorted(_analysis_modules()):
+        digest.update(name.encode())
+        digest.update((_PACKAGE_DIRECTORY / f"{name}.py").read_bytes())
     return digest.hexdigest()
+
+
+def _analysis_modules() -> frozenset[str]:
+    """`report` and this module plus every package module they import, transitively."""
+
+    seen: set[str] = set()
+    pending = ["report", "session_cache"]
+    while pending:
+        name = pending.pop()
+        source = _PACKAGE_DIRECTORY / f"{name}.py"
+        if name in seen or not source.is_file():
+            continue
+        seen.add(name)
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and node.level == 1:
+                if node.module is not None:
+                    pending.append(node.module.split(".")[0])
+                else:
+                    pending.extend(alias.name for alias in node.names)
+    return frozenset(seen)
 
 
 def _utc_iso(value: datetime) -> str:

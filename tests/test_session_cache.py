@@ -832,3 +832,13 @@ def test_a_turn_the_cache_never_analyzed_counts_as_changed_whatever_its_updated_
 
     assert report_module._changed_sessions([seen], cache, known) == set()
     assert report_module._changed_sessions([seen, unseen], cache, known) == {"ticket-carry"}
+
+
+def test_fingerprint_covers_the_analysis_but_not_serving_code():
+    """A web/schema-only deploy must not force a full Langfuse rebuild."""
+
+    from weekly_cs_report.session_cache import _analysis_modules
+
+    modules = _analysis_modules()
+    assert {"report", "classification", "pipeline", "enrichment", "cohort"} <= modules
+    assert not {"web", "dashboard_schema", "freshdesk_csat", "cli"} & modules
