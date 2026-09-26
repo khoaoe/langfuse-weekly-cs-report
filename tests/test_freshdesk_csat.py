@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from weekly_cs_report.freshdesk_csat import (
+    FreshdeskTicketDataError,
     FreshdeskCSATError,
     FreshdeskClient,
     FreshdeskSettings,
@@ -694,3 +695,55 @@ def test_worker_pool_stays_saturated_across_varied_ticket_latency():
         f"pool stalled: {elapsed:.2f}s for {serial_seconds:.2f}s of work "
         f"across 4 workers"
     )
+
+
+def test_malformed_ticket_is_skipped_and_keeps_its_cached_responses():
+    """One bad ticket used to fail every fetch-csat run for six days."""
+
+    class FakeClient:
+        def get_satisfaction_ratings(self, ticket_id: str):
+            if ticket_id == "201":
+                raise FreshdeskTicketDataError(
+                    "Freshdesk rating response is invalid", "rating_invalid"
+                )
+            return (
+                {
+                    "id": int(ticket_id) + 90_000,
+                    "ticket_id": int(ticket_id),
+                    "survey_id": 43000076179,
+                    "agent_id": 73_001,
+                    "created_at": "2026-08-02T01:00:00Z",
+                    "ratings": {"default_question": 103},
+                    "feedback": None,
+                },
+            )
+
+    kept = CachedCSATResponse(
+        response_key=f"sha256:{'b' * 64}",
+        ticket_id="201",
+        survey_id=43000076179,
+        responded_at="2026-07-21T01:00:00Z",
+        rating_raw=103,
+        satisfaction_bucket="positive",
+        comment_present=False,
+        comment_redacted=None,
+    )
+    existing = CSATCache(
+        fetched_weeks={"2026-07-20": "2026-07-27T01:00:00Z"},
+        fetch_stats=CSATCacheStats(1, 1, 0, 0),
+        responses=(kept,),
+    )
+
+    result = fetch_csat_population(
+        FakeClient(),
+        {"2026-07-20": ("201", "202")},
+        load_agent_config_from_values(),
+        existing=existing,
+        as_of=datetime(2026, 8, 2, 12, tzinfo=timezone.utc),
+        max_workers=2,
+    )
+
+    assert result.complete is True
+    assert result.skipped_tickets == (("201", "rating_invalid"),)
+    assert kept in result.cache.responses
+    assert {item.ticket_id for item in result.cache.responses} == {"201", "202"}

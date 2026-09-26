@@ -30,6 +30,8 @@ from .csat_cache import (
 from .outcome_reconciliation import (
     ConversationMetadata,
     OutcomeReconciliationError,
+    TicketDataError,
+    within_skip_budget,
 )
 from .freshdesk_entry_coverage import (
     FreshdeskEntryCoverageError,
@@ -114,6 +116,14 @@ _TICKET_NOT_FOUND = object()
 
 class FreshdeskCSATError(RuntimeError):
     """A sanitized failure safe to print from the command-line boundary."""
+
+
+class FreshdeskTicketDataError(FreshdeskCSATError, TicketDataError):
+    """One ticket's payload failed validation; see `TicketDataError`."""
+
+    def __init__(self, message: str, code: str) -> None:
+        FreshdeskCSATError.__init__(self, message)
+        self.code = code
 
 
 class FreshdeskFetchDeadline(FreshdeskCSATError):
@@ -340,6 +350,8 @@ class IncrementalCSATResult:
     cache: CSATCache
     completed_weeks: tuple[str, ...]
     complete: bool
+    # (ticket_id, code) for tickets skipped by `FreshdeskTicketDataError`.
+    skipped_tickets: tuple[tuple[str, str], ...] = ()
 
 
 class FreshdeskClient:
@@ -382,7 +394,9 @@ class FreshdeskClient:
             not_found=(),
         )
         if not isinstance(value, (list, tuple)):
-            raise FreshdeskCSATError("Freshdesk rating response is invalid")
+            raise FreshdeskTicketDataError(
+                "Freshdesk rating response is invalid", "rating_invalid"
+            )
         return tuple(value)
 
     def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
@@ -425,8 +439,8 @@ class FreshdeskClient:
                 should_stop=should_stop,
             )
             if not isinstance(value, (list, tuple)):
-                raise FreshdeskCSATError(
-                    "Freshdesk conversation response is invalid"
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid", "conversation_invalid"
                 )
             try:
                 rows = tuple(
@@ -449,17 +463,19 @@ class FreshdeskClient:
                     if isinstance(item, Mapping)
                 )
             except (OutcomeReconciliationError, TypeError):
-                raise FreshdeskCSATError(
-                    "Freshdesk conversation response is invalid"
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid", "conversation_invalid"
                 ) from None
             if len(rows) != len(value):
-                raise FreshdeskCSATError(
-                    "Freshdesk conversation response is invalid"
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid", "conversation_invalid"
                 )
             projected.extend(rows)
             if len(value) < _CONVERSATION_PAGE_SIZE:
                 return tuple(projected)
-        raise FreshdeskCSATError("Freshdesk conversation page limit exceeded")
+        raise FreshdeskTicketDataError(
+            "Freshdesk conversation page limit exceeded", "conversation_page_limit"
+        )
 
     def list_ticket_metadata(
         self,
@@ -702,7 +718,9 @@ class FreshdeskUIClient:
         if isinstance(value, Mapping):
             value = value.get("satisfaction_ratings")
         if not isinstance(value, (list, tuple)):
-            raise FreshdeskCSATError("Freshdesk rating response is invalid")
+            raise FreshdeskTicketDataError(
+                "Freshdesk rating response is invalid", "rating_invalid"
+            )
         return tuple(value)
 
     def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
@@ -765,25 +783,37 @@ class FreshdeskUIClient:
                 should_stop=should_stop,
             )
             if not isinstance(raw, Mapping):
-                raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid",
+                    "conversation_page_shape",
+                )
             value = raw.get("conversations")
             if not isinstance(value, (list, tuple)):
-                raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid",
+                    "conversation_page_shape",
+                )
             meta = raw.get("meta")
             page_count = meta.get("count") if isinstance(meta, Mapping) else None
             if isinstance(page_count, int) and not isinstance(page_count, bool):
                 if reported_count is not None and reported_count != page_count:
-                    raise FreshdeskCSATError(
-                        "Freshdesk conversation response is invalid"
+                    raise FreshdeskTicketDataError(
+                        "Freshdesk conversation response is invalid",
+                        "conversation_count_changed",
                     )
                 reported_count = page_count
             collected.extend(value)
             if len(value) < _CONVERSATION_PAGE_SIZE:
                 break
         else:
-            raise FreshdeskCSATError("Freshdesk conversation page limit exceeded")
+            raise FreshdeskTicketDataError(
+                "Freshdesk conversation page limit exceeded", "conversation_page_limit"
+            )
         if reported_count is not None and reported_count != len(collected):
-            raise FreshdeskCSATError("Freshdesk conversation response is incomplete")
+            raise FreshdeskTicketDataError(
+                "Freshdesk conversation response is incomplete",
+                "conversation_incomplete",
+            )
         try:
             rows = tuple(
                 ConversationMetadata(
@@ -805,11 +835,15 @@ class FreshdeskUIClient:
                 if isinstance(item, Mapping)
             )
         except (OutcomeReconciliationError, TypeError):
-            raise FreshdeskCSATError(
-                "Freshdesk conversation response is invalid"
+            raise FreshdeskTicketDataError(
+                "Freshdesk conversation response is invalid",
+                "conversation_item_invalid",
             ) from None
         if len(rows) != len(collected):
-            raise FreshdeskCSATError("Freshdesk conversation response is invalid")
+            raise FreshdeskTicketDataError(
+                "Freshdesk conversation response is invalid",
+                "conversation_item_invalid",
+            )
         return rows
 
     def verify(self) -> None:
@@ -1115,7 +1149,9 @@ def collect_ticket_ratings(
         conversations: tuple[ConversationMetadata, ...] | None = None
         for value in ratings:
             if not isinstance(value, Mapping):
-                raise FreshdeskCSATError("Freshdesk rating response is invalid")
+                raise FreshdeskTicketDataError(
+                    "Freshdesk rating response is invalid", "rating_invalid"
+                )
             all_count += 1
             agent_id = value.get("agent_id")
             if agent_id is not None and (
@@ -1177,7 +1213,9 @@ def _survey_follows_bot_response(
 
     created_at = value.get("created_at")
     if not isinstance(created_at, str):
-        raise FreshdeskCSATError("Freshdesk bot rating is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk bot rating is invalid", "bot_rating_invalid"
+        )
     survey_time = _utc_iso(created_at)
     latest = _latest_public_outgoing_before(value, conversations)
     if latest is None or latest.author_id not in bot_agent_ids:
@@ -1193,7 +1231,9 @@ def _survey_has_autorep_note(
 ) -> bool:
     created_at = value.get("created_at")
     if not isinstance(created_at, str):
-        raise FreshdeskCSATError("Freshdesk bot rating is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk bot rating is invalid", "bot_rating_invalid"
+        )
     survey_time = _utc_iso(created_at)
     latest_response = latest or _latest_public_outgoing_before(
         value,
@@ -1215,7 +1255,9 @@ def _latest_public_outgoing_before(
 ) -> ConversationMetadata | None:
     created_at = value.get("created_at")
     if not isinstance(created_at, str):
-        raise FreshdeskCSATError("Freshdesk bot rating is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk bot rating is invalid", "bot_rating_invalid"
+        )
     survey_time = _utc_iso(created_at)
     preceding = [
         conversation
@@ -1352,6 +1394,7 @@ def fetch_csat_population(
         response.response_key: response for response in base.responses
     }
     completed: list[str] = []
+    skipped_tickets: list[tuple[str, str]] = []
     aggregate_stats = CSATFetchStats()
     for week in target_weeks:
         if monotonic() - started_at >= max_duration_seconds:
@@ -1359,6 +1402,7 @@ def fetch_csat_population(
                 cache=_build_cache(fetched_weeks, responses_by_key, aggregate_stats, base),
                 completed_weeks=tuple(completed),
                 complete=False,
+                skipped_tickets=tuple(skipped_tickets),
             )
         ticket_ids = normalized_population[week]
         try:
@@ -1381,8 +1425,13 @@ def fetch_csat_population(
                 ),
                 completed_weeks=tuple(completed),
                 complete=False,
+                skipped_tickets=tuple(skipped_tickets),
             )
-        fetched_ticket_ids = frozenset(ticket_ids)
+        # A skipped ticket keeps its previously cached responses.
+        fetched_ticket_ids = frozenset(ticket_ids) - {
+            ticket_id for ticket_id, _ in week_result.skipped_tickets
+        }
+        skipped_tickets.extend(week_result.skipped_tickets)
         responses_by_key = {
             key: response
             for key, response in responses_by_key.items()
@@ -1418,7 +1467,26 @@ def fetch_csat_population(
         cache=_build_cache(fetched_weeks, responses_by_key, aggregate_stats, base),
         completed_weeks=tuple(completed),
         complete=True,
+        skipped_tickets=tuple(skipped_tickets),
     )
+
+
+@dataclass(frozen=True)
+class _WeekResult:
+    responses: tuple[CSATResponse, ...]
+    stats: CSATFetchStats
+    skipped_tickets: tuple[tuple[str, str], ...]
+
+
+def _collect_one(
+    client: FreshdeskClient,
+    ticket_id: str,
+    config: FreshdeskAgentConfig,
+) -> CSATFetchResult | tuple[str, str]:
+    try:
+        return collect_ticket_ratings(client, (ticket_id,), config)
+    except FreshdeskTicketDataError as error:
+        return ticket_id, error.code
 
 
 def _fetch_week(
@@ -1428,36 +1496,42 @@ def _fetch_week(
     *,
     max_workers: int,
     should_stop: Callable[[], bool],
-) -> CSATFetchResult:
-    results: list[CSATFetchResult] = []
+) -> _WeekResult:
+    outcomes: list[CSATFetchResult | tuple[str, str]] = []
     if max_workers == 1:
         for ticket_id in ticket_ids:
             if should_stop():
                 raise _FetchDurationReached
-            results.append(collect_ticket_ratings(client, (ticket_id,), config))
+            outcomes.append(_collect_one(client, ticket_id, config))
     else:
         # Freshdesk per-ticket latency varies widely, so a lock-step batch
         # would run at the slowest ticket's pace instead of the pool's.
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [
-                executor.submit(collect_ticket_ratings, client, (ticket_id,), config)
+                executor.submit(_collect_one, client, ticket_id, config)
                 for ticket_id in ticket_ids
             ]
             try:
                 for future in as_completed(futures):
                     if should_stop():
                         raise _FetchDurationReached
-                    results.append(future.result())
+                    outcomes.append(future.result())
             finally:
                 for future in futures:
                     future.cancel()
+    results = [item for item in outcomes if isinstance(item, CSATFetchResult)]
+    skipped = tuple(
+        sorted(item for item in outcomes if not isinstance(item, CSATFetchResult))
+    )
+    if not within_skip_budget(len(skipped), len(ticket_ids)):
+        raise FreshdeskCSATError("Freshdesk ticket data errors exceeded the skip limit")
     responses = tuple(
         response for result in results for response in result.responses
     )
     stats = CSATFetchStats()
     for result in results:
         stats = _add_stats(stats, result.stats)
-    return CSATFetchResult(responses=responses, stats=stats)
+    return _WeekResult(responses=responses, stats=stats, skipped_tickets=skipped)
 
 
 def _normalize_population(
@@ -1570,10 +1644,14 @@ def _bot_response(
         or not isinstance(created_at, str)
         or not isinstance(ratings, Mapping)
     ):
-        raise FreshdeskCSATError("Freshdesk bot rating is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk bot rating is invalid", "bot_rating_invalid"
+        )
     rating_raw = ratings.get("default_question")
     if not isinstance(rating_raw, int) or isinstance(rating_raw, bool):
-        raise FreshdeskCSATError("Freshdesk bot rating is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk bot rating is invalid", "bot_rating_invalid"
+        )
     responded_at = _utc_iso(created_at)
     comment_redacted = redact_survey_comment(value.get("feedback"))
     return CSATResponse(
@@ -1598,9 +1676,13 @@ def _utc_iso(value: str) -> str:
     try:
         parsed = datetime.fromisoformat(normalized)
     except ValueError:
-        raise FreshdeskCSATError("Freshdesk response timestamp is invalid") from None
+        raise FreshdeskTicketDataError(
+            "Freshdesk response timestamp is invalid", "response_timestamp_invalid"
+        ) from None
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise FreshdeskCSATError("Freshdesk response timestamp is invalid")
+        raise FreshdeskTicketDataError(
+            "Freshdesk response timestamp is invalid", "response_timestamp_invalid"
+        )
     return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 

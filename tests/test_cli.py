@@ -906,6 +906,7 @@ def test_reconciliation_command_checkpoints_without_exposing_identity(
         "checked_ticket_count": 0,
         "human_replied_after_ai": 0,
         "unresolved_ticket_count": 1,
+        "skipped_tickets": [],
     }
     assert load_reconciliation_cache(checkpoint) == cache
     assert stat.S_IMODE(checkpoint.stat().st_mode) == 0o600

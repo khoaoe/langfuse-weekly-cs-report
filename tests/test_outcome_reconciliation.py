@@ -14,6 +14,7 @@ from weekly_cs_report.freshdesk_csat import (
     FreshdeskCSATError,
     FreshdeskClient,
     FreshdeskSettings,
+    FreshdeskTicketDataError,
 )
 from weekly_cs_report.outcome_reconciliation import (
     ConversationMetadata,
@@ -392,3 +393,68 @@ def test_incremental_reconciliation_refetches_recent_week_and_freezes_old_week()
     )
     for forbidden in ("author_id", "conversation_id", "created_at", "body"):
         assert forbidden not in serialized
+
+
+def _skip_test_config() -> ReconciliationAgentConfig:
+    return ReconciliationAgentConfig(
+        approved_by="PO",
+        approved_at="2026-08-03",
+        bot_agent_ids=frozenset({BOT}),
+        human_agent_ids=frozenset({HUMAN}),
+        excluded_agent_ids=frozenset({EXCLUDED}),
+        source_hash="sha256:" + "1" * 64,
+    )
+
+
+def test_one_malformed_ticket_is_skipped_and_keeps_its_last_record():
+    """One bad ticket used to fail every run for six days (2026-09-21..27)."""
+
+    class Client:
+        def get_conversation_metadata(self, ticket_id: str):
+            if ticket_id == "201":
+                raise FreshdeskTicketDataError(
+                    "Freshdesk conversation response is invalid",
+                    "conversation_item_invalid",
+                )
+            return (_conversation(1, BOT, 0), _conversation(2, HUMAN, 1))
+
+    existing = ReconciliationCache(
+        fetched_weeks={"2026-07-20": "2026-07-27T01:00:00Z"},
+        records=(ReconciliationRecord("201", "2026-07-20", False),),
+    )
+    result = fetch_reconciliation_population(
+        Client(),
+        {"2026-07-20": ("201", "202", "203")},
+        _skip_test_config(),
+        existing=existing,
+        as_of=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+        max_workers=2,
+    )
+
+    assert result.complete is True
+    assert result.skipped_tickets == (("201", "conversation_item_invalid"),)
+    assert result.cache.records == (
+        ReconciliationRecord("201", "2026-07-20", False),
+        ReconciliationRecord("202", "2026-07-20", True),
+        ReconciliationRecord("203", "2026-07-20", True),
+    )
+
+
+def test_many_malformed_tickets_still_fail_the_run():
+    """A systematic shape change must not silently freeze every record."""
+
+    class Client:
+        def get_conversation_metadata(self, ticket_id: str):
+            raise FreshdeskTicketDataError(
+                "Freshdesk conversation response is invalid", "conversation_page_shape"
+            )
+
+    with pytest.raises(OutcomeReconciliationError, match="skip limit"):
+        fetch_reconciliation_population(
+            Client(),
+            {"2026-07-20": tuple(str(200 + index) for index in range(1, 8))},
+            _skip_test_config(),
+            existing=None,
+            as_of=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
+            max_workers=1,
+        )

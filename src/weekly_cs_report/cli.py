@@ -1782,7 +1782,16 @@ def _run_fetch_csat_command(args: argparse.Namespace) -> dict[str, object]:
             stats.excluded_other_agent_response_count
         ),
         "excluded_null_agent_response_count": stats.excluded_null_agent_response_count,
+        "skipped_tickets": _skipped_ticket_report(result.skipped_tickets),
     }
+
+
+def _skipped_ticket_report(
+    skipped: Sequence[tuple[str, str]],
+) -> list[dict[str, str]]:
+    """Ticket ID + failed check, so a malformed ticket can be found by ID."""
+
+    return [{"ticket_id": ticket_id, "code": code} for ticket_id, code in skipped]
 
 
 def _run_discover_agents_command(args: argparse.Namespace) -> dict[str, object]:
@@ -1949,6 +1958,7 @@ def _run_reconcile_freshdesk_outcomes_command(
         "checked_ticket_count": checked,
         "human_replied_after_ai": human_replied,
         "unresolved_ticket_count": unresolved,
+        "skipped_tickets": _skipped_ticket_report(result.skipped_tickets),
     }
 
 

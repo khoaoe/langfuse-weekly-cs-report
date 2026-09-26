@@ -88,6 +88,24 @@ class _FetchDurationReached(RuntimeError):
     pass
 
 
+class TicketDataError(RuntimeError):
+    """One ticket's Freshdesk payload failed validation.
+
+    Per-ticket fetch loops skip that ticket and keep its last good record
+    instead of failing the whole run: before 2026-09-27 a single malformed
+    ticket failed every `freshdesk-refresh` run for six days. `code` names
+    the failed check so the operator can find the ticket by ID.
+    """
+
+    code: str = "invalid"
+
+
+def within_skip_budget(skipped: int, total: int) -> bool:
+    """A few bad tickets are data; many mean the API changed shape, so fail."""
+
+    return skipped <= max(5, total // 50)
+
+
 @dataclass(frozen=True)
 class ConversationMetadata:
     """Transient allowlist projected immediately from one conversation."""
@@ -171,6 +189,8 @@ class IncrementalReconciliationResult:
     cache: ReconciliationCache
     completed_weeks: tuple[str, ...]
     complete: bool
+    # (ticket_id, code) for tickets skipped by `TicketDataError`.
+    skipped_tickets: tuple[tuple[str, str], ...] = ()
 
 
 def load_reconciliation_agent_config(
@@ -444,6 +464,7 @@ def fetch_reconciliation_population(
     fetched_weeks = dict(base.fetched_weeks)
     records_by_ticket = {record.ticket_id: record for record in base.records}
     completed: list[str] = []
+    skipped_tickets: list[tuple[str, str]] = []
     for week in target_weeks:
         if monotonic() - started_at >= max_duration_seconds:
             return _incremental_result(
@@ -451,9 +472,10 @@ def fetch_reconciliation_population(
                 records_by_ticket,
                 completed,
                 complete=False,
+                skipped_tickets=skipped_tickets,
             )
         try:
-            records = _fetch_reconciliation_week(
+            records, skipped = _fetch_reconciliation_week(
                 client,
                 week,
                 normalized[week],
@@ -469,15 +491,18 @@ def fetch_reconciliation_population(
                 records_by_ticket,
                 completed,
                 complete=False,
+                skipped_tickets=skipped_tickets,
             )
+        kept = {ticket_id for ticket_id, _ in skipped}
         records_by_ticket = {
             ticket_id: record
             for ticket_id, record in records_by_ticket.items()
-            if record.cohort_week != week
+            if record.cohort_week != week or ticket_id in kept
         }
         records_by_ticket.update(
             {record.ticket_id: record for record in records}
         )
+        skipped_tickets.extend(skipped)
         fetched_weeks[week] = _format_utc(as_of)
         completed.append(week)
         if on_week_complete is not None:
@@ -489,6 +514,7 @@ def fetch_reconciliation_population(
         records_by_ticket,
         completed,
         complete=True,
+        skipped_tickets=skipped_tickets,
     )
 
 
@@ -500,15 +526,18 @@ def _fetch_reconciliation_week(
     *,
     max_workers: int,
     should_stop: Callable[[], bool],
-) -> tuple[ReconciliationRecord, ...]:
+) -> tuple[tuple[ReconciliationRecord, ...], tuple[tuple[str, str], ...]]:
     fetch = getattr(client, "get_conversation_metadata", None)
     if not callable(fetch):
         raise OutcomeReconciliationError(
             "Freshdesk conversation client is invalid"
         )
 
-    def classify(ticket_id: str) -> ReconciliationRecord:
-        conversations = fetch(ticket_id)
+    def classify(ticket_id: str) -> ReconciliationRecord | tuple[str, str]:
+        try:
+            conversations = fetch(ticket_id)
+        except TicketDataError as error:
+            return ticket_id, error.code
         if not isinstance(conversations, tuple) or any(
             not isinstance(row, ConversationMetadata) for row in conversations
         ):
@@ -524,12 +553,12 @@ def _fetch_reconciliation_week(
             ),
         )
 
-    records: list[ReconciliationRecord] = []
+    results: list[ReconciliationRecord | tuple[str, str]] = []
     if max_workers == 1:
         for ticket_id in ticket_ids:
             if should_stop():
                 raise _FetchDurationReached
-            records.append(classify(ticket_id))
+            results.append(classify(ticket_id))
     else:
         # Freshdesk per-ticket latency varies widely, so a lock-step batch
         # would run at the slowest ticket's pace instead of the pool's.
@@ -539,11 +568,19 @@ def _fetch_reconciliation_week(
                 for future in as_completed(futures):
                     if should_stop():
                         raise _FetchDurationReached
-                    records.append(future.result())
+                    results.append(future.result())
             finally:
                 for future in futures:
                     future.cancel()
-    return tuple(records)
+    records = tuple(item for item in results if isinstance(item, ReconciliationRecord))
+    skipped = tuple(
+        sorted(item for item in results if not isinstance(item, ReconciliationRecord))
+    )
+    if not within_skip_budget(len(skipped), len(ticket_ids)):
+        raise OutcomeReconciliationError(
+            "Freshdesk ticket data errors exceeded the skip limit"
+        )
+    return records, skipped
 
 
 def _normalize_population(
@@ -616,11 +653,13 @@ def _incremental_result(
     completed: Sequence[str],
     *,
     complete: bool,
+    skipped_tickets: Sequence[tuple[str, str]] = (),
 ) -> IncrementalReconciliationResult:
     return IncrementalReconciliationResult(
         cache=_build_reconciliation_cache(fetched_weeks, records_by_ticket),
         completed_weeks=tuple(completed),
         complete=complete,
+        skipped_tickets=tuple(skipped_tickets),
     )
 
 
