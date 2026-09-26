@@ -1065,6 +1065,44 @@ def _freshdesk_client(auth: str, runtime_directory: Path):
     raise FreshdeskCSATError("Freshdesk auth mode is invalid")
 
 
+def _snapshot_weekly_rows(snapshot) -> list:
+    """`load()` already validated the snapshot; `dashboard_dict()` would
+    deep-copy and re-validate ~11 MB again just to read the week labels."""
+
+    return snapshot.dashboard["views"]["mon_sun"]["weekly"]
+
+
+_FRESHDESK_JOB_LOCK_WAIT_SECONDS = 15 * 60
+
+
+def _freshdesk_job_lock(runtime_directory: Path, *, wait_seconds: float) -> int | None:
+    """Hold one Freshdesk job at a time; the fd, or None if still busy.
+
+    The three cron jobs start at :00/:15/:30 and each can run 30 min, so
+    they overlapped each other -- and a full dashboard rebuild -- inside the
+    same 4 GB container (38 runs killed with exit 137). The lock lives next
+    to the checkpoints because the dashboard refuses unknown files in
+    runtime/. The kernel drops it when the process exits, however it exits.
+    """
+
+    import fcntl
+    import time as monotonic_time
+
+    directory = Path(runtime_directory).parent / "artifacts"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(directory / "freshdesk_job.lock", os.O_RDWR | os.O_CREAT, 0o600)
+    deadline = monotonic_time.monotonic() + wait_seconds
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return descriptor
+        except BlockingIOError:
+            if monotonic_time.monotonic() >= deadline:
+                os.close(descriptor)
+                return None
+            monotonic_time.sleep(min(5.0, wait_seconds))
+
+
 def _csat_population(runtime_directory: Path, weeks: int):
     from .dashboard_cache import ProtectedSnapshotStore
     from .freshdesk_csat import FreshdeskCSATError
@@ -1075,7 +1113,7 @@ def _csat_population(runtime_directory: Path, weeks: int):
     snapshot = ProtectedSnapshotStore(runtime_directory).load()
     if snapshot is None:
         raise FreshdeskCSATError("Dashboard snapshot is unavailable for CSAT fetch")
-    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    weekly_rows = _snapshot_weekly_rows(snapshot)
     selected_weeks = tuple(
         row["cohort_week"] for row in weekly_rows[-weeks:]
     )
@@ -1110,7 +1148,7 @@ def _reconciliation_population(runtime_directory: Path, weeks: int):
         raise OutcomeReconciliationError(
             "Dashboard snapshot is unavailable for outcome reconciliation"
         )
-    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    weekly_rows = _snapshot_weekly_rows(snapshot)
     selected_weeks = tuple(row["cohort_week"] for row in weekly_rows[-weeks:])
     return {
         week: tuple(
@@ -1151,7 +1189,7 @@ def _entry_coverage_population(
         raise FreshdeskEntryCoverageError(
             "Dashboard snapshot is unavailable for entry coverage"
         )
-    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    weekly_rows = _snapshot_weekly_rows(snapshot)
     selected_weeks = tuple(
         row["cohort_week"]
         for row in weekly_rows[-weeks:]
@@ -1203,7 +1241,7 @@ def _ai_review_population(
     snapshot = ProtectedSnapshotStore(runtime_directory).load()
     if snapshot is None:
         raise AIReviewError("Dashboard snapshot is unavailable for AI review")
-    weekly_rows = snapshot.dashboard_dict()["views"]["mon_sun"]["weekly"]
+    weekly_rows = _snapshot_weekly_rows(snapshot)
     selected_weeks = tuple(
         row["cohort_week"]
         for row in weekly_rows[-weeks:]
@@ -1980,6 +2018,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             from .freshdesk_entry_coverage import FreshdeskEntryCoverageError
             from .outcome_reconciliation import OutcomeReconciliationError
 
+            lock = _freshdesk_job_lock(
+                args.runtime_dir, wait_seconds=_FRESHDESK_JOB_LOCK_WAIT_SECONDS
+            )
+            if lock is None:
+                # The next scheduled run picks the work up; every job resumes.
+                print(json.dumps({"status": "busy"}))
+                return 0
             try:
                 if args.command == "discover-agents":
                     result = _run_discover_agents_command(args)
@@ -2002,6 +2047,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             ) as error:
                 print(str(error), file=sys.stderr)
                 return 2
+            finally:
+                os.close(lock)
             print(json.dumps(result, sort_keys=True))
             return 0
         eval_label_set = (

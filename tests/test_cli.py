@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import csv
 import json
 import stat
@@ -228,7 +230,8 @@ def test_entry_coverage_population_is_fixed_to_start_week(monkeypatch, tmp_path:
     from weekly_cs_report import cli as cli_module
 
     class Snapshot:
-        def dashboard_dict(self):
+        @property
+        def dashboard(self):
             return {
                 "views": {
                     "mon_sun": {
@@ -273,7 +276,8 @@ def test_csat_population_loads_the_protected_snapshot_store(monkeypatch, tmp_pat
             Ticket("103", "2026-06-29"),
         )
 
-        def dashboard_dict(self):
+        @property
+        def dashboard(self):
             return {
                 "views": {
                     "mon_sun": {
@@ -1212,3 +1216,20 @@ def test_ai_review_merge_drops_tickets_langfuse_does_not_know(
 
     cache = load_ai_review_cache(runtime / "ai_review_cache.json")
     assert {record.ticket_id for record in cache.records} == {"101"}
+
+
+def test_freshdesk_jobs_take_turns_instead_of_overlapping(tmp_path):
+    """Overlapping jobs in one 4 GB container were killed with exit 137."""
+
+    from weekly_cs_report.cli import _freshdesk_job_lock
+
+    runtime = tmp_path / "runtime"
+    first = _freshdesk_job_lock(runtime, wait_seconds=0)
+    assert first is not None
+    try:
+        assert _freshdesk_job_lock(runtime, wait_seconds=0) is None
+    finally:
+        os.close(first)
+    second = _freshdesk_job_lock(runtime, wait_seconds=0)
+    assert second is not None
+    os.close(second)
