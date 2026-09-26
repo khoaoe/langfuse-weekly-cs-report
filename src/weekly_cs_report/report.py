@@ -86,6 +86,11 @@ _FULL_REBUILD_EVERY = timedelta(hours=24)
 # load on Langfuse where it already is. One at a time, they were ~50 s of a
 # ~55 s incremental refresh (measured 2026-09-25: 61 lookups at ~1 s each).
 _CARRIED_LOOKUP_WORKERS = 4
+# A trace counts as changed when Langfuse updated it this long before the
+# previous refresh or later. Its `updatedAt` follows every observation written
+# to it (sampled 2026-09-25: within 35 s on all 4,658 traces); the rest is room
+# for clock skew and rows written just before becoming visible.
+_CHANGE_MARGIN = timedelta(minutes=30)
 
 
 @dataclass
@@ -375,14 +380,25 @@ def compute_report(
                 for session_id, (first, _last) in cache.seen.items()
                 if window.query_from_utc <= first < fetch_from_utc
             }
-            carried = sorted({
+            revisited = {
                 session_id
                 for raw in raw_traces
                 if isinstance(session_id := raw.get("sessionId"), str)
                 and session_id in known
-            } | _late_written_sessions(
+            }
+            changed = _changed_sessions(raw_traces, cache, known)
+            carried = sorted(changed | _late_written_sessions(
                 enrichment_job, fetched_ids, cache, known, fetch_from_utc
             ))
+            # The overlap rereads the last two hours on every refresh, so a
+            # ticket with a recent turn would otherwise be refetched whole
+            # each time. Unchanged, its cached copy is exactly what that
+            # refetch would produce; its partial traces must go, or they would
+            # analyze as a new ticket.
+            unchanged = revisited - set(carried)
+            raw_traces = [
+                raw for raw in raw_traces if raw.get("sessionId") not in unchanged
+            ]
             _raise_if_refresh_stopped(cancel_event, refresh_deadline, monotonic)
             carried_traces, unresolved = _refetch_carried_sessions(
                 client, carried, window, cancel_event, refresh_deadline, monotonic
@@ -539,6 +555,34 @@ def _next_session_cache(
         invalid_keyed=result.selection.invalid_keyed,
         unkeyed=result.selection.unkeyed,
     )
+
+
+def _changed_sessions(
+    raw_traces: Sequence[Mapping[str, object]],
+    cache: SessionCache,
+    known: set[str],
+) -> set[str]:
+    """Cached tickets that took a turn or were written to since the last refresh.
+
+    A trace the cache has not analyzed is a new turn. A trace it has, whose
+    `updatedAt` is recent, took a late observation or an edit. Either way the
+    ticket is refetched whole; a trace without a readable `updatedAt` counts
+    as changed.
+    """
+    changed_after = cache.fetched_at - _CHANGE_MARGIN
+    changed: set[str] = set()
+    for raw in raw_traces:
+        session_id = raw.get("sessionId")
+        if not isinstance(session_id, str) or session_id not in known:
+            continue
+        updated = _parsed_timestamp(raw, "updatedAt")
+        if (
+            cache.traces.get(raw.get("id")) != session_id  # type: ignore[arg-type]
+            or updated is None
+            or updated >= changed_after
+        ):
+            changed.add(session_id)
+    return changed
 
 
 def _late_written_sessions(

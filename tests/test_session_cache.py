@@ -536,18 +536,35 @@ def test_a_carried_sessions_chat_traces_are_not_analyzed():
             assert actual[key] == expected[key], key
 
 
+def _written_by(traces, observations, now, delays=None):
+    """What Langfuse holds at `now`, with `updatedAt` stamped as it does.
+
+    An observation lands `delays[id]` after it starts, and a trace's
+    `updatedAt` follows the latest observation written to it.
+    """
+    delays = delays or {}
+    visible = [
+        o for o in observations
+        if _stamp(o["startTime"]) + delays.get(o["id"], timedelta()) <= now
+    ]
+    latest: dict[str, datetime] = {}
+    for o in visible:
+        written = _stamp(o["startTime"]) + delays.get(o["id"], timedelta())
+        latest[o["traceId"]] = max(latest.get(o["traceId"], written), written)
+    stamped = []
+    for raw in traces:
+        created = _stamp(raw["timestamp"])
+        if created <= now:
+            updated = max(created, latest.get(raw["id"], created))
+            stamped.append({**raw, "updatedAt": updated.isoformat()})
+    return stamped, visible
+
+
 class LangfuseAt(WindowedClient):
     """A Langfuse that only holds what had been written by `now`."""
 
     def __init__(self, traces, observations=(), *, now: datetime) -> None:
-        visible = [
-            raw for raw in traces
-            if _stamp(raw["timestamp"]) <= now
-        ]
-        super().__init__(
-            visible,
-            [o for o in observations if _stamp(o["startTime"]) <= now],
-        )
+        super().__init__(*_written_by(traces, observations, now))
 
 
 def _moving_traces() -> list[dict]:
@@ -636,13 +653,7 @@ class LangfuseWithLateWrites(WindowedClient):
     """A Langfuse where some observations are written hours after they start."""
 
     def __init__(self, traces, observations, *, now: datetime, delays: dict) -> None:
-        super().__init__(
-            [raw for raw in traces if _stamp(raw["timestamp"]) <= now],
-            [
-                o for o in observations
-                if _stamp(o["startTime"]) + delays.get(o["id"], timedelta()) <= now
-            ],
-        )
+        super().__init__(*_written_by(traces, observations, now, delays))
 
 
 def test_an_observation_written_late_is_picked_up_by_a_later_refresh():
@@ -750,3 +761,74 @@ def test_carried_lookups_run_four_at_a_time_in_order_and_stop_on_error():
     with pytest.raises(RuntimeError):
         report_module._bounded_map(lookup, list(range(40)))
     assert len(started) < 40
+
+
+def _recent_turn_traces() -> list[dict]:
+    """A ticket opened days ago whose latest turn falls inside the overlap."""
+    return [
+        *_traces(),
+        trace("recent-0", "ticket-recent", 0, "2026-07-27T02:00:00Z", "Opened"),
+        trace("recent-1", "ticket-recent", 1, "2026-07-29T03:00:00Z", "Back"),
+    ]
+
+
+def test_a_ticket_unchanged_since_the_last_refresh_is_not_refetched():
+    """The overlap rereads its recent turn; that alone is no reason to refetch."""
+    traces = _recent_turn_traces()
+    observations = _observations_for(traces)
+    before = datetime(2026, 7, 29, 11, tzinfo=VIETNAM)
+    after = before + timedelta(minutes=15)
+
+    early = _run(LangfuseAt(traces, observations, now=before), as_of=before)
+    full = _run(LangfuseAt(traces, observations, now=after), as_of=after)
+    client = LangfuseAt(traces, observations, now=after)
+    cached = _run(client, early.session_cache, as_of=after)
+
+    assert client.bounds[0][0] <= _stamp("2026-07-29T03:00:00Z")
+    assert client.session_lookups == []
+    assert client.observation_lookups == []
+    assert _comparable(cached) == _comparable(full)
+
+
+def test_a_seen_turn_that_takes_a_late_observation_is_refetched():
+    """The trace is not new, but its `updatedAt` says it was written to."""
+    traces = _recent_turn_traces()
+    observations = _observations_for(traces, tpe_only={"recent-1"})
+    delays = {"tpe-recent-1": timedelta(minutes=90)}
+    before = datetime(2026, 7, 29, 11, tzinfo=VIETNAM)
+    after = before + timedelta(hours=1)
+
+    early = _run(
+        LangfuseWithLateWrites(traces, observations, now=before, delays=delays),
+        as_of=before,
+    )
+    assert not next(
+        s for s in early.result.sessions if s.session_id == "ticket-recent"
+    ).dimensions.tpe_signals
+
+    full = _run(
+        LangfuseWithLateWrites(traces, observations, now=after, delays=delays),
+        as_of=after,
+    )
+    client = LangfuseWithLateWrites(traces, observations, now=after, delays=delays)
+    cached = _run(client, early.session_cache, as_of=after)
+
+    assert client.session_lookups == ["ticket-recent"]
+    assert next(
+        s for s in cached.result.sessions if s.session_id == "ticket-recent"
+    ).dimensions.tpe_signals
+    assert _comparable(cached) == _comparable(full)
+
+
+def test_a_turn_the_cache_never_analyzed_counts_as_changed_whatever_its_updated_at():
+    """`updatedAt` is the usual signal; an unknown trace id is the backstop."""
+    full = _run(WindowedClient(_carried_traces()))
+    cache = full.session_cache
+    stale = (cache.fetched_at - timedelta(days=1)).isoformat()
+    known = {"ticket-carry"}
+
+    seen = {**trace("carry-1", "ticket-carry", 1, "2026-07-29T04:00:00Z", "x"), "updatedAt": stale}
+    unseen = {**trace("carry-9", "ticket-carry", 2, "2026-07-29T04:30:00Z", "x"), "updatedAt": stale}
+
+    assert report_module._changed_sessions([seen], cache, known) == set()
+    assert report_module._changed_sessions([seen, unseen], cache, known) == {"ticket-carry"}
