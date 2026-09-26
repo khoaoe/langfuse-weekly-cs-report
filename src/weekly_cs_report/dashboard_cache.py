@@ -202,6 +202,8 @@ class SnapshotManager:
             self._closed = False
         self._heartbeat_stop = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
+        # Called on the refresh thread with the view right after a publish.
+        self.on_publish: Callable[[CacheView], object] | None = None
 
     def get(self) -> CacheView:
         with self._lock:
@@ -405,6 +407,14 @@ class SnapshotManager:
                 self._finish_successful_refresh(
                     refreshed_snapshot, success_at, started_at_wall
                 )
+                listener = self.on_publish
+                if listener is not None:
+                    try:
+                        listener(self.peek())
+                    except Exception:
+                        # Only a warm-up: the next request rebuilds the same
+                        # bytes and surfaces the error there.
+                        pass
             else:
                 self._finish_failed_refresh(
                     error_code,

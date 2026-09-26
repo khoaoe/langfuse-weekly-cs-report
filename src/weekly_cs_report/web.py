@@ -617,6 +617,9 @@ def create_app(
         return response
 
     envelope_cache = _EnvelopeCache()
+    # Validate, serialise and gzip a new snapshot on the refresh thread, so
+    # the first poll after a publish is served from bytes, not built by it.
+    manager.on_publish = envelope_cache.get
 
     # Sync on purpose: a cache miss validates and gzips megabytes, which must
     # run in the threadpool, not on the single worker's event loop.
@@ -1580,9 +1583,11 @@ class _EnvelopeCache:
         self._snapshot: object = _NO_SNAPSHOT
         self._snapshot_json = b"null"
         self._state: tuple[object, ...] | None = None
-        self._entry = (b"", b"", "")
+        self._entry = (b"", "")
 
-    def get(self, view: CacheView) -> tuple[bytes, bytes, str]:
+    def get(self, view: CacheView) -> tuple[bytes, str]:
+        """The gzip body and a digest of the uncompressed body."""
+
         state = (
             view.status,
             view.refreshing,
@@ -1601,8 +1606,12 @@ class _EnvelopeCache:
             if state != self._state:
                 head = _json_bytes(_state_fields(view))
                 body = head[:-1] + b',"snapshot":' + self._snapshot_json + b"}"
-                etag = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
-                self._entry = (body, gzip.compress(body, compresslevel=6, mtime=0), etag)
+                # Only the gzip bytes are kept: every browser asks for gzip,
+                # and holding the multi-MB identity body too doubles memory.
+                self._entry = (
+                    gzip.compress(body, compresslevel=6, mtime=0),
+                    hashlib.sha256(body).hexdigest()[:32],
+                )
                 self._state = state
             return self._entry
 
@@ -1610,15 +1619,21 @@ class _EnvelopeCache:
 def _envelope_response(
     request: Request, cache: _EnvelopeCache, view: CacheView, status_code: int
 ) -> Response:
-    body, compressed, etag = cache.get(view)
+    compressed, digest = cache.get(view)
+    accepts_gzip = "gzip" in request.headers.get("accept-encoding", "")
+    # Each content-coding is its own representation, so each needs its own
+    # strong validator (RFC 9110 §8.8.3).
+    etag = f'"{digest}-gz"' if accepts_gzip else f'"{digest}"'
     headers = {"ETag": etag, "Vary": "Accept-Encoding"}
     # `no-store` keeps the browser from caching the payload, so only the SPA
     # itself sends If-None-Match, from the envelope it still holds in memory.
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304, headers=headers)
-    if "gzip" in request.headers.get("accept-encoding", ""):
+    if accepts_gzip:
         headers["Content-Encoding"] = "gzip"
         body = compressed
+    else:
+        body = gzip.decompress(compressed)
     return Response(
         body, status_code=status_code, media_type="application/json", headers=headers
     )

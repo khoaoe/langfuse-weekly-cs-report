@@ -379,6 +379,53 @@ def test_dashboard_polls_reuse_one_validated_gzip_body_and_answer_304(
     assert len(calls) == 1
 
 
+def test_gzip_and_identity_bodies_carry_different_strong_etags(manager_factory):
+    """RFC 9110 §8.8.3: a strong validator must differ per content-coding."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        zipped = client.get("/api/dashboard", headers={"Accept-Encoding": "gzip"})
+        plain = client.get("/api/dashboard", headers={"Accept-Encoding": "identity"})
+        cross = client.get(
+            "/api/dashboard",
+            headers={"Accept-Encoding": "identity", "If-None-Match": zipped.headers["etag"]},
+        )
+
+    assert zipped.headers["etag"] != plain.headers["etag"]
+    assert "content-encoding" not in plain.headers
+    assert plain.json() == zipped.json() == _state(snapshot)
+    assert cross.status_code == 200
+
+
+def test_a_published_snapshot_is_serialised_before_the_first_poll(
+    manager_factory, monkeypatch
+):
+    """The first poll after a refresh must not pay for validate + JSON + gzip."""
+    manager = manager_factory()
+    calls = []
+    original = DashboardSnapshot.dashboard_dict
+    monkeypatch.setattr(
+        DashboardSnapshot,
+        "dashboard_dict",
+        lambda self: calls.append(threading.current_thread().name) or original(self),
+    )
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        assert client.get("/api/dashboard").status_code == 202
+        assert manager.wait_for_idle(2)
+        built_on_refresh = list(calls)
+        assert client.get("/api/dashboard").status_code == 200
+
+    assert built_on_refresh
+    # Nothing left to build on the request thread.
+    assert calls == built_on_refresh
+
+
 def test_dashboard_first_load_returns_fixed_202_state(manager_factory):
     """Returning 200 or a partial snapshot before the first load misstates readiness."""
     manager = manager_factory()
