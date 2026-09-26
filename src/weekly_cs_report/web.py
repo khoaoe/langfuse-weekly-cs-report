@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
+import gzip
 import hashlib
 import ipaddress
 import json
@@ -610,12 +611,18 @@ def create_app(
                 response.headers[name] = value
         return response
 
+    envelope_cache = _EnvelopeCache()
+
+    # Sync on purpose: a cache miss validates and gzips megabytes, which must
+    # run in the threadpool, not on the single worker's event loop.
     @app.get("/api/dashboard")
-    async def dashboard():
+    def dashboard(request: Request):
         view = manager.get()
-        return JSONResponse(
-            _state_envelope(view),
-            status_code=202 if view.snapshot is None else 200,
+        return _envelope_response(
+            request,
+            envelope_cache,
+            view,
+            202 if view.snapshot is None else 200,
         )
 
     @app.get("/api/tickets")
@@ -925,7 +932,7 @@ def create_app(
                 status_code=403,
             )
         view = manager.request_refresh(force=True)
-        return JSONResponse(_state_envelope(view), status_code=202)
+        return _envelope_response(request, envelope_cache, view, 202)
 
     @app.get("/api/freshdesk-cookie")
     async def freshdesk_cookie_state():
@@ -1514,7 +1521,8 @@ def _max_trace_pages() -> int:
     return max_pages
 
 
-def _state_envelope(view: CacheView) -> dict[str, object]:
+def _state_fields(view: CacheView) -> dict[str, object]:
+    """The state envelope minus `snapshot`, which `_EnvelopeCache` appends last."""
     return {
         "status": view.status,
         "refreshing": view.refreshing,
@@ -1522,10 +1530,76 @@ def _state_envelope(view: CacheView) -> dict[str, object]:
         "last_error_at": (
             _utc_iso(view.last_error_at) if view.last_error_at is not None else None
         ),
-        "snapshot": (
-            view.snapshot.dashboard_dict() if view.snapshot is not None else None
-        ),
     }
+
+
+def _json_bytes(value: object) -> bytes:
+    # Byte-identical to Starlette's JSONResponse.render.
+    return json.dumps(
+        value, ensure_ascii=False, allow_nan=False, indent=None, separators=(",", ":")
+    ).encode("utf-8")
+
+
+_NO_SNAPSHOT = object()
+
+
+class _EnvelopeCache:
+    """The last served state envelope, as JSON, gzip and ETag.
+
+    Every poll used to deep-copy, re-validate and re-serialise the whole
+    multi-MB snapshot, and every open tab polls every 2 s while a refresh
+    runs. The snapshot is still validated through `dashboard_dict()`, just once
+    per published object instead of once per request; the small state fields
+    around it are re-encoded only when they change.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._snapshot: object = _NO_SNAPSHOT
+        self._snapshot_json = b"null"
+        self._state: tuple[object, ...] | None = None
+        self._entry = (b"", b"", "")
+
+    def get(self, view: CacheView) -> tuple[bytes, bytes, str]:
+        state = (
+            view.status,
+            view.refreshing,
+            view.last_error_code,
+            view.last_error_at,
+        )
+        with self._lock:
+            if view.snapshot is not self._snapshot:
+                self._snapshot_json = (
+                    b"null"
+                    if view.snapshot is None
+                    else _json_bytes(view.snapshot.dashboard_dict())
+                )
+                self._snapshot = view.snapshot
+                self._state = None
+            if state != self._state:
+                head = _json_bytes(_state_fields(view))
+                body = head[:-1] + b',"snapshot":' + self._snapshot_json + b"}"
+                etag = f'"{hashlib.sha256(body).hexdigest()[:32]}"'
+                self._entry = (body, gzip.compress(body, compresslevel=6, mtime=0), etag)
+                self._state = state
+            return self._entry
+
+
+def _envelope_response(
+    request: Request, cache: _EnvelopeCache, view: CacheView, status_code: int
+) -> Response:
+    body, compressed, etag = cache.get(view)
+    headers = {"ETag": etag, "Vary": "Accept-Encoding"}
+    # `no-store` keeps the browser from caching the payload, so only the SPA
+    # itself sends If-None-Match, from the envelope it still holds in memory.
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+    if "gzip" in request.headers.get("accept-encoding", ""):
+        headers["Content-Encoding"] = "gzip"
+        body = compressed
+    return Response(
+        body, status_code=status_code, media_type="application/json", headers=headers
+    )
 
 
 def _freshdesk_cookie_state_payload(

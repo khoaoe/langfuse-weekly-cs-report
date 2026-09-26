@@ -50,6 +50,23 @@ function transition(
   return { kind, snapshot, message: messageFor(kind, snapshot !== null) };
 }
 
+let lastParse: {
+  readonly envelope: unknown;
+  readonly result: ReturnType<typeof parseDashboardEnvelope>;
+} | null = null;
+
+/**
+ * A 304 hands back the very envelope object already parsed; strict-parsing
+ * megabytes again every 2 s poll would only rebuild an identical snapshot and
+ * re-run every memo keyed on it.
+ */
+function parseEnvelopeOnce(envelope: unknown): ReturnType<typeof parseDashboardEnvelope> {
+  if (lastParse === null || lastParse.envelope !== envelope) {
+    lastParse = { envelope, result: parseDashboardEnvelope(envelope) };
+  }
+  return lastParse.result;
+}
+
 /**
  * Folds server envelopes and user actions into the four runtime states.
  *
@@ -72,7 +89,7 @@ export function reduceDashboardRuntime(
       return transition("stale_error", state.snapshot);
 
     case "envelope": {
-      const parsed = parseDashboardEnvelope(action.envelope);
+      const parsed = parseEnvelopeOnce(action.envelope);
       if (!parsed.ok) {
         // A payload we cannot verify is treated as a failed read rather than
         // rendered optimistically.

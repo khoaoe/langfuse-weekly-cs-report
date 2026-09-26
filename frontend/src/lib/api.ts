@@ -45,14 +45,30 @@ async function readJson(response: Response): Promise<unknown> {
   }
 }
 
+/**
+ * The last envelope and its ETag. The API is `no-store`, so the browser never
+ * revalidates on its own; sending If-None-Match from memory lets the backend
+ * answer an unchanged poll with an empty 304 instead of megabytes.
+ */
+let lastDashboard: { readonly etag: string; readonly envelope: unknown } | null = null;
+
 export async function fetchDashboardEnvelope(signal?: AbortSignal): Promise<unknown> {
   const response = await fetch(DASHBOARD_ENDPOINT, {
     method: "GET",
     credentials: "same-origin",
-    headers: JSON_HEADERS,
+    headers:
+      lastDashboard === null
+        ? JSON_HEADERS
+        : { ...JSON_HEADERS, "If-None-Match": lastDashboard.etag },
     ...(signal ? { signal } : {}),
   });
-  return readJson(response);
+  if (response.status === 304 && lastDashboard !== null) {
+    return lastDashboard.envelope;
+  }
+  const envelope = await readJson(response);
+  const etag = response.headers.get("ETag");
+  lastDashboard = etag === null ? null : { etag, envelope };
+  return envelope;
 }
 
 export async function requestRefresh(signal?: AbortSignal): Promise<unknown> {

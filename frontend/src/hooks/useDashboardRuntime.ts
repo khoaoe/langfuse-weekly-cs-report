@@ -60,6 +60,9 @@ export function useDashboardRuntime(): DashboardRuntimeController {
     queryFn: ({ signal }) => fetchDashboardEnvelope(signal),
     retry: false,
     refetchOnWindowFocus: false,
+    // The reducer re-parses the envelope anyway; deep-diffing megabytes of
+    // JSON for structural sharing on every new snapshot buys nothing.
+    structuralSharing: false,
     refetchInterval: pollInterval(state),
   });
 

@@ -84,3 +84,34 @@ describe("dashboard and ticket snapshot consistency", () => {
     );
   });
 });
+
+describe("dashboard conditional polling", () => {
+  it("keeps the held snapshot when the server answers an unchanged poll with 304", async () => {
+    const seenTags: (string | null)[] = [];
+    server.use(
+      http.get("/api/dashboard", ({ request }) => {
+        const tag = request.headers.get("If-None-Match");
+        seenTags.push(tag);
+        return tag === '"v1"'
+          ? new HttpResponse(null, { status: 304, headers: { ETag: '"v1"' } })
+          : HttpResponse.json(dashboardEnvelopeFixture, { headers: { ETag: '"v1"' } });
+      }),
+    );
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+    });
+
+    render(
+      <QueryClientProvider client={client}>
+        <RuntimeHarness />
+      </QueryClientProvider>,
+    );
+    await screen.findByText("ready");
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["dashboard"] });
+    });
+
+    expect(seenTags.at(-1)).toBe('"v1"');
+    expect(screen.getByText("ready")).toBeVisible();
+  });
+});

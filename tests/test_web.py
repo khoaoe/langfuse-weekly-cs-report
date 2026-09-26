@@ -327,6 +327,39 @@ def test_dashboard_returns_ready_snapshot_with_exact_state_envelope(manager_fact
     }
 
 
+def test_dashboard_polls_reuse_one_validated_gzip_body_and_answer_304(
+    manager_factory, monkeypatch
+):
+    """Re-validating and re-sending megabytes on every 2 s poll starves the single worker."""
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+    expected = _state(snapshot)
+    calls = []
+    original = DashboardSnapshot.dashboard_dict
+    monkeypatch.setattr(
+        DashboardSnapshot,
+        "dashboard_dict",
+        lambda self: calls.append(1) or original(self),
+    )
+
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        first = client.get("/api/dashboard", headers={"Accept-Encoding": "gzip"})
+        etag = first.headers["etag"]
+        unchanged = client.get("/api/dashboard", headers={"If-None-Match": etag})
+        stale_tag = client.get("/api/dashboard", headers={"If-None-Match": '"old"'})
+
+    assert first.headers["content-encoding"] == "gzip"
+    assert first.json() == expected
+    assert unchanged.status_code == 304
+    assert unchanged.content == b""
+    assert unchanged.headers["cache-control"] == "no-store"
+    assert stale_tag.status_code == 200
+    assert stale_tag.json() == first.json()
+    assert len(calls) == 1
+
+
 def test_dashboard_first_load_returns_fixed_202_state(manager_factory):
     """Returning 200 or a partial snapshot before the first load misstates readiness."""
     manager = manager_factory()
