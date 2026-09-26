@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -715,7 +717,7 @@ def test_disk_save_load_round_trips_with_private_modes(tmp_path: Path):
     assert store.load() == expected
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(snapshot_path.stat().st_mode) == 0o600
-    assert json.loads(snapshot_path.read_text(encoding="utf-8")) == expected.storage_dict()
+    assert json.loads(gzip.decompress(snapshot_path.read_bytes()).decode("utf-8")) == expected.storage_dict()
 
 
 def test_incompatible_persisted_schema_is_not_served_while_refreshing(
@@ -841,8 +843,8 @@ def test_secret_failure_is_not_persisted_and_automatic_retry_waits_60_seconds(
         assert failed.status == "stale_error"
         assert failed.last_error_code == "refresh_failed"
         assert secret not in repr(failed)
-        assert "sk-secret-value" not in snapshot_path.read_text(encoding="utf-8")
-        assert "0901234567" not in snapshot_path.read_text(encoding="utf-8")
+        assert "sk-secret-value" not in gzip.decompress(snapshot_path.read_bytes()).decode("utf-8")
+        assert "0901234567" not in gzip.decompress(snapshot_path.read_bytes()).decode("utf-8")
         assert "sk-secret-value" not in failed.last_error_code
         assert "0901234567" not in failed.last_error_code
 
@@ -1298,3 +1300,14 @@ def test_close_sets_process_cancellation_before_waiting_for_refresh(tmp_path: Pa
 
     assert observed_cancellation.is_set()
     manager.close()
+
+
+def test_a_plain_json_snapshot_written_before_gzip_still_loads(tmp_path):
+    """Upgrading must not throw away the snapshot already on the volume."""
+    store = ProtectedSnapshotStore(tmp_path / "runtime")
+    snapshot = _snapshot(NOW)
+    store.save(snapshot)
+    path = tmp_path / "runtime" / "dashboard_snapshot.json"
+    path.write_bytes(gzip.decompress(path.read_bytes()))
+
+    assert store.load() == snapshot

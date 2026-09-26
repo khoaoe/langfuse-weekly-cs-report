@@ -842,3 +842,20 @@ def test_fingerprint_covers_the_analysis_but_not_serving_code():
     modules = _analysis_modules()
     assert {"report", "classification", "pipeline", "enrichment", "cohort"} <= modules
     assert not {"web", "dashboard_schema", "freshdesk_csat", "cli"} & modules
+
+
+def test_a_plain_json_cache_written_before_gzip_still_reads(tmp_path):
+    """read_private_json must accept both the old plain file and the gzip one."""
+
+    import json
+    import os
+
+    from weekly_cs_report.cache_store import atomic_private_json, read_private_json
+
+    path = tmp_path / "private" / "cache.json"
+    atomic_private_json(path, {"a": [1, 2]}, RuntimeError, "write")
+    assert path.read_bytes()[:2] == b"\x1f\x8b"
+    assert read_private_json(path, RuntimeError, "read") == {"a": [1, 2]}
+    path.write_bytes(json.dumps({"a": [1, 2]}).encode())
+    os.chmod(path, 0o600)
+    assert read_private_json(path, RuntimeError, "read") == {"a": [1, 2]}

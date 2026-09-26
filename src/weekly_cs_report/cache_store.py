@@ -17,6 +17,8 @@ rather than a shared one that would leak which cache failed.
 
 from collections.abc import Callable
 from datetime import date, datetime, timedelta
+import gzip
+import io
 import json
 import os
 from pathlib import Path
@@ -112,13 +114,40 @@ def validate_utc_timestamp(
         raise error(f"{label} is invalid")
 
 
+def dump_json_gzip(payload: object, stream: io.BufferedIOBase) -> None:
+    """Compact, key-sorted JSON through gzip level 1, flushed to `stream`.
+
+    Runtime caches are rewritten every refresh (~90 MB of JSON per 15 min
+    before 2026-09-27); JSON shrinks ~10x at level 1 for ~0.2 s of CPU. The
+    file names keep their `.json` suffix -- read them with `gzip -dc`.
+    """
+    with gzip.GzipFile(fileobj=stream, mode="wb", compresslevel=1, mtime=0) as zipped:
+        with io.TextIOWrapper(zipped, encoding="utf-8") as text:
+            json.dump(
+                payload,
+                text,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+    stream.flush()
+
+
+def load_json_file(stream: io.BufferedReader, **options: object) -> object:
+    """JSON from a gzip or (written before 2026-09-27) plain cache file."""
+
+    if stream.peek(2)[:2] == b"\x1f\x8b":
+        stream = gzip.GzipFile(fileobj=stream, mode="rb")  # type: ignore[assignment]
+    return json.load(io.TextIOWrapper(stream, encoding="utf-8"), **options)
+
+
 def atomic_private_json(
     path: Path,
     payload: object,
     error: Callable[[str], Exception],
     message: str,
 ) -> None:
-    """Write `payload` as `0600` JSON, atomically.
+    """Write `payload` as `0600` gzip JSON, atomically.
 
     The temporary file is created inside the destination
     directory so `os.replace` is a same-filesystem rename, and the content is
@@ -152,16 +181,9 @@ def atomic_private_json(
         )
         temporary_path = Path(temporary_name)
         os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        with os.fdopen(descriptor, "wb") as stream:
             descriptor = None
-            json.dump(
-                payload,
-                stream,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            stream.flush()
+            dump_json_gzip(payload, stream)
             os.fsync(stream.fileno())
         os.replace(temporary_path, path)
         temporary_path = None
@@ -209,10 +231,10 @@ def read_private_json(
             or source_status.st_ino != opened_status.st_ino
         ):
             raise error(message)
-        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+        with os.fdopen(descriptor, "rb") as stream:
             descriptor = None
-            return json.load(stream, object_pairs_hook=strict_json_object)
-    except (OSError, UnicodeError, json.JSONDecodeError, DuplicateJSONKey):
+            return load_json_file(stream, object_pairs_hook=strict_json_object)
+    except (OSError, EOFError, UnicodeError, json.JSONDecodeError, DuplicateJSONKey):
         raise error(message) from None
     finally:
         if descriptor is not None:

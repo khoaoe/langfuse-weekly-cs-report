@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+
 import json
 from pathlib import Path
 import stat
@@ -68,13 +70,13 @@ def test_entry_cache_round_trips_exact_private_shape(tmp_path: Path):
     assert loaded == _cache()
     assert stat.S_IMODE(destination.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
-    payload = json.loads(destination.read_text(encoding="utf-8"))
+    payload = json.loads(gzip.decompress(destination.read_bytes()).decode("utf-8"))
     assert set(payload) == {"schema_version", "fetched_weeks", "records"}
     assert [set(item) for item in payload["records"]] == [
         {"ticket_id", "opened_at", "cohort_week", "status", "human_replied"},
         {"ticket_id", "opened_at", "cohort_week", "status", "human_replied"},
     ]
-    serialized = destination.read_text(encoding="utf-8")
+    serialized = gzip.decompress(destination.read_bytes()).decode("utf-8")
     for forbidden in (
         "agent_id",
         "agent_name",

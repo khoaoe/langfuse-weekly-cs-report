@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gzip
+
 from dataclasses import FrozenInstanceError
 import json
 import os
@@ -76,7 +78,7 @@ def test_reconciliation_cache_round_trips_exact_private_shape(tmp_path: Path):
     assert stat.S_IMODE(destination.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
 
-    serialized = destination.read_text(encoding="utf-8")
+    serialized = gzip.decompress(destination.read_bytes()).decode("utf-8")
     payload = json.loads(serialized)
     assert set(payload) == {"schema_version", "fetched_weeks", "records"}
     assert payload["schema_version"] == 1

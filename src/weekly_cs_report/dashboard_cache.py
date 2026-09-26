@@ -4,6 +4,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as FutureTimeout
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import gzip
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 
+from .cache_store import dump_json_gzip, load_json_file
 from .dashboard_schema import _STORAGE_VERSION, DashboardSnapshot
 from .langfuse_client import LangfuseAPIError, LangfuseRequestCancelled
 from .models import InvariantError
@@ -55,8 +57,8 @@ class ProtectedSnapshotStore:
         if not self._snapshot_path.exists():
             return None
         try:
-            with self._snapshot_path.open("r", encoding="utf-8") as stream:
-                value = json.load(stream)
+            with self._snapshot_path.open("rb") as stream:
+                value = load_json_file(stream)
             snapshot = DashboardSnapshot.from_storage_dict(value)
             if self._require_complete_enrichment and not _has_complete_enrichment(
                 snapshot
@@ -67,7 +69,7 @@ class ProtectedSnapshotStore:
                 )
                 return None
             return snapshot
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, EOFError, gzip.BadGzipFile):
             # Older schemas lack the current weekly privacy/metric contract.
             # Do not attempt a lossy conversion; bootstrap with a fresh run.
             emit_event("snapshot_load_ignored", code="invalid_snapshot")
@@ -99,16 +101,9 @@ class ProtectedSnapshotStore:
             )
             temporary_path = Path(temporary_name)
             os.fchmod(descriptor, 0o600)
-            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            with os.fdopen(descriptor, "wb") as stream:
                 descriptor = None
-                json.dump(
-                    value,
-                    stream,
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-                stream.flush()
+                dump_json_gzip(value, stream)
                 os.fsync(stream.fileno())
             os.replace(temporary_path, self._snapshot_path)
             temporary_path = None
@@ -151,12 +146,12 @@ class ProtectedSnapshotStore:
         self,
     ) -> tuple[bool, DashboardSnapshot | None]:
         try:
-            with self._snapshot_path.open("r", encoding="utf-8") as stream:
-                value = json.load(stream)
+            with self._snapshot_path.open("rb") as stream:
+                value = load_json_file(stream)
             return True, DashboardSnapshot.from_storage_dict(value)
         except FileNotFoundError:
             return True, None
-        except (OSError, TypeError, ValueError):
+        except (OSError, EOFError, TypeError, ValueError):
             return False, None
 
 
