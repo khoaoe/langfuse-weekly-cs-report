@@ -6,7 +6,7 @@ import type {
 } from "./dashboard-schema";
 import type { TicketFilters } from "./dashboard-filters";
 import type { NarrativeInput } from "./narrative";
-import { formatAverage, formatCount, formatRate, weekSpanDays } from "./format";
+import { formatAverage, formatCount, formatRate } from "./format";
 
 export const COHORT_LABELS: Readonly<Record<WeekDefinition, string>> = {
   mon_sun: "T2–CN",
@@ -17,56 +17,6 @@ export const COHORT_DESCRIPTIONS: Readonly<Record<WeekDefinition, string>> = {
   mon_sun: "Tuần thứ Hai đến Chủ nhật, gồm ticket mở cuối tuần.",
   mon_fri: "Tuần thứ Hai đến thứ Sáu, loại ticket mở cuối tuần.",
 };
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-const REOPEN_WINDOW_DAYS = 7;
-
-/**
- * Mirrors `cohort.is_week_fully_mature`: a period's reopen reading is only
- * complete once its last ticket has had the full 168 h reopen window. Before
- * that the lifetime rate is right-censored and always looks better than it
- * will end up (SPEC-v2 §5.8), so it must render as "—", not as a number.
- */
-export function isReopenMature(
-  periodStart: string,
-  periodDays: number,
-  generatedAt: string,
-): boolean {
-  const start = Date.parse(`${periodStart}T00:00:00+07:00`);
-  const asOf = Date.parse(generatedAt);
-  return asOf >= start + (periodDays + REOPEN_WINDOW_DAYS) * DAY_MS;
-}
-
-function hideViewImmatureReopen(
-  view: DashboardView,
-  generatedAt: string,
-): DashboardView {
-  let changed = false;
-  const weekly = view.weekly.map((row) => {
-    if (
-      row.reopen_lifetime_rate === null ||
-      isReopenMature(
-        row.cohort_week,
-        weekSpanDays(row.week_definition) + 1,
-        generatedAt,
-      )
-    ) {
-      return row;
-    }
-    changed = true;
-    return { ...row, reopen_lifetime_rate: null };
-  });
-  return changed ? { ...view, weekly } : view;
-}
-
-/** Blanks `reopen_lifetime_rate` on every week still inside its reopen window. */
-export function hideImmatureReopen(snapshot: DashboardSnapshot): DashboardSnapshot {
-  const monFri = hideViewImmatureReopen(snapshot.views.mon_fri, snapshot.generated_at);
-  const monSun = hideViewImmatureReopen(snapshot.views.mon_sun, snapshot.generated_at);
-  return monFri === snapshot.views.mon_fri && monSun === snapshot.views.mon_sun
-    ? snapshot
-    : { ...snapshot, views: { ...snapshot.views, mon_fri: monFri, mon_sun: monSun } };
-}
 
 /** A trend needs at least two observed weeks; one point is not a line. */
 export const MIN_TREND_WEEKS = 2;

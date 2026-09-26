@@ -30,7 +30,6 @@ import {
 } from "../lib/format";
 import {
   MIN_TREND_WEEKS,
-  isReopenMature,
   selectLatestWeek,
   selectView,
   selectWeekly,
@@ -140,7 +139,6 @@ function trendWeekToPoint(week: TrendWeek, weekDefinition: WeekDefinition): Tren
 function dayRangeToTrendPoints(
   allDays: readonly DayAggregate[],
   plottedDays: readonly DayAggregate[],
-  generatedAt: string,
 ): TrendPoint[] {
   const aiFirstRates = rollingRate(
     allDays,
@@ -167,10 +165,7 @@ function dayRangeToTrendPoints(
         total_tickets: current.total_tickets,
         ai_first_count: current.ai_first_count,
         ai_first_rate: aiFirstRates[index] ?? 0,
-        // The rolling window ends on this day, so it is mature once this day is.
-        reopen_lifetime_rate: isReopenMature(current.day, 1, generatedAt)
-          ? (reopenRates[index] ?? null)
-          : null,
+        reopen_lifetime_rate: reopenRates[index] ?? null,
         axisLabel: formatWeekStart(current.day),
         rangeLabel: formatWeekStart(current.day),
       },
@@ -1047,12 +1042,8 @@ export function BelowFold({
     () =>
       dayRange === undefined
         ? []
-        : dayRangeToTrendPoints(
-            dayRange.allDays,
-            dayRange.plottedDays,
-            snapshot.generated_at,
-          ),
-    [dayRange, snapshot.generated_at],
+        : dayRangeToTrendPoints(dayRange.allDays, dayRange.plottedDays),
+    [dayRange],
   );
   const trendPoints = dayRange === undefined ? weekTrendPoints : dayTrendPoints;
   const trendCopy = dayRange === undefined ? WEEK_TREND_COPY : DAY_TREND_COPY;

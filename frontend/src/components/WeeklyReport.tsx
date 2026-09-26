@@ -298,9 +298,6 @@ export function WeeklyReport({
   const view = selectView(snapshot, weekDefinition);
   const weekly = useMemo(() => selectWeekly(view), [view]);
   const cohortLabel = COHORT_LABELS[weekDefinition];
-  const hasImmatureReopen = weekly.some(
-    (row) => row.total_tickets > 0 && row.reopen_lifetime_rate === null,
-  );
   const updatedAt = formatUpdatedAt(snapshot.generated_at);
   const currentWeek = weekly.reduce(
     (latest, row) => row.cohort_week > latest ? row.cohort_week : latest,
@@ -453,12 +450,6 @@ export function WeeklyReport({
       {isCustomSort ? (
         <p className={styles.sectionNote}>
           TSV và CSV vẫn giữ thứ tự tuần mới nhất.
-        </p>
-      ) : null}
-      {hasImmatureReopen ? (
-        <p className={styles.sectionNote}>
-          Tỷ lệ reopen để “—” ở tuần chưa qua đủ 7 ngày sau khi kết thúc: khách
-          còn có thể quay lại nên số lúc này luôn thấp hơn thực tế.
         </p>
       ) : null}
 
