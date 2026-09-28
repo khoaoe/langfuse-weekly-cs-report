@@ -27,7 +27,8 @@
 
 .shellInner {
   position: relative;
-  z-index: 1;
+  /* Above .nav (z-index 1), so the report scope panel drops over it. */
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -44,8 +45,8 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  object-position: left center;
+  object-fit: contain;
+  object-position: right center;
 }
 
 .brand {
@@ -817,6 +818,7 @@
   position: relative;
   overflow: auto;
   max-height: 62vh;
+  width: fit-content;
   max-width: 100%;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
@@ -867,24 +869,6 @@
 
 .table tbody tr:hover td {
   background: var(--surface-sunken);
-}
-
-/* Weekly report: all 19 columns stay on screen. Headers wrap to two lines,
-   numbers never do, and horizontal padding is tight enough for 1920px. */
-.weeklyTable {
-  width: 100%;
-}
-
-.weeklyTable th,
-.weeklyTable td {
-  padding: var(--space-2);
-}
-
-.weeklyTable thead .weeklyColumnRow th {
-  min-width: 64px;
-  max-width: 112px;
-  white-space: normal;
-  vertical-align: bottom;
 }
 
 /* Edge shadow while columns remain off to the right. */

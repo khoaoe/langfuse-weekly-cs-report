@@ -332,3 +332,12 @@
     min-inline-size: 44px;
   }
 }
+
+/* A long cell value (e.g. several tool errors) scrolls sideways inside a
+   capped width instead of stretching its column. */
+.cellValue {
+  display: block;
+  max-width: 320px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}

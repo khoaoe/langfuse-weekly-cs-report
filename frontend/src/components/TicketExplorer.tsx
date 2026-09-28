@@ -833,7 +833,14 @@ export function TicketExplorer({
                       key={column.key}
                       className={index === 0 ? styles.stickyColumn : ""}
                     >
-                      {cellText(row, column.key)}
+                      {/* Long values scroll sideways inside a capped cell;
+                          the title shows the whole value on hover. */}
+                      <span
+                        className={ticketStyles.cellValue}
+                        title={cellText(row, column.key)}
+                      >
+                        {cellText(row, column.key)}
+                      </span>
                     </td>
                   ),
                 )}
