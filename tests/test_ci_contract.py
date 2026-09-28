@@ -162,9 +162,10 @@ def test_ci_validates_the_wheel_and_builds_the_runtime_image():
     assert re.search(r"docker-build:\n(?:.*\n)*?    needs: quality", text)
     assert "docker build --pull --tag langfuse-weekly-cs-report:ci ." in text
     assert "docker run --detach" in text
-    assert "http://127.0.0.1:18080/healthz" in text
-    assert "http://127.0.0.1:18080/readyz" in text
-    assert "http://127.0.0.1:18080/api/dashboard" in text
+    assert "--publish" not in text
+    assert "probe /healthz" in text
+    assert 'test "$(probe /readyz)" = "200"' in text
+    assert 'probe /api/dashboard "X-Authenticated-User: ci-smoke"' in text
     assert "scripts.e2e_server import build_snapshot" in text
     assert "ProtectedSnapshotStore" in text
     assert "docker network create --internal" in text
