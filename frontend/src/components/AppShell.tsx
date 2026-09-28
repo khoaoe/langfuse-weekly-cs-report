@@ -153,6 +153,29 @@ export function AppShell({
     }
   }, [helpOpen]);
 
+  // Publishes the sticky header's live height as `--shell-height`, which the
+  // root `scroll-padding-top` reads, so a focused element scrolled into view
+  // never lands under the header (WCAG 2.4.11). The height changes with
+  // viewport width, zoom and filter chips, so a fixed value cannot hold.
+  useEffect(() => {
+    const shell = shellRef.current;
+    if (shell === null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const root = document.documentElement;
+    const observer = new ResizeObserver(() => {
+      root.style.setProperty(
+        "--shell-height",
+        `${shell.getBoundingClientRect().height}px`,
+      );
+    });
+    observer.observe(shell);
+    return () => {
+      observer.disconnect();
+      root.style.removeProperty("--shell-height");
+    };
+  }, []);
+
   useEffect(() => {
     const nodes = SECTIONS.map((section) =>
       document.getElementById(section.id),

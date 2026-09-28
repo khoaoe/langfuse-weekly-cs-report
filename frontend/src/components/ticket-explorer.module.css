@@ -88,7 +88,7 @@
 }
 
 .dateRangeSummary:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-color: var(--interactive);
 }

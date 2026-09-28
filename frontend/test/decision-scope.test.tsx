@@ -10,7 +10,6 @@ import {
 import { DecisionLedger } from "../src/components/DecisionLedger";
 import {
   ALL_WEEKS_SCOPE,
-  buildNarrativeInput,
   isObservedWeek,
   selectAttentionItems,
   selectLedger,
@@ -55,16 +54,13 @@ describe("selected-week decision scope", () => {
     ).toBe(false);
   });
 
-  it("uses the chart-selected week for the title, ledger, narrative and warning", () => {
+  it("uses the chart-selected week for the title, ledger and warning", () => {
     expect(selectScope(snapshot, "mon_sun", "2026-07-13")).toMatchObject({
       eligible: 4,
       aiFirstCount: 2,
       gt4WithoutCs: 0,
       week: { cohort_week: "2026-07-13" },
     });
-    expect(
-      buildNarrativeInput(snapshot, "mon_sun", "2026-07-13").current.aiFirst,
-    ).toEqual({ count: 2, rate: 0.5 });
     expect(
       selectAttentionItems(snapshot, "mon_sun", "2026-07-13").map(
         (item) => item.id,
@@ -94,78 +90,7 @@ describe("selected-week decision scope", () => {
     ).toBeNull();
   });
 
-  it("uses the same-period block from the selected cohort view", () => {
-    const runningSun = {
-      ...latest,
-      cohort_status: "wtd" as const,
-    };
-    const runningFri = {
-      ...baseSnapshot.views.mon_fri.weekly[0]!,
-      cohort_status: "wtd" as const,
-    };
-    const comparisonSnapshot: DashboardSnapshot = {
-      ...baseSnapshot,
-      views: {
-        mon_sun: {
-          ...baseSnapshot.views.mon_sun,
-          weekly: [runningSun],
-          same_period: {
-            cutoff_date: "2026-07-23",
-            cutoff_weekday: 4,
-            current: {
-              cohort_week: runningSun.cohort_week,
-              total_tickets: 10,
-              ai_first_count: 5,
-              ai_first_rate: 0.5,
-              reopen_lifetime_rate: 0.2,
-              reopen_lifetime_numerator: 1,
-              reopen_lifetime_denominator: 5,
-            },
-            baseline: {
-              weeks_used: 4,
-              ai_first_rate: 0.6,
-              reopen_lifetime_rate: 0.25,
-            },
-            by_week: {},
-          },
-        },
-        mon_fri: {
-          ...baseSnapshot.views.mon_fri,
-          weekly: [runningFri],
-          same_period: {
-            cutoff_date: "2026-07-23",
-            cutoff_weekday: 4,
-            current: {
-              cohort_week: runningFri.cohort_week,
-              total_tickets: 5,
-              ai_first_count: 2,
-              ai_first_rate: 0.4,
-              reopen_lifetime_rate: 0.5,
-              reopen_lifetime_numerator: 1,
-              reopen_lifetime_denominator: 2,
-            },
-            baseline: {
-              weeks_used: 2,
-              ai_first_rate: 0.3,
-              reopen_lifetime_rate: 0.4,
-            },
-            by_week: {},
-          },
-        },
-      },
-    };
-
-    expect(buildNarrativeInput(comparisonSnapshot, "mon_sun")).toMatchObject({
-      current: { aiFirst: { count: 5, rate: 0.5 }, reopenRate: 0.2 },
-      samePeriod: { weeksUsed: 4, aiFirstRate: 0.6, reopenRate: 0.25 },
-    });
-    expect(buildNarrativeInput(comparisonSnapshot, "mon_fri")).toMatchObject({
-      current: { aiFirst: { count: 2, rate: 0.4 }, reopenRate: 0.5 },
-      samePeriod: { weeksUsed: 2, aiFirstRate: 0.3, reopenRate: 0.4 },
-    });
-  });
-
-  it("keeps partial-enrichment context in the narrative without a separate alert card", () => {
+  it("moves partial-enrichment context onto the rail as a warning", () => {
     const partial: DashboardSnapshot = {
       ...baseSnapshot,
       enrichment_status: "partial",
@@ -180,6 +105,7 @@ describe("selected-week decision scope", () => {
         "Lần đọc này chưa lấy đủ dữ liệu phụ từ Langfuse, nên Intent, Skill, Transstatus và Step result còn thiếu.",
       ),
     ).toBeVisible();
+    expect(document.getElementById("narrativeSummary")).toBeNull();
     expect(screen.queryByText(/Chờ lần làm mới kế tiếp/)).toBeNull();
     expect(screen.queryByText(/Cần lưu ý/i)).toBeNull();
   });
@@ -242,7 +168,7 @@ describe("selected-week decision scope", () => {
     const groups = selectLedger(reportingSnapshot, "mon_sun");
     expect(groups.map((group) => group.id)).toEqual([
       "ledger-group-ticket",
-      "ledger-group-response",
+      "ledger-group-secondary",
     ]);
 
     const ticketGroup = groups.find(
@@ -258,7 +184,13 @@ describe("selected-week decision scope", () => {
     // tickets have no classifiable trace and belong to neither side, which is
     // why CS First reads `direct_cs` and never `eligible - aiFirst`.
     expect(ticketGroup?.cells).toMatchObject([
-      { id: "ledger-ai-first", value: "727", unit: null, support: "77,8%" },
+      {
+        id: "ledger-ai-first",
+        value: "727",
+        unit: null,
+        support: "77,8%",
+        filterPatch: { outcome: "ai_end_to_end,ai_then_cs" },
+      },
       {
         id: "ledger-ai-end-to-end",
         value: "406",
@@ -266,22 +198,9 @@ describe("selected-week decision scope", () => {
         support: "43,4%",
       },
       { id: "ledger-transfer", value: "208", unit: null, support: "22,2%" },
-      { id: "ledger-direct-cs", value: "28", unit: null, support: "3,0%" },
-      {
-        // Counts tickets, so it lives in the group whose denominator is
-        // tickets. Its support is a bare share like its neighbours: the group
-        // heading already names the base.
-        id: "ledger-gt4-turn",
-        value: "1",
-        unit: null,
-        support: "0,1%",
-      },
       {
         // Rate leads, count supports. The absolute count rises with volume by
         // construction, so it cannot be read across weeks; lần/ticket can.
-        // The unit is a separate field, not glued into the value: at the 36px
-        // display size "0,21 lần/ticket" wrapped to two lines and doubled the
-        // cell's value block while its four neighbours stayed on one.
         id: "ledger-reopen",
         value: "0,21",
         unit: "lần/ticket",
@@ -289,20 +208,21 @@ describe("selected-week decision scope", () => {
       },
     ]);
 
-    const responseGroup = groups.find(
-      (group) => group.id === "ledger-group-response",
+    const secondaryGroup = groups.find(
+      (group) => group.id === "ledger-group-secondary",
     );
-    // No group-level denominator: these four cells divide by three different
-    // things -- ai_first (727), ai_end_to_end (406) and the eligible
-    // population (935) -- so any single number in the heading is wrong for
-    // most of them. Each cell states its own base in its support line.
-    expect(responseGroup?.denominator).toBeNull();
-    expect(responseGroup?.cells).toMatchObject([
+    // No group-level denominator: these cells divide by the eligible
+    // population, ai_first (727) and ai_end_to_end (406), so any single
+    // number in the heading is wrong for most of them.
+    expect(secondaryGroup?.denominator).toBeNull();
+    expect(secondaryGroup?.cells).toMatchObject([
+      // AI First and CS First do not sum to the population: `unclassified`
+      // tickets belong to neither side, so CS First reads `direct_cs`.
+      { id: "ledger-direct-cs", value: "28", unit: null, support: "3,0%" },
+      { id: "ledger-gt4-turn", value: "1", unit: null, support: "0,1%" },
       {
-        // The group's volume, and the numerator the mean below divides.
-        // 923 / 727 = 1,27, so the two cells must be readable as one
-        // division; that is why they sit adjacent and why only the first
-        // spells out the base.
+        // 923 / 727 = 1,27: the total and the mean beside it read as one
+        // division, so only the first spells out the base.
         id: "ledger-ai-reply-total",
         value: "923",
         unit: "lượt",
@@ -389,7 +309,10 @@ describe("selected-week decision scope", () => {
     const rail = screen.getByRole("list", {
       name: "Cần xem trong phạm vi này",
     });
-    expect(within(rail).queryByText("Cần xử lý")).toBeNull();
+    // Critical items carry their severity as text, not only as colour, and
+    // drop the written instruction the "Xem ticket" button already gives.
+    expect(within(rail).getByText("Cần xử lý")).toBeVisible();
+    expect(within(rail).queryByText(/Mở Ticket Explorer/)).toBeNull();
     expect(
       within(rail).getByText(/ticket có hơn 3 lượt xử lý mà chưa chuyển CS/),
     ).toBeVisible();

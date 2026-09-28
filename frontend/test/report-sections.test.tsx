@@ -1707,13 +1707,15 @@ describe("Below-fold analysis", () => {
       name: "Ticket có hơn 3 lượt xử lý · 3",
     });
     expect(gt4Region).toHaveAttribute("id", "ruleGt4Panel");
-    // B2: Gt4Zone is collapsed by default; its count must be readable from
-    // the summary alone before opening it.
-    await user.click(
+    // Every diagnostic panel is open by default: nothing that says what is
+    // broken sits behind a closed disclosure.
+    expect(
       within(gt4Region).getByRole("heading", {
+        level: 3,
         name: "Ticket có hơn 3 lượt xử lý · 3",
       }),
-    );
+    ).toBeVisible();
+    expect(document.querySelector("#diagnostics details")).toBeNull();
     expect(within(gt4Region).getByRole("row", { name: /^Tổng/ })).toHaveTextContent(
       "3",
     );
@@ -2473,6 +2475,13 @@ describe("selectors", () => {
     const items = selectAttentionItems(baseSnapshot, "mon_sun");
 
     expect(items.map((item) => item.id)).toContain("attention-gt4");
-    expect(items.every((item) => item.action.length > 0)).toBe(true);
+    // The next step is either written out or is the item's own filter button,
+    // never both: repeating "open Explorer" above a "Xem ticket" button said
+    // the same thing twice. Enrichment `partial` is informational only.
+    expect(
+      items
+        .filter((item) => item.id !== "attention-enrichment")
+        .every((item) => (item.action ?? "").length > 0 || item.filterPatch !== null),
+    ).toBe(true);
   });
 });

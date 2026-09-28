@@ -399,15 +399,21 @@ function DashboardBody() {
         </div>
       ) : (
         <>
+          {/* A single-week scope reads the unscoped snapshot: the week row is
+              the same, and only there do the previous week and same_period
+              baseline still exist (scoping drops both). Multi-week and
+              day-range scopes need the scoped aggregate and have no delta. */}
           <DecisionLedger
-            snapshot={reportSnapshot}
+            snapshot={reportWeek === "" ? reportSnapshot : snapshot}
             weekDefinition={weekDefinition}
             activeWeek={ledgerScope}
             reportRange={reportScope.mode === "range" ? reportScope : null}
             onCellSelect={applyLedgerFilter}
           />
+          {/* The report and its exports always cover the whole week window,
+              whatever the scope; only the day-range mode is a per-range table. */}
           <WeeklyReport
-            snapshot={reportSnapshot}
+            snapshot={isDayRangeMode ? reportSnapshot : snapshot}
             weekDefinition={weekDefinition}
             {...weeklyReportDayRangeProps}
           />

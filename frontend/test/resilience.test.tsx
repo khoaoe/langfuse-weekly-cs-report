@@ -172,10 +172,15 @@ describe("selectors under degraded data", () => {
     expect(ids).toEqual([
       "attention-gt4",
       "attention-gate",
+      "attention-enrichment",
     ]);
     expect(items.find((item) => item.id === "attention-gt4")).toMatchObject({
       headline: "2 ticket có hơn 3 lượt xử lý mà chưa chuyển CS",
-      action: "Mở Ticket Explorer, lọc >3 lượt xử lý để xem từng ticket.",
+      action: null,
+      filterPatch: { gt4_turn: "true", transferred: "false" },
+    });
+    expect(items.find((item) => item.id === "attention-enrichment")).toMatchObject({
+      severity: "warning",
     });
     expect(items.find((item) => item.id === "attention-gate")).toMatchObject({
       headline: "12,0% bản ghi lỗi cấu trúc, vượt ngưỡng 5%",

@@ -6,14 +6,13 @@ import {
   formatDateRangeLabel,
   formatWeekRange,
 } from "../lib/format";
-import { buildDeterministicNarrative } from "../lib/narrative";
 import {
   COHORT_LABELS,
-  buildNarrativeInput,
   selectAttentionItems,
   selectLedger,
   selectScope,
   selectView,
+  type LedgerCell,
   type ReportRangeScope,
 } from "../lib/selectors";
 import styles from "./dashboard.module.css";
@@ -34,8 +33,8 @@ const TONE_CLASS = {
 } as const;
 
 /**
- * The signature surface: dynamic title, deterministic narrative, the four-cell
- * ledger and only the warnings an operator can act on.
+ * The signature surface: dynamic title, four headline cells with their deltas,
+ * one secondary row and only the warnings an operator can act on.
  */
 export function DecisionLedger({
   snapshot,
@@ -54,13 +53,63 @@ export function DecisionLedger({
     activeWeek,
     reportRange,
   );
-  const narrative = buildDeterministicNarrative(
-    buildNarrativeInput(snapshot, weekDefinition, activeWeek, reportRange),
-  );
   const rangeSpanDays =
     scope.kind === "range"
       ? dateRangeSpanDays(scope.rangeFrom, scope.rangeTo)
       : null;
+
+  const [primary, secondary] = groups;
+
+  function cellBody(cell: LedgerCell) {
+    return (
+      <>
+        <span className={styles.ledgerLabel}>{cell.label}</span>
+        <span className={styles.ledgerValue}>
+          {cell.value}
+          {cell.unit === null ? null : (
+            <>
+              {" "}
+              <span className={styles.ledgerUnit}>{cell.unit}</span>
+            </>
+          )}
+        </span>
+        {cell.support === null ? null : (
+          <span className={styles.ledgerSupport}>{cell.support}</span>
+        )}
+        {cell.delta === null ? null : (
+          <span
+            className={`${styles.ledgerDelta} ${
+              cell.delta.tone === "warning" ? styles.ledgerDeltaWarning : ""
+            }`}
+          >
+            {cell.delta.text}
+          </span>
+        )}
+      </>
+    );
+  }
+
+  function renderCell(cell: LedgerCell, className: string | undefined) {
+    return (
+      <div
+        key={cell.id}
+        id={cell.id}
+        className={`${className ?? ""} ${TONE_CLASS[cell.tone]}`}
+      >
+        {cell.filterPatch === null || onCellSelect === undefined ? (
+          cellBody(cell)
+        ) : (
+          <button
+            type="button"
+            className={styles.ledgerCellButton}
+            onClick={() => onCellSelect(cell.filterPatch as Partial<TicketFilters>)}
+          >
+            {cellBody(cell)}
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <section className={styles.decision} aria-labelledby="dynamicTitle">
@@ -92,24 +141,6 @@ export function DecisionLedger({
                     : ` · tuần ${formatWeekRange(latest.cohort_week, weekDefinition)}`}
             {` · ${formatCount(scope.eligible)} ticket`}
           </h1>
-          <div
-            id="narrativeSummary"
-            className={styles.narrative}
-            aria-live="polite"
-          >
-            {narrative.map((line) => (
-              <p
-                key={line}
-                className={
-                  line.startsWith("Lần đọc này chưa lấy đủ dữ liệu phụ")
-                    ? styles.narrativeAlert
-                    : undefined
-                }
-              >
-                {line}
-              </p>
-            ))}
-          </div>
         </div>
 
         <div className={styles.ledgerGroup}>
@@ -124,82 +155,46 @@ export function DecisionLedger({
             </p>
           ) : null}
 
-          {groups.map((group) => {
-            const Block = group.collapsed ? "details" : "div";
-            const Heading = group.collapsed ? "summary" : "h3";
-            return (
-            <Block key={group.id} className={styles.ledgerGroupBlock}>
-              <Heading id={group.id} className={styles.ledgerGroupHeading}>
-                <span className={styles.ledgerGroupLabel}>{group.label}</span>
-                {group.denominator === null ? null : (
+          {primary === undefined ? null : (
+            <div className={styles.ledgerGroupBlock}>
+              {/* A caption, not a heading: a heading here would sit at h3
+                  straight under the h1 and break the outline. */}
+              <p id={primary.id} className={styles.ledgerGroupHeading}>
+                <span className={styles.ledgerGroupLabel}>{primary.label}</span>
+                {primary.denominator === null ? null : (
                   <span className={styles.ledgerGroupDenominator}>
-                    {group.denominator}
+                    {primary.denominator}
                   </span>
                 )}
-              </Heading>
+                {primary.comparison === null ? null : (
+                  <span className={styles.ledgerGroupDenominator}>
+                    {primary.comparison}
+                  </span>
+                )}
+              </p>
               <div
-                id={group.id === "ledger-group-ticket" ? "kpiGrid" : undefined}
+                id="kpiGrid"
                 className={styles.ledger}
                 role="group"
-                aria-labelledby={group.id}
+                aria-labelledby={primary.id}
               >
-                {group.cells.map((cell) =>
-                  cell.filterPatch === null || onCellSelect === undefined ? (
-                    <div
-                      key={cell.id}
-                      id={cell.id}
-                      className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
-                    >
-                      <span className={styles.ledgerLabel}>{cell.label}</span>
-                      <span className={styles.ledgerValue}>
-                        {cell.value}
-                        {cell.unit === null ? null : (
-                          <>
-                            {" "}
-                            <span className={styles.ledgerUnit}>
-                              {cell.unit}
-                            </span>
-                          </>
-                        )}
-                      </span>
-                      {cell.support === null ? null : (
-                        <span className={styles.ledgerSupport}>{cell.support}</span>
-                      )}
-                    </div>
-                  ) : (
-                    <div
-                      key={cell.id}
-                      id={cell.id}
-                      className={`${styles.ledgerCell} ${TONE_CLASS[cell.tone]}`}
-                    >
-                      <button
-                        type="button"
-                        className={styles.ledgerCellButton}
-                        onClick={() => onCellSelect(cell.filterPatch as Partial<TicketFilters>)}
-                      >
-                        <span className={styles.ledgerLabel}>{cell.label}</span>
-                        <span className={styles.ledgerValue}>
-                        {cell.value}
-                        {cell.unit === null ? null : (
-                          <>
-                            {" "}
-                            <span className={styles.ledgerUnit}>
-                              {cell.unit}
-                            </span>
-                          </>
-                        )}
-                      </span>
-                        {cell.support === null ? null : (
-                          <span className={styles.ledgerSupport}>{cell.support}</span>
-                        )}
-                      </button>
-                    </div>
-                  ),
-                )}
+                {primary.cells.map((cell) => renderCell(cell, styles.ledgerCell))}
               </div>
-            </Block>
-            );
-          })}
+            </div>
+          )}
+
+          {secondary === undefined ? null : (
+            <div
+              id="ledger-secondary"
+              className={styles.ledgerSecondary}
+              role="group"
+              aria-label={secondary.label}
+            >
+              {secondary.cells.map((cell) =>
+                renderCell(cell, styles.ledgerSecondaryCell),
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -213,20 +208,25 @@ export function DecisionLedger({
               }`}
             >
               <p className={styles.railHeadline}>
+                {item.severity === "critical" ? (
+                  <span className={styles.railSeverity}>Cần xử lý</span>
+                ) : null}
                 {item.headline}
               </p>
-              <p className={styles.railAction}>{item.action}</p>
-              <div className={styles.railActions}>
-                {item.filterPatch === null || onCellSelect === undefined ? null : (
+              {item.action === null ? null : (
+                <p className={styles.railAction}>{item.action}</p>
+              )}
+              {item.filterPatch === null || onCellSelect === undefined ? null : (
+                <div className={styles.railActions}>
                   <button
                     type="button"
                     className={styles.railActionButton}
-                    onClick={() => onCellSelect?.(item.filterPatch!)}
+                    onClick={() => onCellSelect(item.filterPatch!)}
                   >
                     Xem ticket
                   </button>
-                )}
-              </div>
+                </div>
+              )}
             </li>
           ))}
         </ul>
