@@ -243,15 +243,6 @@ Kiểm tra tên biến đã có trong `.env`, file có mode `600`, và dashboard
 chạy đúng cổng. Job Freshdesk dùng per-ticket fetch; bulk satisfaction ratings
 không phải dependency của project.
 
-### Muốn rollback về giao diện cũ
-
-Chỉ dùng khi cần chẩn đoán:
-
-```bash
-DASHBOARD_FRONTEND_MODE=legacy \
-  .venv/bin/weekly-cs-dashboard --local --port 8765
-```
-
 ## 8. Ranh giới dữ liệu và tài liệu
 
 Dashboard cho phép hiển thị Ticket ID để điều tra. Từ 2026-08-20 (quyết định PO), User ID,

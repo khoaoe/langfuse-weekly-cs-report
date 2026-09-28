@@ -437,7 +437,6 @@ def test_runtime_stage_ships_no_node_toolchain_or_source_map():
     assert "sourcemap" not in text.lower()
     # The build stage removes any map the bundler might emit.
     assert "-name '*.map' -delete" in text
-    assert "DASHBOARD_FRONTEND_MODE=spa" in runtime_stage
 
 
 def test_frontend_is_verified_before_it_can_be_copied_into_the_image():

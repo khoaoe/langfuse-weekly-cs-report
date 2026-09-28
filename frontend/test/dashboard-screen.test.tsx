@@ -1113,16 +1113,4 @@ describe("DashboardScreen", () => {
       expect(screen.queryByTestId("day-range-error")).toBeNull();
     });
   });
-
-  it("o dan ticket trong Vi sao agent lam vay co id on dinh", async () => {
-    const originalHash = window.location.hash;
-    window.location.hash = "#trace";
-    try {
-      render(<DashboardScreen />);
-      await screen.findByRole("heading", { name: "Vì sao agent làm vậy" });
-      expect(document.getElementById("traceTicketIdInput")).not.toBeNull();
-    } finally {
-      window.location.hash = originalHash;
-    }
-  });
 });

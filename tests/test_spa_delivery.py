@@ -63,10 +63,8 @@ def spa_client(manager_factory, tmp_path, monkeypatch):  # noqa: F811
     return spa, manager
 
 
-def _client(manager, *, mode: str = "spa", auth: str = "off") -> TestClient:
-    return TestClient(
-        create_app(manager, settings=WebSettings(auth, IDENTITY_HEADER, mode))
-    )
+def _client(manager, *, auth: str = "off") -> TestClient:
+    return TestClient(create_app(manager, settings=WebSettings(auth, IDENTITY_HEADER)))
 
 
 def test_spa_document_is_never_cached_and_forbids_inline_code(spa_client):
@@ -160,19 +158,7 @@ def test_asset_symlinks_are_refused(spa_client, tmp_path):
     assert "credential" not in response.text
 
 
-def test_legacy_mode_keeps_the_inline_page_and_its_hash_policy(spa_client):
-    _spa, manager = spa_client
-    with _client(manager, mode="legacy") as client:
-        response = client.get("/")
-
-    assert response.status_code == 200
-    assert response.headers["Cache-Control"] == "no-store"
-    policy = response.headers["Content-Security-Policy"]
-    assert "sha256-" in policy
-    assert "unsafe-inline" not in policy
-
-
-def test_spa_mode_falls_back_to_the_legacy_page_when_no_build_is_present(
+def test_missing_build_serves_a_placeholder_not_a_second_frontend(
     manager_factory, tmp_path, monkeypatch  # noqa: F811
 ):
     monkeypatch.setattr("weekly_cs_report.web._SPA_ROOT", tmp_path / "absent")
@@ -182,13 +168,8 @@ def test_spa_mode_falls_back_to_the_legacy_page_when_no_build_is_present(
     with _client(manager) as client:
         response = client.get("/")
 
-    assert response.status_code == 200
-    assert "sha256-" in response.headers["Content-Security-Policy"]
-
-
-def test_frontend_mode_must_be_a_known_value():
-    with pytest.raises(ValueError):
-        WebSettings("off", IDENTITY_HEADER, "experimental")
+    assert response.status_code == 503
+    assert "sha256-" not in response.headers["Content-Security-Policy"]
 
 
 def test_spa_index_path_stays_inside_the_package():
@@ -200,7 +181,6 @@ def test_production_startup_refuses_a_missing_default_spa_build(
     monkeypatch, capsys
 ):
     monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
-    monkeypatch.delenv("DASHBOARD_FRONTEND_MODE", raising=False)
     monkeypatch.setattr("weekly_cs_report.web.spa_build_present", lambda: False)
     monkeypatch.setattr(
         "weekly_cs_report.web.load_environment",

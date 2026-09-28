@@ -467,8 +467,7 @@ def tool_error_token(
     60% with calls where the agent did nothing wrong.
 
     `explain_context._is_error_envelope` is deliberately not reused: it treats
-    `info` as a failure because it serves the escalation dossier's evidence
-    section, where "the tool returned nothing" is the point. Leave it alone.
+    `info` as a failure, which is right for its own callers. Leave it alone.
 
     The envelope's `message` is never read. It embeds a transaction id at
     `cs-agent/core/tools/bank/handlers.py:112` and `str(e)` in the integration

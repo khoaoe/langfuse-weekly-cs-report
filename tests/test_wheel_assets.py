@@ -66,8 +66,6 @@ def test_validator_accepts_only_an_exact_byte_for_byte_static_tree(tmp_path: Pat
     static_dir = tmp_path / "static"
     assets = {
         **VALID_SPA_ASSETS,
-        "index.html": b"<!doctype html>",
-        "legacy/index.html": b"legacy",
         "spa/assets/brand.woff2": b"\x00\x01font",
     }
     _write_source(static_dir, assets)
@@ -86,7 +84,7 @@ def test_validator_accepts_only_an_exact_byte_for_byte_static_tree(tmp_path: Pat
 @pytest.mark.parametrize(
     ("assets", "message"),
     [
-        ({"legacy/index.html": b"legacy"}, "SPA index"),
+        ({"spa/assets/brand.woff2": b"\x00\x01font"}, "SPA index"),
         (
             {
                 "spa/index.html": b'<script src="/assets/index-a1b2c3.js"></script>',

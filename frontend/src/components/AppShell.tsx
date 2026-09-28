@@ -27,32 +27,10 @@ import {
 } from "../lib/selectors";
 import { ThemeToggle } from "./ThemeToggle";
 import { ReportScopePicker } from "./ReportScopePicker";
-import { TraceExplainer } from "./TraceExplainer";
 import styles from "./dashboard.module.css";
 import themeStyles from "./theme-toggle.module.css";
 
 const WEEK_DEFINITIONS: readonly WeekDefinition[] = ["mon_fri", "mon_sun"];
-const TRACE_HASH = /^#trace(?:\/(.*))?$/;
-
-/** No react-router in this SPA (see CLAUDE.md) -- #trace/<ticketId> is parsed
- * by hand and swaps only the main content area; the brand header and section
- * nav stay so CS always has a way back to the dashboard. */
-function traceHashTicketId(hash: string): string | null | undefined {
-  const match = TRACE_HASH.exec(hash);
-  if (match === null) {
-    return undefined;
-  }
-  const raw = match[1];
-  if (raw === undefined || raw === "") {
-    return null;
-  }
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return null;
-  }
-}
-
 const SECTIONS = [
   { id: "weekly", label: "Báo cáo tuần" },
   { id: "trend", label: "Xu hướng" },
@@ -122,15 +100,6 @@ export function AppShell({
   const [activeSection, setActiveSection] = useState<
     (typeof SECTIONS)[number]["id"]
   >(SECTIONS[0].id);
-  const [hash, setHash] = useState(() =>
-    typeof window === "undefined" ? "" : window.location.hash,
-  );
-  useEffect(() => {
-    const onHashChange = () => setHash(window.location.hash);
-    window.addEventListener("hashchange", onHashChange);
-    return () => window.removeEventListener("hashchange", onHashChange);
-  }, []);
-  const traceTicketId = traceHashTicketId(hash);
   const helpPanel = useRef<HTMLElement>(null);
   const helpButton = useRef<HTMLButtonElement>(null);
   const shellRef = useRef<HTMLElement>(null);
@@ -284,27 +253,6 @@ export function AppShell({
       </span>
     </div>
   );
-
-  if (traceTicketId !== undefined) {
-    return (
-      <div className={styles.page}>
-        <a className="skip-link" href="#dashboardMain">
-          Tới nội dung chính
-        </a>
-        <header className={styles.shell}>
-          <div className={styles.shellTop}>
-            <div className={styles.shellInner}>
-              {brandMark}
-              <ThemeToggle />
-            </div>
-          </div>
-        </header>
-        <main id="dashboardMain" className={styles.main} tabIndex={-1}>
-          <TraceExplainer ticketId={traceTicketId} />
-        </main>
-      </div>
-    );
-  }
 
   return (
     <div className={styles.page}>

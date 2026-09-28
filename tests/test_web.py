@@ -1447,15 +1447,26 @@ def test_unexpected_api_error_is_fixed_sanitized_and_has_security_headers(
     assert "0901234567" not in response.text
 
 
+@pytest.fixture()
+def spa_shell(tmp_path, monkeypatch):
+    """A built SPA document, isolated from whatever the local build holds."""
+
+    spa = tmp_path / "spa"
+    spa.mkdir()
+    (spa / "index.html").write_text(
+        "<!doctype html><title>Báo cáo hiệu quả CS Agent · Zalopay</title>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("weekly_cs_report.web._SPA_ROOT", spa)
+    return spa
+
+
 def test_root_is_authenticated_and_serves_live_page_without_echoing_identity(
-    manager_factory,
+    manager_factory, spa_shell,
 ):
     """Serving the shell without proxy identity or reflecting it weakens deployment."""
     manager = manager_factory(initial=_snapshot())
-    # The shipped shell is the SPA; `legacy` pins the inline page this test was
-    # originally written against, so the assertion stays about authentication
-    # rather than about which frontend happens to be selected.
-    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER, "legacy"))
+    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
 
     with TestClient(app) as client:
         missing = client.get("/")
@@ -1465,24 +1476,24 @@ def test_root_is_authenticated_and_serves_live_page_without_echoing_identity(
     assert missing.json() == {"detail": {"code": "authentication_required"}}
     assert authorized.status_code == 200
     assert authorized.headers["content-type"].startswith("text/html")
-    assert "Hiệu quả CS Agent" in authorized.text
+    assert "hiệu quả CS Agent" in authorized.text
     assert "private-user" not in authorized.text
     assert "sk-secret-value" not in authorized.text
 
 
 def test_root_serves_without_identity_header_when_platform_gates_at_the_edge(
-    manager_factory,
+    manager_factory, spa_shell,
 ):
     """Basic mode trusts the platform's own HTTP Basic Auth, not an SSO header."""
     manager = manager_factory(initial=_snapshot())
-    app = create_app(manager, settings=WebSettings("basic", IDENTITY_HEADER, "legacy"))
+    app = create_app(manager, settings=WebSettings("basic", IDENTITY_HEADER))
 
     with TestClient(app) as client:
         response = client.get("/")
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/html")
-    assert "Hiệu quả CS Agent" in response.text
+    assert "hiệu quả CS Agent" in response.text
 
 
 def test_web_settings_accepts_basic_mode_with_an_approved_identity_header():
@@ -2050,7 +2061,7 @@ def test_main_rejects_out_of_range_refresh_controls_before_loading_secrets(
 ):
     """Invalid refresh settings must fail startup without reading any credentials."""
     monkeypatch.setenv("DASHBOARD_AUTH_MODE", "proxy")
-    monkeypatch.setenv("DASHBOARD_FRONTEND_MODE", "legacy")
+    monkeypatch.setattr("weekly_cs_report.web.spa_build_present", lambda: True)
     monkeypatch.setenv(name, value)
     monkeypatch.setattr(
         "weekly_cs_report.web.load_environment",
