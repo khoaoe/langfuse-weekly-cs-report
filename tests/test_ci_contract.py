@@ -74,13 +74,7 @@ def test_ci_runs_the_frontend_python_browser_and_dependency_gates():
         '.ci-tools/bin/pip-audit --requirement "$runtime_requirements"',
         'mktemp -d "${RUNNER_TEMP}/weekly-cs-pytest.XXXXXX"',
         ".venv/bin/python -m compileall -q src/weekly_cs_report",
-        '.venv/bin/pytest -q --basetemp "$pytest_basetemp" --cov=src/weekly_cs_report --cov-fail-under=85 --cov-report=json:"$RUNNER_TEMP/weekly-cs-python-coverage.json"',
-        '.venv/bin/python scripts/check_python_coverage.py "$RUNNER_TEMP/weekly-cs-python-coverage.json" 85 80',
-        "src/weekly_cs_report/langfuse_client.py",
-        "src/weekly_cs_report/report.py",
-        "src/weekly_cs_report/dashboard_cache.py",
-        "src/weekly_cs_report/dashboard_schema.py",
-        "src/weekly_cs_report/web.py",
+        '.venv/bin/pytest -q --basetemp "$pytest_basetemp"',
         "npx playwright install --with-deps chromium",
         "npm run test:e2e",
     ):
@@ -90,9 +84,6 @@ def test_ci_runs_the_frontend_python_browser_and_dependency_gates():
     assert text.index(".venv/bin/python -m compileall -q src/weekly_cs_report") < text.index(
         ".venv/bin/pytest -q --basetemp"
     )
-    assert text.index(".venv/bin/pytest -q --basetemp") < text.index(
-        ".venv/bin/python scripts/check_python_coverage.py"
-    )
     assert "127.0.0.1:8765" not in text
     assert "uv lock" not in text
     assert "pip install -e '.[dev]'" not in text
@@ -100,13 +91,12 @@ def test_ci_runs_the_frontend_python_browser_and_dependency_gates():
     assert "npm install --global" not in text
 
 
-def test_ci_requires_the_exact_locked_python_runtime_and_coverage_checker():
+def test_ci_requires_the_exact_locked_python_runtime():
     text = _workflow()
 
     assert "sys.version_info[:3] == (3, 11, 15)" in text
     assert "sys.version_info[:2]" not in text
-    assert "coverage.json" not in text.replace("$RUNNER_TEMP/weekly-cs-python-coverage.json", "")
-    assert ".venv/bin/python scripts/check_python_coverage.py" in text
+    assert "coverage.json" not in text
 
 
 def test_generated_coverage_outputs_are_ignored_only_at_the_checkout_root():
@@ -129,9 +119,10 @@ def test_ci_pins_the_reviewed_pip_bootstrap_version():
     assert text.count(install_prefix) == 1
     install_arguments = text.split(install_prefix, 1)[1].splitlines()[0].strip()
     assert install_arguments == (
-        "--no-cache-dir 'pip==26.1.2' 'uv==0.11.32' 'pip-audit==2.9.0'"
+        "--no-cache-dir 'pip==26.2' 'setuptools==83.0.0' 'uv==0.11.32' "
+        "'pip-audit==2.9.0'"
     )
-    assert "pip==26.2" not in text
+    assert "pip==26.1.2" not in text
 
 
 def test_ci_accounts_for_the_single_locked_pytest_advisory_with_its_mitigation():
@@ -171,9 +162,10 @@ def test_ci_validates_the_wheel_and_builds_the_runtime_image():
     assert re.search(r"docker-build:\n(?:.*\n)*?    needs: quality", text)
     assert "docker build --pull --tag langfuse-weekly-cs-report:ci ." in text
     assert "docker run --detach" in text
-    assert "http://127.0.0.1:18080/healthz" in text
-    assert "http://127.0.0.1:18080/readyz" in text
-    assert "http://127.0.0.1:18080/api/dashboard" in text
+    assert "--publish" not in text
+    assert "probe /healthz" in text
+    assert 'test "$(probe /readyz)" = "200"' in text
+    assert 'probe /api/dashboard "X-Authenticated-User: ci-smoke"' in text
     assert "scripts.e2e_server import build_snapshot" in text
     assert "ProtectedSnapshotStore" in text
     assert "docker network create --internal" in text

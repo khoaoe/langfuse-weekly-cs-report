@@ -10,7 +10,6 @@ export const DASHBOARD_ENDPOINT = "/api/dashboard";
 export const TICKETS_ENDPOINT = "/api/tickets";
 export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
-export const TRACE_EXPLAIN_ENDPOINT = "/api/trace-explain";
 export const AB_TEST_ENDPOINT = "/api/ab-test";
 export const AB_TEST_DEFAULT_ENDPOINT = "/api/ab-test/default";
 export const AB_TEST_MODELS_ENDPOINT = "/api/ab-test/models";
@@ -132,84 +131,6 @@ export async function fetchFreshdeskCookieState(
     ...(signal ? { signal } : {}),
   });
   return (await readJson(response)) as FreshdeskCookieState;
-}
-
-/** Throws DashboardRequestError(status) for 400/404/503 domain errors, same
- * as every other endpoint here -- the caller inspects `.status` to choose a
- * Vietnamese message instead of showing the raw code. */
-export async function fetchTraceExplanation(
-  ticketId: string,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  const response = await fetch(
-    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}`,
-    {
-      method: "GET",
-      credentials: "same-origin",
-      headers: JSON_HEADERS,
-      ...(signal ? { signal } : {}),
-    },
-  );
-  if (response.status !== 200) {
-    throw new DashboardRequestError(response.status);
-  }
-  try {
-    return (await response.json()) as unknown;
-  } catch {
-    throw new DashboardRequestError(response.status);
-  }
-}
-
-/** Throws DashboardRequestError(status) for 400/404/503 domain errors, same
- * as fetchTraceExplanation -- separate request so the deterministic dossier
- * (and its own cache) never blocks on the trace_explain payload or vice versa. */
-export async function fetchWhyExplanation(
-  ticketId: string,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  const response = await fetch(
-    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}/why`,
-    {
-      method: "GET",
-      credentials: "same-origin",
-      headers: JSON_HEADERS,
-      ...(signal ? { signal } : {}),
-    },
-  );
-  if (response.status !== 200) {
-    throw new DashboardRequestError(response.status);
-  }
-  try {
-    return (await response.json()) as unknown;
-  } catch {
-    throw new DashboardRequestError(response.status);
-  }
-}
-
-/** Separate from fetchWhyExplanation so its own (potentially slow, LLM-
- * dependent) loading state never blocks the deterministic dossier from
- * rendering. Only call once /why has returned llm_status === "pending". */
-export async function fetchWhyNarration(
-  ticketId: string,
-  signal?: AbortSignal,
-): Promise<unknown> {
-  const response = await fetch(
-    `${TRACE_EXPLAIN_ENDPOINT}/${encodeURIComponent(ticketId)}/why-narration`,
-    {
-      method: "GET",
-      credentials: "same-origin",
-      headers: JSON_HEADERS,
-      ...(signal ? { signal } : {}),
-    },
-  );
-  if (response.status !== 200) {
-    throw new DashboardRequestError(response.status);
-  }
-  try {
-    return (await response.json()) as unknown;
-  } catch {
-    throw new DashboardRequestError(response.status);
-  }
 }
 
 /** Throws DashboardRequestError(status) for 400/503 domain errors, same as

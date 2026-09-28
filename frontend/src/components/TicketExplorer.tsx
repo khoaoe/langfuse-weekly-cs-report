@@ -42,7 +42,6 @@ import { MultiSelectField } from "./MultiSelectField";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
 import { AiReviewBadge } from "./AiReviewBadge";
-import { WhyDrawer } from "./WhyDrawer";
 import {
   FreshdeskTicketLink,
   isValidFreshdeskTicketId,
@@ -119,12 +118,10 @@ export function TicketIdentifier({
   ticketId,
   traceRangeStart,
   traceRangeEnd,
-  onOpenWhy,
 }: {
   readonly ticketId: string;
   readonly traceRangeStart: string;
   readonly traceRangeEnd: string;
-  readonly onOpenWhy: (ticketId: string) => void;
 }) {
   if (!isValidFreshdeskTicketId(ticketId)) {
     return <>{ticketId}</>;
@@ -162,16 +159,6 @@ export function TicketIdentifier({
           />
         </a>
       )}
-      <button
-        type="button"
-        className={ticketStyles.ticketLink}
-        style={{ background: "none", border: 0, cursor: "pointer", color: "var(--interactive)", font: "inherit" }}
-        onClick={() => onOpenWhy(ticketId)}
-        aria-label={`Xem giải thích vì sao agent xử lý ticket ${ticketId}`}
-        title="Vì sao agent làm vậy?"
-      >
-        Vì sao?
-      </button>
     </span>
   );
 }
@@ -245,7 +232,6 @@ export function TicketExplorer({
     readVisibleTicketColumns(),
   );
   const [exportNotice, setExportNotice] = useState("");
-  const [whyTicketId, setWhyTicketId] = useState<string | null>(null);
   const [sort, setSort] = useState<TicketSort>(DEFAULT_SORT);
   const view = selectView(snapshot, weekDefinition);
   const observedWeeks = useMemo(
@@ -817,7 +803,6 @@ export function TicketExplorer({
                           row.cohort_week
                         }
                         traceRangeEnd={snapshot.generated_at}
-                        onOpenWhy={setWhyTicketId}
                       />
                     </th>
                   ) : column.key === "opened_at" ? (
@@ -892,7 +877,6 @@ export function TicketExplorer({
         {exportNotice}
       </p>
 
-      <WhyDrawer ticketId={whyTicketId} onClose={() => setWhyTicketId(null)} />
     </section>
   );
 }

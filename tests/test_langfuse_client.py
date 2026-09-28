@@ -415,8 +415,8 @@ def test_dns_override_resolves_only_the_configured_host(monkeypatch):
 
 
 def test_dns_override_supports_a_comma_separated_list_of_hosts(monkeypatch):
-    """escalation_narrator's vllm.zalopay.vn shares this same override --
-    the value can carry more than one host:ip pair."""
+    """An internal LLM host can share this same override -- the value can
+    carry more than one host:ip pair."""
     from weekly_cs_report import langfuse_client as module
 
     calls: list[str] = []

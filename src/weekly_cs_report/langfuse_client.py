@@ -25,8 +25,7 @@ _dns_override_applied: str | None = None
 
 def _apply_dns_override() -> None:
     """Resolve one or more hostnames to a fixed IP when the platform has no
-    route to them (e.g. escalation_narrator's vllm.zalopay.vn, alongside
-    Langfuse itself).
+    route to them (e.g. an internal LLM host alongside Langfuse itself).
 
     Some deploy platforms (e.g. a shared PaaS) reach the target host fine over
     TCP but have no DNS path to an internal-only name. This substitutes the

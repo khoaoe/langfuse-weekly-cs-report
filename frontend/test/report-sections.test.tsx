@@ -2207,22 +2207,14 @@ describe("Ticket Explorer", () => {
     expect(langfuseIcon).toHaveAttribute("alt", "");
     expect(langfuseIcon).toHaveAttribute("aria-hidden", "true");
     expect(langfuseIcon?.getAttribute("src")).toContain("langfuse-icon.svg");
-
-    // "Vì sao?" opens the WhyDrawer in place -- it must never navigate via
-    // hash, unlike the Freshdesk/Langfuse links right next to it.
-    const whyButton = screen.getByRole("button", {
-      name: "Xem giải thích vì sao agent xử lý ticket 6991254",
-    });
-    expect(whyButton).toHaveTextContent("Vì sao?");
   });
 
-  it("keeps the Vì sao? link next to Freshdesk/Langfuse even for malformed IDs it must hide for", () => {
+  it("renders a malformed ticket ID as plain text, with no links", () => {
     const { container } = render(
       <TicketIdentifier
         ticketId="ticket-6991254"
         traceRangeStart="2026-07-20"
         traceRangeEnd="2026-07-29T11:27:00Z"
-        onOpenWhy={() => {}}
       />,
     );
 
@@ -2236,7 +2228,6 @@ describe("Ticket Explorer", () => {
         ticketId="7007908"
         traceRangeStart="2025-01-06"
         traceRangeEnd="2026-07-30T19:45:29.032021Z"
-        onOpenWhy={() => {}}
       />,
     );
 
@@ -2258,8 +2249,7 @@ describe("Ticket Explorer", () => {
           ticketId={ticketId}
           traceRangeStart="2026-07-20"
           traceRangeEnd="2026-07-29T11:27:00Z"
-          onOpenWhy={() => {}}
-        />,
+          />,
       );
 
       expect(container.textContent).toBe(ticketId);

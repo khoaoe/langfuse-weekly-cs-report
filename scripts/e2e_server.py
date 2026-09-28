@@ -165,7 +165,6 @@ def build_snapshot():
 def main() -> int:
     host = os.environ.get("E2E_HOST", "127.0.0.1")
     port = int(os.environ.get("E2E_PORT", "18765"))
-    mode = os.environ.get("DASHBOARD_FRONTEND_MODE", "spa")
 
     runtime = Path(tempfile.mkdtemp(prefix="zalopay-e2e-"))
     runtime.chmod(0o700)
@@ -177,7 +176,7 @@ def main() -> int:
 
     app = create_app(
         manager,
-        settings=WebSettings("off", "X-Forwarded-User", mode),
+        settings=WebSettings("off", "X-Forwarded-User"),
         runtime_directory=runtime,
     )
     uvicorn.run(

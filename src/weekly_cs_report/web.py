@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 import gzip
@@ -48,15 +47,6 @@ from .entry_coverage_cache import (
     EntryCoverageCacheError,
     load_entry_coverage_cache,
 )
-from .escalation_dossier import EscalationDossier, build_dossier, rank_candidates
-from .escalation_narrator import (
-    ExplainLLMClient,
-    Narration,
-    load_explain_settings,
-    narrate,
-)
-from .explain_context import load_explain_config
-from .narration_validator import validate as validate_narration
 from .langfuse_client import LangfuseAPIError, LangfuseClient
 from .model_discovery import discover_first_seen, list_recent_models
 from .model_list_cache import (
@@ -84,8 +74,6 @@ from .session_cache import (
     write_session_cache,
 )
 from .runtime_logging import configure_json_logging, emit_event
-from .skill_rules import parse_snapshot
-from .trace_explainer import build_trace_explanation
 
 
 _AUTH_MODES = frozenset({"off", "proxy", "basic"})
@@ -159,9 +147,7 @@ _MAX_QUERY_PAIRS = len(_QUERY_NAMES)
 _MAX_QUERY_VALUE_LENGTH = 128
 _MAX_RAW_QUERY_BYTES = 8192
 _INTEGER_QUERY = re.compile(r"[0-9]{1,9}\Z")
-_TRACE_EXPLAIN_TICKET_ID = re.compile(r"[0-9]{1,20}\Z")
-_TRACE_EXPLAIN_CACHE_TTL_SECONDS = 300.0
-_TRACE_EXPLAIN_CACHE_MISS = object()
+_TTL_CACHE_MISS = object()
 _AB_TEST_MAX_WINDOW_DAYS = 60
 _AB_TEST_CACHE_TTL_SECONDS = 300.0
 _AB_TEST_DEADLINE_SECONDS = 240.0
@@ -170,11 +156,9 @@ _AB_TEST_ARMS_VALUE_LENGTH = 1024
 _AB_TEST_MODEL_LIST_LIMIT = 8
 _MODEL_LIST_CACHE_TTL_SECONDS = 60.0
 _STATIC_ROOT = Path(__file__).with_name("static")
-_STATIC_INDEX = _STATIC_ROOT / "index.html"
 _SPA_ROOT = _STATIC_ROOT / "spa"
 _SPA_ASSET_DIRECTORY = "assets"
 _ASSET_NAME = re.compile(r"[A-Za-z0-9._-]+\Z")
-_FRONTEND_MODES = frozenset({"spa", "legacy"})
 # Renamed from DASHBOARD_REFRESH_DEADLINE_SECONDS on 2026-09-08. A measured
 # refresh needs ~790s (2,767 Langfuse pages against a ~3.5 pages/s server
 # ceiling), so the deployed 300s could never finish and the dashboard never
@@ -218,8 +202,6 @@ _COOKIE_ACTION_VALUE = "update_freshdesk_cookie"
 _COOKIE_BODY_LIMIT_BYTES = 8 * 1024
 _COOKIE_POST_LIMIT = 5
 _COOKIE_POST_WINDOW_SECONDS = 60.0
-_INLINE_STYLE = re.compile(r"<style>(.*?)</style>", re.DOTALL)
-_INLINE_SCRIPT = re.compile(r"<script>(.*?)</script>", re.DOTALL)
 _PLACEHOLDER = (
     "<!doctype html><html><head><meta charset=\"utf-8\">"
     "<title>Dashboard unavailable</title></head>"
@@ -241,13 +223,10 @@ def spa_build_present() -> bool:
 class WebSettings:
     auth_mode: str
     identity_header: str
-    frontend_mode: str = "spa"
 
     def __post_init__(self) -> None:
         if self.auth_mode not in _AUTH_MODES:
             raise ValueError("auth_mode must be off, proxy, or basic")
-        if self.frontend_mode not in _FRONTEND_MODES:
-            raise ValueError("frontend_mode must be spa or legacy")
         if not isinstance(self.identity_header, str) or not _HEADER_NAME.fullmatch(
             self.identity_header
         ):
@@ -256,19 +235,17 @@ class WebSettings:
             raise ValueError("identity_header is not approved for proxy authentication")
 
 
-class _TraceExplainCache:
-    """In-process TTL cache keyed by ticket_id.
+class _TtlCache:
+    """In-process TTL cache for the A/B-test Langfuse reads.
 
-    A cached value of None is a confirmed "no trace found" result, distinct
-    from a cache miss — both are legitimate outcomes worth remembering for
-    the TTL window. Langfuse errors are never cached: a transient outage
-    must not lock the next request out of a retry.
+    Langfuse errors are never cached: a transient outage must not lock the
+    next request out of a retry.
     """
 
     def __init__(
         self,
         *,
-        ttl_seconds: float = _TRACE_EXPLAIN_CACHE_TTL_SECONDS,
+        ttl_seconds: float,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._ttl_seconds = ttl_seconds
@@ -276,89 +253,25 @@ class _TraceExplainCache:
         self._lock = threading.Lock()
         self._entries: dict[str, tuple[float, object]] = {}
 
-    def get(self, ticket_id: str) -> object:
+    def get(self, key: str) -> object:
         with self._lock:
-            entry = self._entries.get(ticket_id)
+            entry = self._entries.get(key)
             if entry is None:
-                return _TRACE_EXPLAIN_CACHE_MISS
+                return _TTL_CACHE_MISS
             expires_at, value = entry
             if self._monotonic() >= expires_at:
-                del self._entries[ticket_id]
-                return _TRACE_EXPLAIN_CACHE_MISS
+                del self._entries[key]
+                return _TTL_CACHE_MISS
             return value
 
-    def set(self, ticket_id: str, value: object) -> None:
+    def set(self, key: str, value: object) -> None:
         with self._lock:
-            self._entries[ticket_id] = (self._monotonic() + self._ttl_seconds, value)
+            self._entries[key] = (self._monotonic() + self._ttl_seconds, value)
 
 
 @lru_cache(maxsize=1)
-def _trace_explain_taxonomy():
+def _taxonomy():
     return load_taxonomy(PROJECT_ROOT / "config" / "taxonomy.v2.json")
-
-
-@lru_cache(maxsize=1)
-def _why_explain_config():
-    return load_explain_config(PROJECT_ROOT / "config" / "explain_context.v1.json")
-
-
-@lru_cache(maxsize=1)
-def _why_skill_rules():
-    return parse_snapshot(PROJECT_ROOT / "skills-snapshot")
-
-
-# E3/E5/E6 never carry a case to narrate (spec 8.2); NONE means nothing was
-# escalated at all. E8 (output content check failed) and E9 (the tone_llm
-# guardrail itself crashed) are about the drafted response's content/an
-# infra fault, not a skill rule -- no case citation applies either. Calling
-# the LLM with an empty enum is never valid.
-_NO_CANDIDATE_BRANCHES = frozenset({"E3", "E5", "E6", "E8", "E9", "NONE"})
-
-
-def _narration_possible(dossier: EscalationDossier) -> bool:
-    """Same early-exit check _explain() makes -- exposed so /why can decide,
-    without ever calling the LLM, whether /why-narration is worth fetching
-    at all (it never is for E3/E5/E6/E8/E9/NONE or a branch with no case)."""
-
-    return dossier.escalation_class not in _NO_CANDIDATE_BRANCHES and bool(
-        dossier.rule_candidates
-    )
-
-
-def _explain(dossier: EscalationDossier) -> tuple[Narration | None, str]:
-    """Tầng 2 + Tầng 3 orchestration for one dossier. Never raises."""
-
-    if not _narration_possible(dossier):
-        return None, "skipped"
-
-    settings = load_explain_settings()
-    if settings is None:
-        return None, "disabled"
-
-    tools_called = tuple(
-        ev.step_key.removeprefix("tool:").split("__", 1)[0] for ev in dossier.tool_evidence
-    )
-    known_values = tuple(ev.value for ev in dossier.tool_evidence)
-    shortlist = rank_candidates(
-        list(dossier.rule_candidates), tools_called=tools_called, known_values=known_values
-    )
-
-    try:
-        client = ExplainLLMClient(settings)
-    except Exception:
-        return None, "unavailable"
-    try:
-        raw = narrate(client, dossier, shortlist)
-    finally:
-        client.close()
-
-    if raw is None:
-        return None, "unavailable"
-
-    quoted_line = raw.can_cu.trich_dan if raw.can_cu is not None else None
-    if not validate_narration(raw, dossier, quoted_line):
-        return None, "rejected"
-    return raw, "ok"
 
 
 class _BackgroundLoop:
@@ -561,13 +474,10 @@ def create_app(
     app.state.snapshot_manager = manager
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
-    app.state.trace_explain_cache = _TraceExplainCache()
-    app.state.dossier_cache = _TraceExplainCache()
-    app.state.narration_cache = _TraceExplainCache()
-    app.state.ab_test_cache = _TraceExplainCache(
+    app.state.ab_test_cache = _TtlCache(
         ttl_seconds=_AB_TEST_CACHE_TTL_SECONDS
     )
-    app.state.model_list_cache = _TraceExplainCache(
+    app.state.model_list_cache = _TtlCache(
         ttl_seconds=_MODEL_LIST_CACHE_TTL_SECONDS
     )
 
@@ -610,9 +520,7 @@ def create_app(
             response.headers.setdefault("Cache-Control", "no-store")
             response.headers["X-Content-Type-Options"] = "nosniff"
         elif request.url.path == "/":
-            for name, value in _document_security_headers(
-                _effective_frontend_mode(settings)
-            ).items():
+            for name, value in _DOCUMENT_SECURITY_HEADERS.items():
                 response.headers[name] = value
         return response
 
@@ -668,130 +576,6 @@ def create_app(
             return _invalid_query(_parameter_for_validation_error(error))
         return JSONResponse(payload)
 
-    @app.get("/api/trace-explain/{ticket_id}")
-    def trace_explain(ticket_id: str, request: Request):
-        # Deliberately sync: this route makes a live, potentially slow
-        # Langfuse HTTP call, so FastAPI must run it in its threadpool
-        # rather than block the single-worker event loop used elsewhere.
-        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
-            return JSONResponse(
-                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
-            )
-
-        cached = app.state.trace_explain_cache.get(ticket_id)
-        if cached is _TRACE_EXPLAIN_CACHE_MISS:
-            langfuse_client = getattr(request.app.state, "langfuse_client", None)
-            if langfuse_client is None:
-                return JSONResponse(
-                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
-                )
-            try:
-                explanation = build_trace_explanation(
-                    langfuse_client, ticket_id, _trace_explain_taxonomy()
-                )
-            except LangfuseAPIError:
-                return JSONResponse(
-                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
-                )
-            app.state.trace_explain_cache.set(ticket_id, explanation)
-        else:
-            explanation = cached
-
-        if explanation is None:
-            return JSONResponse(
-                {"detail": {"code": "trace_not_found"}}, status_code=404
-            )
-        return JSONResponse(asdict(explanation))
-
-    @app.get("/api/trace-explain/{ticket_id}/why")
-    def trace_explain_why(ticket_id: str, request: Request):
-        # Deterministic dossier only -- build_dossier() is a Langfuse fetch
-        # plus local computation, no LLM call, so this stays fast even when
-        # the LLM endpoint is unreachable. llm_status "pending" tells the
-        # frontend /why-narration is worth fetching; any other value here is
-        # already final (no case candidates at all -- "skipped").
-        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
-            return JSONResponse(
-                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
-            )
-
-        cached = app.state.dossier_cache.get(ticket_id)
-        if cached is _TRACE_EXPLAIN_CACHE_MISS:
-            langfuse_client = getattr(request.app.state, "langfuse_client", None)
-            if langfuse_client is None:
-                return JSONResponse(
-                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
-                )
-            try:
-                dossier = build_dossier(
-                    langfuse_client,
-                    ticket_id,
-                    _trace_explain_taxonomy(),
-                    _why_explain_config(),
-                    _why_skill_rules(),
-                    snapshot_root=PROJECT_ROOT / "skills-snapshot",
-                )
-            except LangfuseAPIError:
-                return JSONResponse(
-                    {"detail": {"code": "langfuse_unavailable"}}, status_code=503
-                )
-            app.state.dossier_cache.set(ticket_id, dossier)
-        else:
-            dossier = cached
-
-        if dossier is None:
-            return JSONResponse(
-                {"detail": {"code": "trace_not_found"}}, status_code=404
-            )
-
-        llm_status = "pending" if _narration_possible(dossier) else "skipped"
-        return JSONResponse(
-            {
-                "ticket_id": dossier.ticket_id,
-                "escalation_class": dossier.escalation_class,
-                "dossier": asdict(dossier),
-                "narration": None,
-                "llm_status": llm_status,
-                "drift": {"changed": dossier.drift_changed},
-            }
-        )
-
-    @app.get("/api/trace-explain/{ticket_id}/why-narration")
-    def trace_explain_why_narration(ticket_id: str):
-        # Separate, potentially slow (LLM) request. The frontend only calls
-        # this once /why has returned llm_status == "pending", so its own
-        # loading state never blocks the deterministic dossier from
-        # rendering immediately.
-        if not _TRACE_EXPLAIN_TICKET_ID.fullmatch(ticket_id):
-            return JSONResponse(
-                {"detail": {"code": "invalid_ticket_id"}}, status_code=400
-            )
-
-        cached = app.state.narration_cache.get(ticket_id)
-        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
-            narration, llm_status = cached
-            return JSONResponse(
-                {
-                    "narration": asdict(narration) if narration is not None else None,
-                    "llm_status": llm_status,
-                }
-            )
-
-        dossier = app.state.dossier_cache.get(ticket_id)
-        if dossier is _TRACE_EXPLAIN_CACHE_MISS or dossier is None:
-            return JSONResponse(
-                {"detail": {"code": "trace_not_found"}}, status_code=404
-            )
-
-        narration, llm_status = _explain(dossier)
-        app.state.narration_cache.set(ticket_id, (narration, llm_status))
-        return JSONResponse(
-            {
-                "narration": asdict(narration) if narration is not None else None,
-                "llm_status": llm_status,
-            }
-        )
-
     ab_test_on = _ab_test_enabled()
 
     def ab_test_disabled() -> JSONResponse:
@@ -799,7 +583,7 @@ def create_app(
 
     @app.get("/api/ab-test")
     def ab_test(request: Request):
-        # Deliberately sync, same reasoning as trace-explain: a live Langfuse
+        # Deliberately sync, same reasoning as /api/dashboard: a live Langfuse
         # call must run in FastAPI's threadpool, not the shared event loop.
         if not ab_test_on:
             return ab_test_disabled()
@@ -818,7 +602,7 @@ def create_app(
             f"|{','.join(arms) if arms is not None else ''}"
         )
         cached = app.state.ab_test_cache.get(cache_key)
-        if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+        if cached is not _TTL_CACHE_MISS:
             return JSONResponse(cached)
 
         langfuse_client = getattr(request.app.state, "langfuse_client", None)
@@ -831,7 +615,7 @@ def create_app(
                 langfuse_client,
                 window_start,
                 window_end,
-                _trace_explain_taxonomy(),
+                _taxonomy(),
                 csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
                 ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
                 deadline=time.monotonic() + _AB_TEST_DEADLINE_SECONDS,
@@ -847,7 +631,7 @@ def create_app(
 
     @app.get("/api/ab-test/models")
     def ab_test_models(request: Request):
-        # Deliberately sync, same reasoning as trace-explain: live Langfuse
+        # Deliberately sync, same reasoning as /api/dashboard: live Langfuse
         # calls must run in FastAPI's threadpool, not the shared event loop.
         if not ab_test_on:
             return ab_test_disabled()
@@ -870,7 +654,7 @@ def create_app(
             recent_models = background_models
         else:
             cached = app.state.model_list_cache.get("recent_models")
-            if cached is not _TRACE_EXPLAIN_CACHE_MISS:
+            if cached is not _TTL_CACHE_MISS:
                 recent_models = cached
             else:
                 try:
@@ -1060,27 +844,11 @@ def create_app(
 
     @app.get("/")
     async def root():
-        if _effective_frontend_mode(settings) == "spa":
+        if spa_build_present():
             return FileResponse(spa_index_path())
-        if _STATIC_INDEX.is_file():
-            return FileResponse(_STATIC_INDEX)
         return HTMLResponse(_PLACEHOLDER, status_code=503)
 
     return app
-
-
-def _effective_frontend_mode(settings: WebSettings) -> str:
-    """Serve the SPA only when a build is actually installed.
-
-    A missing build degrades to the inline legacy page rather than to an error
-    page, so an incomplete deployment still shows a working report. `main()`
-    refuses to start in that state, which keeps the fallback from being silent
-    in production.
-    """
-
-    if settings.frontend_mode == "spa" and spa_build_present():
-        return "spa"
-    return "legacy"
 
 
 def _resolved_asset(asset_path: str) -> Path | None:
@@ -1137,69 +905,15 @@ _SPA_POLICY = "; ".join(
         "media-src 'none'",
     )
 )
-
-
-def _document_security_headers(frontend_mode: str = "legacy") -> dict[str, str]:
-    """Policy for the document response.
-
-    The SPA ships no inline script or style at all, so it gets a plain
-    `'self'` policy with inline attributes explicitly forbidden. The legacy
-    page is one inline block each, so it keeps the hash allowance computed
-    from its own bytes; neither mode ever permits `unsafe-inline`.
-    """
-
-    if frontend_mode == "spa":
-        return {
-            "Cache-Control": "no-store",
-            "Content-Security-Policy": _SPA_POLICY,
-            "Referrer-Policy": "no-referrer",
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY",
-        }
-
-    script_sources = "'none'"
-    style_sources = "'none'"
-    try:
-        page = _STATIC_INDEX.read_text(encoding="utf-8")
-    except OSError:
-        page = ""
-    script = _INLINE_SCRIPT.search(page)
-    style = _INLINE_STYLE.search(page)
-    if script is not None:
-        script_sources = _sha256_source(script.group(1))
-    if style is not None:
-        style_sources = _sha256_source(style.group(1))
-    policy = "; ".join(
-        (
-            "default-src 'self'",
-            "base-uri 'none'",
-            "object-src 'none'",
-            "frame-src 'none'",
-            "frame-ancestors 'none'",
-            "form-action 'self'",
-            "connect-src 'self'",
-            "img-src 'self' data:",
-            "font-src 'self'",
-            f"style-src {style_sources}",
-            f"script-src {script_sources}",
-            "worker-src 'none'",
-            "manifest-src 'none'",
-            "media-src 'none'",
-        )
-    )
-    return {
-        "Cache-Control": "no-store",
-        "Content-Security-Policy": policy,
-        "Referrer-Policy": "no-referrer",
-        "X-Content-Type-Options": "nosniff",
-        "X-Frame-Options": "DENY",
-    }
-
-
-def _sha256_source(value: str) -> str:
-    digest = hashlib.sha256(value.encode("utf-8")).digest()
-    encoded = base64.b64encode(digest).decode("ascii")
-    return f"'sha256-{encoded}'"
+# The SPA ships no inline script or style at all, so the document gets a plain
+# `'self'` policy with inline attributes explicitly forbidden.
+_DOCUMENT_SECURITY_HEADERS = {
+    "Cache-Control": "no-store",
+    "Content-Security-Policy": _SPA_POLICY,
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1237,16 +951,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     identity_header = (
         os.environ.get("DASHBOARD_IDENTITY_HEADER") or "X-Forwarded-User"
     )
-    frontend_mode = os.environ.get("DASHBOARD_FRONTEND_MODE") or "spa"
-    if frontend_mode not in _FRONTEND_MODES:
-        print("DASHBOARD_FRONTEND_MODE must be spa or legacy", file=sys.stderr)
-        return 2
-    if frontend_mode == "spa" and not spa_build_present():
-        # Falling back silently would ship the previous interface under the
-        # new release, so refuse to start instead.
+    if not spa_build_present():
+        # Serving a 503 placeholder in production would hide a broken
+        # release, so refuse to start instead.
         print(
-            "SPA build is missing; run the frontend build or set "
-            "DASHBOARD_FRONTEND_MODE=legacy",
+            "SPA build is missing; run the frontend build",
             file=sys.stderr,
         )
         return 2
@@ -1257,7 +966,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         refresh_timeout_seconds = _refresh_timeout_seconds()
         max_trace_pages = _max_trace_pages()
-        web_settings = WebSettings(auth_mode, identity_header, frontend_mode)
+        web_settings = WebSettings(auth_mode, identity_header)
         runtime_directory = _validated_runtime_directory(runtime_directory_value)
         environment = load_environment()
         configure_json_logging()
@@ -1437,7 +1146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     client,
                     window_start,
                     window_end,
-                    _trace_explain_taxonomy(),
+                    _taxonomy(),
                     csat_by_ticket=_csat_buckets_by_ticket(runtime_directory),
                     ai_review_by_ticket=_ai_review_ratings_by_ticket(runtime_directory),
                     deadline=deadline,
@@ -2037,7 +1746,7 @@ def _validated_runtime_directory(value: Path) -> Path:
     if not candidate.is_absolute():
         raise ConfigurationError(_RUNTIME_DIRECTORY_ERROR)
     directory = Path(os.path.abspath(os.fspath(candidate)))
-    static_directory = Path(os.path.abspath(os.fspath(_STATIC_INDEX.parent)))
+    static_directory = Path(os.path.abspath(os.fspath(_STATIC_ROOT)))
     prohibited = {
         Path(directory.anchor),
         Path(os.path.abspath(os.fspath(Path.home()))),

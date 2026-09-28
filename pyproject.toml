@@ -35,8 +35,6 @@ where = ["src"]
 # must be recursive: a flat `static/*` would ship an HTML shell whose script,
 # style and font references are all missing from the wheel.
 weekly_cs_report = [
-  "static/*.html",
-  "static/legacy/*.html",
   "static/spa/*",
   "static/spa/**/*",
 ]
