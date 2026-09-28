@@ -9,6 +9,8 @@ const LONG_INTENT_COUNTS = {
   ai_first: 1,
   transferred: 0,
   reopen: 0,
+  ai_end_to_end: 1,
+  direct_cs: 0,
 };
 
 function dashboardWithLongIntent() {
@@ -64,7 +66,9 @@ test("long real-world intent labels stay inside the dashboard canvas", async ({
     }),
   );
 
-  await page.goto("/");
+  // The Intent field shows only with its column or an active filter; the
+  // deep link (D7) supplies the filter.
+  await page.goto(`/#f=intent:${LONG_SAFE_INTENT}`);
 
   const intentSelect = page.locator("#intentInput");
   await expect(intentSelect).toBeVisible();

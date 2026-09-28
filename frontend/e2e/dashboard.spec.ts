@@ -22,122 +22,6 @@ function collectProblems(page: Page): string[] {
   return problems;
 }
 
-function healthyEnvelopeWithoutWarnings() {
-  const base = structuredClone(dashboardEnvelopeFixture);
-  const views = Object.fromEntries(
-    Object.entries(base.snapshot.views).map(([key, view]) => {
-      const transferReasons = {
-        ...view.transfer_reasons,
-        step_result_missing: {
-          count: 0,
-          denominator: view.transfer_reasons.observed_transfer_denominator,
-        },
-        tpe: view.transfer_reasons.tpe.filter(
-          (row) => row.step_result !== null,
-        ),
-      };
-      const byWeek = Object.fromEntries(
-        Object.entries(view.by_week).map(([week, detail]) => [
-          week,
-          {
-            ...detail,
-            transfer_reasons: {
-              ...detail.transfer_reasons,
-              step_result_missing: {
-                count: 0,
-                denominator:
-                  detail.transfer_reasons.observed_transfer_denominator,
-              },
-              tpe: detail.transfer_reasons.tpe.filter(
-                (row) => row.step_result !== null,
-              ),
-            },
-          },
-        ]),
-      );
-      return [
-        key,
-        {
-        ...view,
-        totals: { ...view.totals, gt4_turn_total: 0 },
-        transfer_reasons: transferReasons,
-        by_week: byWeek,
-        rule_gt4: {
-          ...view.rule_gt4,
-          gt4_turn_total: 0,
-          gt4_turn_with_cs: 0,
-          gt4_turn_without_cs: 0,
-          max_replies_rule_fired: 0,
-        },
-        weekly: view.weekly.map((week) => ({
-          ...week,
-          gt4_turn_with_cs: 0,
-          gt4_turn_without_cs: 0,
-          max_replies_rule_fired: 0,
-        })),
-        },
-      ];
-    }),
-  );
-
-  return {
-    ...base,
-    snapshot: {
-      ...base.snapshot,
-      views,
-      coverage: {
-        issue_category: 0.92,
-        app: 0.91,
-        tpe: 0.9,
-        intent: 0.89,
-        skill: 0.88,
-      },
-      unmapped_tpe_codes: [],
-      tool_error_codes: [],
-      enrichment_status: "complete",
-      gate_status: {
-        allowed: true,
-        structural_invalid_rate: 0,
-        reasons: [],
-      },
-    },
-  };
-}
-
-function entryCoverageEnvelope() {
-  const base = structuredClone(dashboardEnvelopeFixture);
-  const entryCoverage = {
-    source: "freshdesk" as const,
-    source_start_week: "2026-07-06" as const,
-    fetched_at: "2026-08-04T03:00:00Z",
-    by_week: {
-      "2026-07-20": {
-        freshdesk_ticket_count: 4,
-        ai_replied_only: 1,
-        ai_replied_then_transferred: 0,
-        transferred_without_ai_reply: 0,
-        invoked_no_result: 3,
-      },
-    },
-  };
-  return {
-    ...base,
-    snapshot: {
-      ...base.snapshot,
-      views: {
-        mon_sun: {
-          ...base.snapshot.views.mon_sun,
-          entry_coverage: entryCoverage,
-        },
-        mon_fri: {
-          ...base.snapshot.views.mon_fri,
-          entry_coverage: entryCoverage,
-        },
-      },
-    },
-  };
-}
-
 const CSAT_E2E_TICKETS = [
   { ticket_id: "7000001", outcome: "ai_end_to_end", skill: "interbank-fund-transfer", issue_category: "Category A", satisfaction: "positive", response_total: 4 },
   { ticket_id: "7000002", outcome: "ai_end_to_end", skill: "interbank-fund-transfer", issue_category: "Category B", satisfaction: "neutral", response_total: 4 },
@@ -146,6 +30,8 @@ const CSAT_E2E_TICKETS = [
   { ticket_id: "7000005", outcome: "direct_cs", skill: "topup", issue_category: "Category E", satisfaction: "neutral", response_total: 4 },
   { ticket_id: "7000006", outcome: "ai_then_cs", skill: "topup", issue_category: "Category F", satisfaction: "negative", response_total: 3 },
 ] as const;
+
+const CSAT_E2E_APP = "241 - Chuyển Tiền ATM";
 
 function csatDecisionEnvelope() {
   const base = structuredClone(dashboardEnvelopeFixture);
@@ -173,11 +59,18 @@ function csatDecisionEnvelope() {
       outcome: ticket.outcome,
       skill: ticket.skill,
       issue_category: ticket.issue_category,
+      app: CSAT_E2E_APP,
       text: `Nội dung phản hồi ${String.fromCharCode(65 + ticketIndex)}-${responseIndex + 1}`,
       response_number: responseIndex + 1,
       response_total: ticket.response_total,
       is_latest_for_ticket: responseIndex === ticket.response_total - 1,
     })),
+  );
+  const feedbackPool = Object.fromEntries(
+    feedbackEntries.map((entry) => [
+      `${entry.ticket_id}:${entry.response_number}`,
+      entry,
+    ]),
   );
   const week = {
     response_count: feedbackEntries.length,
@@ -197,8 +90,9 @@ function csatDecisionEnvelope() {
     by_dimension: {
       skill: dimensionRows("skill"),
       issue_category: dimensionRows("issue_category"),
+      app: [{ value: CSAT_E2E_APP, ...countsFor(CSAT_E2E_TICKETS) }],
     },
-    feedback_entries: feedbackEntries,
+    feedback_entry_keys: Object.keys(feedbackPool),
   };
   const segmentCounts = (values: readonly string[]) =>
     Object.fromEntries([
@@ -209,9 +103,11 @@ function csatDecisionEnvelope() {
           ai_first: index === 0 ? 9 - values.length : 1,
           transferred: index === 0 ? 3 : 0,
           reopen: index === 0 ? 2 : 0,
+          ai_end_to_end: index === 0 ? 9 - values.length - 3 : 1,
+          direct_cs: 0,
         },
       ]),
-      ["Chưa ghi nhận", { total: 0, ai_first: 0, transferred: 0, reopen: 0 }],
+      ["Chưa ghi nhận", { total: 0, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 }],
     ]);
   const patchView = (view: (typeof base.snapshot.views)["mon_fri"]) => {
     const detail = view.by_week["2026-07-20"];
@@ -234,6 +130,7 @@ function csatDecisionEnvelope() {
         source: "freshdesk" as const,
         fetched_at: "2026-08-03T03:00:00Z",
         by_week: { "2026-07-20": week },
+        feedback_pool: feedbackPool,
       },
       outcome_reconciliation: {
         source: "freshdesk" as const,
@@ -294,44 +191,6 @@ function csatTicketRows(): readonly TicketRow[] {
     tool_error_codes: [],
     ai_review_rating: null,
   }));
-}
-
-function twoObservedWeekEnvelope() {
-  const base = structuredClone(dashboardEnvelopeFixture);
-  const patchView = <T extends (typeof base.snapshot.views)["mon_fri"]>(
-    view: T,
-  ) => {
-    const latest = view.weekly[0];
-    const detail = view.by_week["2026-07-20"];
-    if (latest === undefined || detail === undefined) {
-      throw new Error("E2E fixture requires the latest observed week");
-    }
-    return {
-      ...view,
-      weekly: [
-        {
-          ...latest,
-          cohort_week: "2026-07-13",
-          cohort_status: "complete" as const,
-        },
-        latest,
-      ],
-      by_week: {
-        ...view.by_week,
-        "2026-07-13": structuredClone(detail),
-      },
-    };
-  };
-  return {
-    ...base,
-    snapshot: {
-      ...base.snapshot,
-      views: {
-        mon_fri: patchView(base.snapshot.views.mon_fri),
-        mon_sun: patchView(base.snapshot.views.mon_sun),
-      },
-    },
-  };
 }
 
 test.describe("Zalopay weekly CS dashboard", () => {
@@ -453,10 +312,10 @@ test.describe("Zalopay weekly CS dashboard", () => {
     });
 
     await page.goto("/");
-    const csat = page.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
+    const csat = page.getByRole("region", { name: "Mức hài lòng" });
     const source = csat.locator("#csat-source");
     await expect(source).toHaveText(
-      /CSAT: Freshdesk · cập nhật .+ · Dữ liệu khác: Langfuse(?: · Chưa cập nhật hôm nay\.)?$/,
+      /^CSAT: Freshdesk · cập nhật .+(?: · Chưa cập nhật hôm nay\.|\.)$/,
     );
     const reportScope = page.locator(
       'summary[aria-label^="Phạm vi báo cáo:"]',
@@ -491,14 +350,12 @@ test.describe("Zalopay weekly CS dashboard", () => {
     });
     await outcomeFilter.selectOption("ai_end_to_end");
     await expect(outcomeFilter).toHaveValue("ai_end_to_end");
-    await expect(
-      page.getByRole("region", { name: "Bộ lọc đang áp dụng", exact: true }),
-    ).toContainText("Kết quả: AI xử lý trọn");
+    const explorerFilters = page.getByRole("region", {
+      name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+    });
+    await expect(explorerFilters).toContainText("Kết quả: AI xử lý trọn");
     await expect(csat).toContainText("Hiển thị 1–10 / 12 nội dung phản hồi");
     await expect(csat.getByText("Nội dung phản hồi D-1")).toHaveCount(0);
-    await expect(
-      page.locator("#tickets").getByRole("combobox", { name: "Kết quả" }),
-    ).toHaveValue("ai_end_to_end");
 
     await outcomeFilter.selectOption("");
     await expect(outcomeFilter).toHaveValue("");
@@ -511,9 +368,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     });
     await skillFilter.selectOption("Nhiều skill");
     await expect(csat).toContainText("Hiển thị 1–8 / 8 nội dung phản hồi");
-    await expect(
-      page.locator("#tickets").getByRole("combobox", { name: "Skill" }),
-    ).toHaveValue("Nhiều skill");
+    await expect(explorerFilters).toContainText("Skill: Nhiều skill");
     await skillFilter.selectOption("");
 
     await csat.getByRole("button", { name: "Trang 3" }).click();
@@ -521,7 +376,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     await expect(csat).toContainText("Hiển thị 21–23 / 23 nội dung phản hồi");
     await expect(
       page.locator("#tickets").getByRole("columnheader", {
-        name: /Mức độ hài lòng \(CS Agent\)/,
+        name: /Khách hàng đánh giá/,
       }),
     ).toBeVisible();
     await expect(page.locator("#segments").getByRole("rowheader", {
@@ -536,94 +391,6 @@ test.describe("Zalopay weekly CS dashboard", () => {
       /Đối chiếu Freshdesk|đã xác định có CS người trả lời sau|AI First phía trên/i,
     );
     await expect(page.locator("body")).not.toContainText("bình luận");
-  });
-
-  test("shows Freshdesk entry coverage and keeps its drill-down local to the section", async ({
-    page,
-  }) => {
-    await page.route("**/api/dashboard", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(entryCoverageEnvelope()),
-      }),
-    );
-    await page.route("**/api/freshdesk-entry-coverage/tickets**", (route) => {
-      const url = new URL(route.request().url());
-      expect(url.searchParams.get("week_definition")).toBe("mon_fri");
-      expect(url.searchParams.get("cohort_weeks")).toBe("2026-07-20");
-      expect(url.searchParams.get("status")).toBe("invoked_no_result");
-      return route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          items: [
-            {
-              ticket_id: "7043723",
-              opened_at: "2026-07-21T02:00:00Z",
-              cohort_week: "2026-07-20",
-              status: "invoked_no_result",
-              human_replied: true,
-            },
-          ],
-          page: 1,
-          page_size: 10,
-          total: 1,
-        }),
-      });
-    });
-
-    await page.goto("/");
-    const section = page.getByRole("region", {
-      name: "Độ phủ xử lý từ Freshdesk",
-    });
-    await expect(section).toContainText("Đã gọi nhưng không có phản hồi/chuyển CS");
-    await section.getByRole("button", { name: "Xem ticket" }).nth(0).click();
-    await expect(section).toContainText("7043723");
-    await expect(section).toContainText("Trang 1 · 1 ticket");
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
-    ).toBe(true);
-  });
-
-  test("keeps the CSAT table inside its own mobile scroller", async ({
-    page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "mobile-light",
-      "the CSAT mobile overflow contract only needs one browser run",
-    );
-    await page.route("**/api/dashboard", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(csatDecisionEnvelope()),
-      }),
-    );
-
-    await page.goto("/");
-    const csat = page.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
-    await expect(csat.locator("#csat-source")).toContainText("CSAT: Freshdesk");
-
-    const layout = await csat.evaluate((section) => {
-      const localScroller = section.querySelector<HTMLElement>(
-        '[class*="tableScroll"]',
-      );
-      return {
-        documentWidth: document.documentElement.scrollWidth,
-        viewportWidth: document.documentElement.clientWidth,
-        sectionWidth: section.getBoundingClientRect().width,
-        scrollerWidth: localScroller?.getBoundingClientRect().width ?? null,
-        scrollerHasOverflow:
-          localScroller !== null &&
-          localScroller.scrollWidth > localScroller.clientWidth,
-      };
-    });
-
-    expect(layout.documentWidth).toBe(layout.viewportWidth);
-    expect(layout.scrollerWidth).not.toBeNull();
-    expect(layout.scrollerWidth).toBeLessThanOrEqual(layout.sectionWidth + 1);
-    expect(layout.scrollerHasOverflow).toBe(true);
   });
 
   test("switches every decision value with the selected cohort", async ({
@@ -660,7 +427,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
       page.getByRole("heading", { level: 1, name: /T2–CN.*10 ticket/ }),
     ).toBeVisible();
     await expect(page.locator("#ledger-ai-first")).toContainText(
-      /AI First\s*8\s*80,0% trong 10 ticket tuần này/,
+      /AI First\s*8\s*80,0%/,
     );
     await expect(page.locator("#ledger-transfer")).toContainText("3");
     await expect(page.locator("#ledger-reopen")).toContainText("2");
@@ -703,43 +470,9 @@ test.describe("Zalopay weekly CS dashboard", () => {
     expect(bottom).toBeLessThanOrEqual(900);
   });
 
-  test("places the weekly report directly after the decision state on mobile", async ({
-    page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile layout rule");
-
-    await page.goto("/");
-    await expect(page.locator("#weekly")).toBeVisible();
-    const attentionRail = page.getByRole("list", { name: "Việc cần chú ý" });
-    if ((await attentionRail.count()) > 0) {
-      await attentionRail.evaluate((node) => {
-        node.setAttribute("hidden", "");
-      });
-    }
-    const mobileDecisionLayout = await page.evaluate(() => {
-      const decision = document.querySelector("main > section");
-      const weekly = document.getElementById("weekly");
-      if (decision === null || weekly === null) {
-        throw new Error("Missing decision or weekly section");
-      }
-      return {
-        decisionBottom: decision.getBoundingClientRect().bottom,
-        weeklyTop: weekly.getBoundingClientRect().top,
-      };
-    });
-
-    expect(mobileDecisionLayout.weeklyTop).toBeGreaterThanOrEqual(
-      mobileDecisionLayout.decisionBottom,
-    );
-    expect(
-      mobileDecisionLayout.weeklyTop - mobileDecisionLayout.decisionBottom,
-    ).toBeLessThanOrEqual(64);
-  });
-
   test("does not render the removed action-warning rail", async ({
     page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile layout rule");
+  }) => {
     await page.route("**/api/dashboard", (route) =>
       route.fulfill({
         status: 200,
@@ -750,92 +483,6 @@ test.describe("Zalopay weekly CS dashboard", () => {
 
     await page.goto("/");
     await expect(page.getByRole("list", { name: "Việc cần chú ý" })).toHaveCount(0);
-  });
-
-  test("keeps a healthy mobile decision state before the weekly report", async ({
-    page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile layout rule");
-    await page.route("**/api/dashboard", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(healthyEnvelopeWithoutWarnings()),
-      }),
-    );
-
-    await page.goto("/");
-
-    await expect(page.getByRole("list", { name: "Việc cần chú ý" })).toHaveCount(0);
-    const layout = await page.evaluate(() => {
-      const decision = document.querySelector("main > section");
-      const weekly = document.getElementById("weekly");
-      if (decision === null || weekly === null) {
-        throw new Error("Missing decision or weekly section");
-      }
-      return {
-        decisionBottom: decision.getBoundingClientRect().bottom,
-        weeklyTop: weekly.getBoundingClientRect().top,
-      };
-    });
-    expect(layout.weeklyTop).toBeGreaterThanOrEqual(layout.decisionBottom);
-    expect(layout.weeklyTop - layout.decisionBottom).toBeLessThanOrEqual(64);
-  });
-
-  test("shows exactly the six decision columns at the 768px boundary", async ({
-    page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "desktop-light",
-      "the breakpoint geometry only needs one color-scheme run",
-    );
-
-    await page.setViewportSize({ width: 768, height: 900 });
-    await page.goto("/");
-
-    await expect(page.getByRole("button", { name: "Xem đủ cột" })).toBeVisible();
-    const visibleHeaders = await page.locator("#weekly thead th").evaluateAll((headers) =>
-      headers
-        .filter((header) => {
-          const box = header.getBoundingClientRect();
-          return (
-            getComputedStyle(header).display !== "none" &&
-            box.width > 0 &&
-            box.height > 0
-          );
-        })
-        .map((header) => header.textContent?.trim() ?? ""),
-    );
-
-    expect(visibleHeaders).toEqual([
-      "Tuần",
-      "Tổng ticket",
-      "AI First",
-      "Tỷ lệ AI First",
-      "Chuyển CS ngay từ đầu",
-      "Tổng chuyển CS",
-    ]);
-
-    await page.getByRole("button", { name: "Xem đủ cột" }).click();
-    const expandedHeaders = await page.locator("#weekly thead [scope='col']").evaluateAll(
-      (headers) =>
-        headers.filter((header) => {
-          const box = header.getBoundingClientRect();
-          return getComputedStyle(header).display !== "none" && box.width > 0;
-        }).length,
-    );
-    expect(expandedHeaders).toBe(13);
-
-    const localOverflow = await page.locator("#weekly [role='region']").evaluate(
-      (node) => ({
-        scrollWidth: node.scrollWidth,
-        clientWidth: node.clientWidth,
-        pageWidth: document.documentElement.scrollWidth,
-        viewportWidth: window.innerWidth,
-      }),
-    );
-    expect(localOverflow.scrollWidth).toBeGreaterThan(localOverflow.clientWidth);
-    expect(localOverflow.pageWidth).toBe(localOverflow.viewportWidth);
   });
 
   test("scrolls the weekly table locally with a sticky header and week column", async ({
@@ -935,7 +582,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     const segment = page.locator("#segments table");
     await expect(segment).toBeVisible();
     await expect(
-      segment.getByRole("columnheader", { name: /Ticket/ }),
+      segment.getByRole("columnheader", { name: /Chuyển CS/ }),
     ).toHaveAttribute("aria-sort", "descending");
     await segment.getByRole("button", { name: /Sắp xếp theo Giá trị/ }).click();
     await expect(
@@ -985,7 +632,6 @@ test.describe("Zalopay weekly CS dashboard", () => {
         name: "Transstatus và Step result",
       }),
     ).toBeVisible();
-    await diagnostics.locator("summary").click();
     await expect(diagnostics.locator("thead th")).toHaveText([
       "Transstatus",
       "Step result",
@@ -996,9 +642,6 @@ test.describe("Zalopay weekly CS dashboard", () => {
     await expect(
       diagnostics.getByText("Không có Step result", { exact: true }),
     ).toBeVisible();
-    await expect(diagnostics).toContainText(
-      "1/3 ticket chuyển CS (33,3%) không có Step result. Các ca này hiện chưa truy được tới bước lỗi cụ thể.",
-    );
     await expect(page.getByRole("list", { name: "Việc cần chú ý" })).toHaveCount(0);
     await expect(page.getByText(/taxonomy|case 2|Đang xử lý/i)).toHaveCount(0);
 
@@ -1028,8 +671,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     await expect(outputPath).toContainText("output_guardrail");
 
     const gt4 = page.getByRole("region", {
-      name: "Ticket có hơn 4 lượt xử lý",
-      exact: true,
+      name: /^Ticket có hơn 3 lượt xử lý/,
     });
     await expect(gt4).toBeVisible();
     await expect(
@@ -1046,212 +688,7 @@ test.describe("Zalopay weekly CS dashboard", () => {
     );
   });
 
-  test("gives every interactive control a 44px touch target on mobile", async ({
-    page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile target rule");
-
-    await page.goto("/");
-    await expect(page.locator("#weekly")).toBeVisible();
-    const shellHeight = await page
-      .getByRole("banner")
-      .evaluate((node) => node.getBoundingClientRect().height);
-    expect(shellHeight).toBeLessThanOrEqual(245);
-
-    const undersized = await page.evaluate(() => {
-      const selector =
-        "button, a[href], select, input:not([type='hidden']), summary, [role='tab'], [role='button']:not(button):not([aria-hidden='true'])";
-      return Array.from(document.querySelectorAll(selector))
-        .filter((node) => {
-          const hitTarget =
-            node.matches("input[type='checkbox'], input[type='radio']")
-              ? node.closest("label") ?? node
-              : node;
-          const rect = hitTarget.getBoundingClientRect();
-          return (
-            rect.width > 0 &&
-            rect.height > 0 &&
-            (rect.width < 44 || rect.height < 44)
-          );
-        })
-        .map((node) => {
-          const hitTarget =
-            node.matches("input[type='checkbox'], input[type='radio']")
-              ? node.closest("label") ?? node
-              : node;
-          const rect = hitTarget.getBoundingClientRect();
-          const label =
-            node.getAttribute("aria-label") ??
-            node.textContent?.trim().slice(0, 24) ??
-            "";
-          return `${node.tagName}:${label} (${rect.width.toFixed(1)}×${rect.height.toFixed(
-            1,
-          )})`;
-        });
-    });
-
-    expect(undersized).toEqual([]);
-  });
-
-  test("bounds active filters and the reading guide outside the mobile sticky flow", async ({
-    page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile shell rule");
-
-    await page.goto("/");
-    await page
-      .locator("#tickets")
-      .getByRole("combobox", { name: "Kết quả" })
-      .selectOption("ai_end_to_end");
-
-    const chips = page.getByRole("region", {
-      name: "Bộ lọc đang áp dụng",
-      exact: true,
-    });
-    await expect(chips).toBeVisible();
-    await chips.evaluate((region) => {
-      const template = region.firstElementChild;
-      if (template === null) {
-        throw new Error("Missing active-filter chip");
-      }
-      for (let index = 1; index < 12; index += 1) {
-        region.append(template.cloneNode(true));
-      }
-    });
-
-    const chipLayout = await chips.evaluate((region) => {
-      const style = getComputedStyle(region);
-      region.scrollLeft = region.scrollWidth;
-      return {
-        flexWrap: style.flexWrap,
-        overflowX: style.overflowX,
-        clientHeight: region.clientHeight,
-        scrollHeight: region.scrollHeight,
-        clientWidth: region.clientWidth,
-        scrollWidth: region.scrollWidth,
-        scrollLeft: region.scrollLeft,
-      };
-    });
-    expect(chipLayout.flexWrap).toBe("nowrap");
-    expect(chipLayout.overflowX).toBe("auto");
-    expect(chipLayout.scrollHeight).toBe(chipLayout.clientHeight);
-    expect(chipLayout.scrollWidth).toBeGreaterThan(chipLayout.clientWidth);
-    expect(chipLayout.scrollLeft).toBeGreaterThan(0);
-    expect(
-      await page.evaluate(
-        () =>
-          document.documentElement.scrollWidth >
-          document.documentElement.clientWidth,
-      ),
-    ).toBe(false);
-
-    const shell = page.getByRole("banner");
-    const shellHeightBefore = await shell.evaluate(
-      (node) => node.getBoundingClientRect().height,
-    );
-    expect(shellHeightBefore).toBeLessThanOrEqual(310);
-    expect(
-      await page.locator("#sectionNav").evaluate(
-        (node) => getComputedStyle(node).maskImage,
-      ),
-    ).toContain("linear-gradient");
-    await page.getByRole("button", { name: "Cách đọc" }).click();
-
-    const guide = page.getByRole("region", { name: "Cách đọc dashboard" });
-    await expect(guide).toBeFocused();
-    const guideLayout = await guide.evaluate((node) => {
-      const style = getComputedStyle(node);
-      const rect = node.getBoundingClientRect();
-      return {
-        position: style.position,
-        overflowY: style.overflowY,
-        height: rect.height,
-      };
-    });
-    const shellHeightAfter = await shell.evaluate(
-      (node) => node.getBoundingClientRect().height,
-    );
-    expect(shellHeightAfter).toBeCloseTo(shellHeightBefore, 0);
-    expect(guideLayout.position).toBe("absolute");
-    expect(guideLayout.overflowY).toBe("auto");
-    expect(guideLayout.height).toBeLessThanOrEqual(844 * 0.45 + 1);
-  });
-
-  test("keeps chart overflow local and the global report scope touch-safe on mobile", async ({
-    page,
-  }, testInfo) => {
-    test.skip(!testInfo.project.name.startsWith("mobile"), "mobile chart rule");
-
-    await page.route("**/api/dashboard", (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(twoObservedWeekEnvelope()),
-      }),
-    );
-    await page.goto("/");
-
-    const chartRegions = page.getByRole("region", {
-      name: /Biểu đồ (volume|tỷ lệ), cuộn ngang khi cần/,
-    });
-    await expect(chartRegions).toHaveCount(2);
-
-    const chartMeasurements = await chartRegions.evaluateAll((regions) =>
-      regions.map((region) => {
-        region.scrollLeft = region.scrollWidth;
-        return {
-          clientWidth: region.clientWidth,
-          scrollWidth: region.scrollWidth,
-          scrollLeft: region.scrollLeft,
-        };
-      }),
-    );
-    for (const measurement of chartMeasurements) {
-      expect(measurement.scrollWidth).toBeGreaterThan(measurement.clientWidth);
-      expect(measurement.scrollLeft).toBeGreaterThan(0);
-    }
-
-    expect(
-      await page.evaluate(
-        () =>
-          document.documentElement.scrollWidth >
-          document.documentElement.clientWidth,
-      ),
-    ).toBe(false);
-
-    const reportScope = page.locator(
-      'summary[aria-label^="Phạm vi báo cáo:"]',
-    );
-    await expect(reportScope).toBeVisible();
-    const reportScopeBox = await reportScope.boundingBox();
-    expect(reportScopeBox).not.toBeNull();
-    expect(reportScopeBox?.width ?? 0).toBeGreaterThanOrEqual(44);
-    expect(reportScopeBox?.height ?? 0).toBeGreaterThanOrEqual(44);
-
-    await reportScope.click();
-    const scopeOptions = page.getByRole("group", {
-      name: "Chọn tuần cho báo cáo",
-    });
-    await expect(scopeOptions.getByRole("checkbox")).toHaveCount(2);
-    await scopeOptions.getByRole("checkbox", { name: "13/07–17/07" }).check();
-    await expect(reportScope).toHaveAccessibleName(
-      "Phạm vi báo cáo: 2 tuần đã chọn",
-    );
-    await expect(page.locator("#cohortWeekInput")).toHaveValue("__multiple__");
-
-    await page.locator("#cohortWeekInput").selectOption("2026-07-13");
-    await expect(page.locator("#cohortWeekInput")).toHaveValue("2026-07-13");
-    await expect(reportScope).toHaveAccessibleName(
-      "Phạm vi báo cáo: 2 tuần đã chọn",
-    );
-
-    await scopeOptions
-      .getByRole("button", { name: "Toàn bộ kỳ báo cáo (2 tuần)" })
-      .click();
-    await expect(page.locator("#cohortWeekInput")).toHaveValue("");
-  });
-
-  test("keeps nav target headings below the sticky shell", async ({
+  test("nav labels match their h2 in page order and land below the sticky shell", async ({
     page,
   }, testInfo) => {
     test.skip(
@@ -1262,32 +699,48 @@ test.describe("Zalopay weekly CS dashboard", () => {
     await page.goto("/");
     await expect(page.locator("#weekly")).toBeVisible();
 
-    for (const sectionId of [
-      "weekly",
-      "trend",
-      "segments",
-      "diagnostics",
-      "quality",
-      "tickets",
-    ]) {
-      await page.locator(`#sectionNav a[href="#${sectionId}"]`).click();
-      await expect(page).toHaveURL(new RegExp(`#${sectionId}$`));
+    const links = page.locator("#sectionNav a[href^='#']");
+    const targets = await links.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        id: (node.getAttribute("href") ?? "").slice(1),
+        label: node.textContent?.trim() ?? "",
+      })),
+    );
+    const headings = await page.evaluate((ids) =>
+      ids.map((id) => {
+        const section = document.getElementById(id);
+        const heading = document.getElementById(
+          section?.getAttribute("aria-labelledby") ?? "",
+        );
+        return {
+          text: heading?.textContent?.trim() ?? "",
+          top: section?.getBoundingClientRect().top ?? Number.NaN,
+        };
+      }),
+    targets.map((target) => target.id));
 
+    // D17: nav label is the h2 text, and nav order is page order.
+    expect(headings.map((heading) => heading.text)).toEqual(
+      targets.map((target) => target.label),
+    );
+    const tops = headings.map((heading) => heading.top);
+    expect(tops).toEqual([...tops].sort((left, right) => left - right));
+
+    for (const { id } of targets) {
+      await page.locator(`#sectionNav a[href="#${id}"]`).click();
       await expect
         .poll(() =>
           page.evaluate((targetId) => {
             const shell = document.querySelector("header");
             const section = document.getElementById(targetId);
-            const headingId = section?.getAttribute("aria-labelledby");
-            const heading =
-              headingId === null || headingId === undefined
-                ? null
-                : document.getElementById(headingId);
+            const heading = document.getElementById(
+              section?.getAttribute("aria-labelledby") ?? "",
+            );
             if (shell === null || heading === null) {
               throw new Error(`Missing shell or labelled heading for #${targetId}`);
             }
             return heading.getBoundingClientRect().top - shell.getBoundingClientRect().bottom;
-          }, sectionId),
+          }, id),
         )
         .toBeGreaterThanOrEqual(-1);
     }

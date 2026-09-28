@@ -29,6 +29,9 @@ beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  // The dashboard writes its scope into the hash (D7); a test must not
+  // inherit the previous one's link.
+  window.history.replaceState(null, "", "/");
   server.resetHandlers();
 });
 afterAll(() => server.close());

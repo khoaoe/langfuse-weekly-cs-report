@@ -59,7 +59,12 @@ test("exports every week in the window whatever the report scope", async ({
 });
 
 async function focusHiddenUnderHeader(page: Page, stops: number) {
-  await page.keyboard.press("End");
+  // Geometry is only meaningful once every section has loaded; a late table
+  // shifts content after focus has already scrolled.
+  await page.locator("#tickets tbody tr").first().waitFor();
+  await page.waitForLoadState("networkidle");
+  // No `End` key: Chrome animates keyboard scrolling, and the animation keeps
+  // moving the page after the focus stops below have scrolled.
   await page.evaluate(() => {
     window.scrollTo(0, document.documentElement.scrollHeight);
     (document.activeElement as HTMLElement | null)?.blur();
@@ -84,7 +89,7 @@ async function focusHiddenUnderHeader(page: Page, stops: number) {
       }
       const shellBottom = shell.getBoundingClientRect().bottom;
       return box.top < shellBottom - 1
-        ? `${focused.tagName}#${focused.id}.${focused.className} top=${Math.round(box.top)} shell=${Math.round(shellBottom)}`
+        ? `${focused.tagName}#${focused.id}.${focused.className} "${focused.textContent?.trim().slice(0, 40)}" in ${focused.closest("section,aside,footer")?.id} top=${Math.round(box.top)} shell=${Math.round(shellBottom)}`
         : null;
     });
     if (result !== null) {

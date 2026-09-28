@@ -79,7 +79,7 @@
 }
 .productName {
   min-width: 0;
-  font-size: 15px;
+  font-size: var(--text-body);
   font-weight: 500;
   letter-spacing: 0.01em;
   line-height: 1.2;
@@ -89,18 +89,15 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  margin-left: auto;
   gap: var(--space-2) var(--space-4);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 .metaValue {
   color: var(--ink);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-}
-
-.staleTimestamp {
-  color: var(--warning-text);
 }
 
 .runtimeChip {
@@ -112,7 +109,7 @@
   border-radius: var(--radius-tight);
   color: var(--muted);
   background: var(--surface);
-  font-size: 12px;
+  font-size: var(--text-caption);
   font-weight: 500;
 }
 
@@ -122,28 +119,28 @@
   color: var(--warning-text);
 }
 
+.opsFooter {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 0 var(--gutter) var(--space-6);
+}
+
 .freshdeskCookieChip {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
-  padding: 0 var(--space-2);
-  border: 1px solid var(--warning-text);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   background: var(--surface);
-  color: var(--warning-text);
-  font-size: 12px;
+  color: var(--ink);
+  font-size: var(--text-caption);
   font-weight: 500;
   cursor: pointer;
 }
 
 .freshdeskCookieChip:hover {
-  background: color-mix(in srgb, var(--warning-text) 10%, var(--surface));
-}
-
-.runtimeReady {
-  border-color: var(--success-text);
-  color: var(--success-text);
-  background: color-mix(in srgb, var(--success-text) 9%, var(--surface));
+  background: var(--surface-sunken);
 }
 
 .controls {
@@ -199,22 +196,12 @@
   cursor: not-allowed;
 }
 
-.reportScopeBar {
-  position: relative;
-  z-index: 2;
-  border-top: 1px solid var(--rule);
-  background: var(--surface-sunken);
-}
-
 .reportScopeField {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
-  max-width: var(--content-max);
-  margin: 0 auto;
-  padding: var(--space-2) var(--gutter);
+  gap: var(--space-2);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
 }
 
@@ -291,7 +278,7 @@
   gap: var(--space-1);
   width: 100%;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--text-table);
   color: var(--muted);
 }
 
@@ -311,7 +298,7 @@
 
 .reportScopeAll[aria-pressed="true"] {
   border-color: var(--interactive);
-  background: color-mix(in srgb, var(--interactive) 10%, var(--surface));
+  background: var(--interactive-soft);
 }
 
 .reportScopeCurrent {
@@ -367,13 +354,13 @@
 .reportScopeError {
   margin-top: var(--space-2);
   color: var(--critical-text);
-  font-size: 0.875rem;
+  font-size: var(--text-table);
 }
 
 .reportScopeSummaryLine {
   margin-top: var(--space-2);
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: var(--text-table);
 }
 
 .reportScopeOption input {
@@ -403,7 +390,7 @@
   align-items: center;
   min-height: 44px;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   text-decoration: none;
 }
 
@@ -423,7 +410,7 @@
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
   white-space: nowrap;
   cursor: pointer;
@@ -460,7 +447,7 @@
   margin: 0 auto;
   padding: 0 var(--gutter);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .statusFilled {
@@ -554,7 +541,7 @@
   flex-wrap: wrap;
   gap: var(--space-2);
   margin: 0;
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -562,7 +549,7 @@
 
 .ledgerGroupDenominator {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 400;
   letter-spacing: 0;
   text-transform: none;
@@ -637,7 +624,7 @@
 
 .ledgerLabel {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
 }
 
@@ -652,7 +639,7 @@
    display size, "lần/ticket" wrapped onto a second line and doubled the value
    block's height while the four count cells beside it stayed one line. */
 .ledgerUnit {
-  font-size: 15px;
+  font-size: var(--text-body);
   font-weight: 400;
   letter-spacing: 0;
   white-space: nowrap;
@@ -660,14 +647,14 @@
 
 .ledgerSupport {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 /* The delta states direction with an arrow and a sign; colour only adds to
    it on the one movement that is bad (a rising reopen rate). */
 .ledgerDelta {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-variant-numeric: tabular-nums;
 }
 
@@ -757,7 +744,7 @@
 
 .railAction {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .railActions {
@@ -776,7 +763,7 @@
   background: var(--surface);
   color: var(--ink);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-caption);
   font-weight: 500;
   text-decoration: none;
 }
@@ -808,27 +795,28 @@
 
 
 .sectionTitle {
-  font-size: 18px;
+  font-size: var(--text-h2);
 }
 
 .sectionNote {
-  max-width: 80ch;
+  max-width: 75ch;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 /* The description lives outside the scroller so the sticky header can rest
    flush against the container edge and stay readable while the table moves. */
 .tableCaption {
+  max-width: 75ch;
   margin-bottom: var(--space-2);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .tableScroll {
+  position: relative;
   overflow: auto;
   max-height: 62vh;
-  width: fit-content;
   max-width: 100%;
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
@@ -836,7 +824,7 @@
 }
 
 .table {
-  font-size: 14px;
+  font-size: var(--text-table);
 }
 
 .table th,
@@ -863,7 +851,7 @@
   border-right: 1px solid var(--rule-strong);
   background: color-mix(in srgb, var(--interactive) 7%, var(--surface-sunken));
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-caption);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-align: center;
@@ -879,6 +867,29 @@
 
 .table tbody tr:hover td {
   background: var(--surface-sunken);
+}
+
+/* Weekly report: all 19 columns stay on screen. Headers wrap to two lines,
+   numbers never do, and horizontal padding is tight enough for 1920px. */
+.weeklyTable {
+  width: 100%;
+}
+
+.weeklyTable th,
+.weeklyTable td {
+  padding: var(--space-2);
+}
+
+.weeklyTable thead .weeklyColumnRow th {
+  min-width: 64px;
+  max-width: 112px;
+  white-space: normal;
+  vertical-align: bottom;
+}
+
+/* Edge shadow while columns remain off to the right. */
+.weeklyScroll[data-more-right="true"] {
+  box-shadow: inset -12px 0 10px -10px color-mix(in srgb, var(--ink) 35%, transparent);
 }
 
 /* Body of an always-open diagnostic panel under its h3. */
@@ -908,15 +919,10 @@
   text-align: right;
 }
 
+/* Opaque on every cell, so the sticky week column matches its row and
+   horizontally scrolled cells never show through the "(WTD)" label. */
 .currentWeekRow th,
 .currentWeekRow td {
-  background: color-mix(in srgb, var(--warning) 8%, transparent);
-}
-
-/* Keep the sticky column opaque even on the highlighted current-week row --
-   the transparent mix above lets horizontally-scrolled numeric columns show
-   through the "(WTD)" label otherwise. */
-.currentWeekRow .stickyColumn {
   background: color-mix(in srgb, var(--warning) 8%, var(--surface));
 }
 
@@ -925,8 +931,9 @@
 }
 
 .caption {
+  max-width: 75ch;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 
@@ -939,7 +946,7 @@
 }
 
 .qualityList h3 {
-  font-size: 15px;
+  font-size: var(--text-body);
 }
 
 .qualityList ul {
@@ -959,7 +966,7 @@
 
 .factLabel {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .factValue {
@@ -1162,26 +1169,8 @@
     margin-top: var(--space-3);
   }
 
-  .table:not(.allColumns) .optionalColumn {
-    display: none;
-  }
-
-  .weeklyGroupRow {
-    display: none;
-  }
-
-  .table thead .weeklyColumnRow th {
-    top: 0;
-  }
-
   .tableScroll {
     max-height: none;
-  }
-}
-
-@media (min-width: 769px) {
-  .columnsToggle {
-    display: none;
   }
 }
 
@@ -1201,7 +1190,7 @@
 
 .dayRangeErrorDetail {
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: var(--text-table);
 }
 
 .dayRangeErrorActions {

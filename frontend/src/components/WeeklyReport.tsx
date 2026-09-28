@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   createColumnHelper,
   flexRender,
@@ -226,19 +226,6 @@ const WEEKLY_SORT_COLUMNS: readonly WeeklySortColumn[] = [
   },
 ];
 
-/**
- * The compact view keeps the two first-response branches together, followed
- * by their transfer outcome. The full table still exposes every metric.
- */
-const MOBILE_CORE_COLUMNS = new Set<WeeklySortKey>([
-  "cohort_week",
-  "total_tickets",
-  "ai_first_count",
-  "ai_first_rate",
-  "direct_cs_count",
-  "transfer_total",
-]);
-
 const WEEKLY_COLUMN_GROUPS = [
   { label: "Phạm vi", span: 2 },
   { label: "Phản hồi đầu tiên", span: 3 },
@@ -290,7 +277,8 @@ export function WeeklyReport({
   dayRangeLabel,
 }: WeeklyReportProps) {
   const isDayRange = dayRangeWeekLabels !== undefined;
-  const [allColumns, setAllColumns] = useState(false);
+  const scroller = useRef<HTMLDivElement>(null);
+  const [moreRight, setMoreRight] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
   const [sort, setSort] =
     useState<TableSort<WeeklySortKey>>(DEFAULT_WEEKLY_SORT);
@@ -373,15 +361,25 @@ export function WeeklyReport({
     sort.key !== DEFAULT_WEEKLY_SORT.key ||
     sort.direction !== DEFAULT_WEEKLY_SORT.direction;
 
-  const toggleColumns = useCallback(() => {
-    setAllColumns((current) => {
-      const next = !current;
-      if (!next && !MOBILE_CORE_COLUMNS.has(sort.key)) {
-        setSort(DEFAULT_WEEKLY_SORT);
-      }
-      return next;
-    });
-  }, [sort.key]);
+  // Flags columns hidden past the right edge, so the edge shadow and the
+  // screen-reader hint appear only while there is something left to scroll to.
+  useEffect(() => {
+    const node = scroller.current;
+    if (node === null) {
+      return;
+    }
+    const update = () =>
+      setMoreRight(node.scrollLeft + node.clientWidth < node.scrollWidth - 1);
+    update();
+    node.addEventListener("scroll", update, { passive: true });
+    const observer =
+      typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(node);
+    return () => {
+      node.removeEventListener("scroll", update);
+      observer?.disconnect();
+    };
+  }, []);
 
   const copyTsv = useCallback(() => {
     const tsv = buildWeeklyTsv(weekly, exportOptions);
@@ -412,7 +410,7 @@ export function WeeklyReport({
           <h2 id="weekly-title" className={styles.sectionTitle}>
             {isDayRange
               ? `Báo cáo theo khoảng ngày ${dayRangeLabel ?? ""}`
-              : `Báo cáo tuần ${cohortLabel}`}
+              : "Báo cáo tuần"}
           </h2>
         </div>
         <div className={styles.controls}>
@@ -432,14 +430,6 @@ export function WeeklyReport({
           >
             Tải CSV
           </button>
-          <button
-            type="button"
-            className={`${styles.action} ${styles.columnsToggle}`}
-            aria-pressed={allColumns}
-            onClick={toggleColumns}
-          >
-            {allColumns ? "Rút gọn cột" : "Xem đủ cột"}
-          </button>
         </div>
       </div>
 
@@ -454,13 +444,18 @@ export function WeeklyReport({
       ) : null}
 
       <div
-        className={styles.tableScroll}
+        ref={scroller}
+        className={`${styles.tableScroll} ${styles.weeklyScroll}`}
         tabIndex={0}
         role="region"
         aria-label="Bảng báo cáo tuần, cuộn ngang khi cần"
+        data-more-right={moreRight ? "true" : undefined}
       >
+        {moreRight ? (
+          <span className="visually-hidden">Còn cột bên phải, cuộn ngang để xem.</span>
+        ) : null}
         <table
-          className={`${styles.table} ${allColumns ? styles.allColumns : ""}`}
+          className={`${styles.table} ${styles.weeklyTable}`}
           aria-labelledby="weekly-title"
         >
           <thead>
@@ -485,11 +480,7 @@ export function WeeklyReport({
                     <th
                       key={header.id}
                       scope="col"
-                      className={`${index === 0 ? styles.stickyColumn : styles.numeric} ${
-                        sortColumn !== undefined && MOBILE_CORE_COLUMNS.has(sortColumn.key)
-                          ? ""
-                          : styles.optionalColumn
-                      }`}
+                      className={index === 0 ? styles.stickyColumn : styles.numeric}
                       aria-sort={
                         active
                           ? sort.direction === "asc"
@@ -540,12 +531,9 @@ export function WeeklyReport({
               >
                 {row.getVisibleCells().map((cell, index) => {
                   const value = cell.getValue<string>();
-                  const sortColumn = WEEKLY_SORT_COLUMNS[index];
                   const className = `${index === 0 ? styles.stickyColumn : styles.numeric} ${
-                    sortColumn !== undefined && MOBILE_CORE_COLUMNS.has(sortColumn.key)
-                      ? ""
-                      : styles.optionalColumn
-                  } ${value === EMPTY_WEEK_LABEL || value === "—" ? styles.emptyCell : ""}`;
+                    value === EMPTY_WEEK_LABEL || value === "—" ? styles.emptyCell : ""
+                  }`;
                   return index === 0 ? (
                     <th
                       key={cell.id}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { scaleBand, scaleLinear } from "@visx/scale";
 import { Bar, LinePath } from "@visx/shape";
 
@@ -54,8 +54,8 @@ import trendStyles from "./trend.module.css";
 /** §B1: rolling window width for day-mode rate lines. */
 const ROLLING_WINDOW_DAYS = 7;
 
-const CHART_WIDTH = 720;
-const CHART_HEIGHT = 220;
+const CHART_WIDTH = 600;
+const CHART_HEIGHT = 240;
 const MARGIN = { top: 12, right: 16, bottom: 28, left: 56 } as const;
 const INNER_WIDTH = CHART_WIDTH - MARGIN.left - MARGIN.right;
 const INNER_HEIGHT = CHART_HEIGHT - MARGIN.top - MARGIN.bottom;
@@ -193,7 +193,7 @@ interface TrendCopy {
 }
 
 const WEEK_TREND_COPY: TrendCopy = {
-  volumeChartTitle: "Volume ticket theo tuần",
+  volumeChartTitle: "Số ticket theo tuần",
   rateChartTitle: "Tỷ lệ theo tuần",
   volumeAriaLabel: "Biểu đồ volume, cuộn ngang khi cần",
   rateAriaLabel: "Biểu đồ tỷ lệ, cuộn ngang khi cần",
@@ -202,7 +202,7 @@ const WEEK_TREND_COPY: TrendCopy = {
     [
       `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${rateCeiling} để vừa cả tuần cao điểm nhất.`,
       "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
-      "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
+      "Số ticket nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
     ].join(" "),
   tooltipRangePrefix: "Tuần",
   emptyMessage: (minPoints, observedCount) =>
@@ -212,7 +212,7 @@ const WEEK_TREND_COPY: TrendCopy = {
 };
 
 const DAY_TREND_COPY: TrendCopy = {
-  volumeChartTitle: "Volume ticket theo ngày",
+  volumeChartTitle: "Số ticket theo ngày",
   rateChartTitle: "Tỷ lệ theo ngày (trung bình động 7 ngày)",
   volumeAriaLabel: "Biểu đồ volume theo ngày, cuộn ngang khi cần",
   rateAriaLabel: "Biểu đồ tỷ lệ theo ngày, cuộn ngang khi cần",
@@ -222,7 +222,7 @@ const DAY_TREND_COPY: TrendCopy = {
       `Hai đường dùng chung trục phần trăm, chạy từ 0 đến ${rateCeiling} để vừa cả ngày cao điểm nhất.`,
       "Mỗi điểm là trung bình động 7 ngày kết thúc ở ngày đó, không phải tỷ lệ riêng của ngày đó.",
       "Đường liền là AI First, đường nét đứt là reopen sau AI First — reopen có thể vượt 100% vì một ticket có thể reopen nhiều lần.",
-      "Volume nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
+      "Số ticket nằm ở biểu đồ phía trên để tránh hai trục trong một khung.",
     ].join(" "),
   tooltipRangePrefix: "Ngày",
   emptyMessage: (minPoints, observedCount) =>
@@ -556,14 +556,14 @@ function TrendPanels({
               point.has_data ? (
                 <g key={point.key}>
                   <Bar
-                    className={trendStyles.seriesPrimaryFill ?? ""}
+                    className={trendStyles.seriesTotalFill ?? ""}
                     x={centre(point) - barWidth}
                     y={volumeY(point.total_tickets)}
                     width={barWidth}
                     height={INNER_HEIGHT - volumeY(point.total_tickets)}
                   />
                   <Bar
-                    className={trendStyles.seriesSecondaryFill ?? ""}
+                    className={trendStyles.seriesAiFirstFill ?? ""}
                     x={centre(point)}
                     y={volumeY(point.ai_first_count)}
                     width={barWidth}
@@ -581,10 +581,10 @@ function TrendPanels({
         ) : null}
         <div className={trendStyles.legend}>
           <span className={trendStyles.legendItem}>
-            <span className={trendStyles.swatchPrimary} /> Tổng ticket
+            <span className={trendStyles.swatchTotal} /> Tổng ticket
           </span>
           <span className={trendStyles.legendItem}>
-            <span className={trendStyles.swatchSecondary} /> Ticket AI First
+            <span className={trendStyles.swatchAiFirst} /> Ticket AI First
           </span>
         </div>
         </figure>
@@ -630,14 +630,14 @@ function TrendPanels({
             ))}
             {renderXAxis()}
             <LinePath<TrendPoint>
-              className={trendStyles.seriesPrimaryStroke ?? ""}
+              className={trendStyles.seriesAiFirstStroke ?? ""}
               data={chartPoints}
               defined={(point) => point.has_data}
               x={centre}
               y={(point) => rateY(point.ai_first_rate)}
             />
             <LinePath<TrendPoint>
-              className={trendStyles.seriesSecondaryStroke ?? ""}
+              className={trendStyles.seriesReopenStroke ?? ""}
               data={chartPoints}
               defined={(point) =>
                 point.has_data && point.reopen_lifetime_rate !== null
@@ -654,10 +654,10 @@ function TrendPanels({
         ) : null}
         <div className={trendStyles.legend}>
           <span className={trendStyles.legendItem}>
-            <span className={trendStyles.swatchPrimary} /> Tỷ lệ AI First
+            <span className={trendStyles.swatchAiFirst} /> Tỷ lệ AI First
           </span>
           <span className={trendStyles.legendItem}>
-            <span className={trendStyles.swatchSecondary} /> Tỷ lệ reopen sau AI First
+            <span className={trendStyles.swatchReopen} /> Tỷ lệ reopen sau AI First
           </span>
         </div>
         </figure>
@@ -940,6 +940,8 @@ function SegmentTable({
 
 export interface BelowFoldProps {
   readonly snapshot: DashboardSnapshot;
+  /** Ticket Explorer, placed between diagnostics and Freshdesk coverage. */
+  readonly explorer?: ReactNode;
   readonly weekDefinition: WeekDefinition;
   readonly activeWeek: string;
   readonly allWeeks?: boolean;
@@ -980,8 +982,8 @@ export interface BelowFoldProps {
 }
 
 /**
- * Trends, segment comparison, CSAT and transfer/rule diagnostics —
- * everything that explains the ledger above.
+ * Trends, segment comparison, CSAT, transfer/rule diagnostics, the ticket
+ * explorer slot and Freshdesk coverage, in page order.
  */
 export function BelowFold({
   snapshot,
@@ -999,6 +1001,7 @@ export function BelowFold({
   onOpenFreshdeskCookieDialog = () => {},
   dayRange,
   weeklySnapshot,
+  explorer = null,
 }: BelowFoldProps) {
   const view = selectView(snapshot, weekDefinition);
   const weeks = selectWeekly(view);
@@ -1159,7 +1162,7 @@ export function BelowFold({
         <div className={styles.sectionHead}>
           <div>
             <h2 id="trend-title" className={styles.sectionTitle}>
-              Volume và tỷ lệ theo tuần
+              Xu hướng
             </h2>
           </div>
           <div
@@ -1204,21 +1207,11 @@ export function BelowFold({
         />
       </section>
 
-      <AiTagCoverageSection
-        aiTagCoverage={aiTagCoverage}
-        {...(aiTagCoverageScopeNote === undefined
-          ? {}
-          : { scopeNote: aiTagCoverageScopeNote })}
-        {...(dayRange === undefined
-          ? {}
-          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
-      />
-
       <section id="segments" className={styles.section} aria-labelledby="segments-title">
         <div className={styles.sectionHead}>
           <div>
             <h2 id="segments-title" className={styles.sectionTitle}>
-              So sánh theo thuộc tính ticket
+              So sánh segment
             </h2>
           </div>
         </div>
@@ -1258,6 +1251,18 @@ export function BelowFold({
         dayModeNote={dayModeDiagnosticsNote}
         onShowStuckTickets={() => onShowStuckTickets(effectiveWeek)}
         onTicketFilterSelect={onTicketFilterSelect}
+      />
+
+      {explorer}
+
+      <AiTagCoverageSection
+        aiTagCoverage={aiTagCoverage}
+        {...(aiTagCoverageScopeNote === undefined
+          ? {}
+          : { scopeNote: aiTagCoverageScopeNote })}
+        {...(dayRange === undefined
+          ? {}
+          : { dayRange: { from: dayRange.from, to: dayRange.to } })}
       />
     </>
   );

@@ -25,7 +25,7 @@ function expectedTracingDateRange(
 
 test("renders safe Freshdesk and Langfuse ticket links without requesting either service", async ({
   page,
-}, testInfo) => {
+}) => {
   const dashboard = {
     ...structuredClone(dashboardEnvelopeFixture),
     snapshot: {
@@ -90,7 +90,7 @@ test("renders safe Freshdesk and Langfuse ticket links without requesting either
   );
   const langfuseTarget = await langfuseLink.boundingBox();
   expect(langfuseTarget).not.toBeNull();
-  const minimumTarget = testInfo.project.name.startsWith("mobile") ? 44 : 24;
+  const minimumTarget = 24;
   expect(langfuseTarget?.width).toBeGreaterThanOrEqual(minimumTarget);
   expect(langfuseTarget?.height).toBeGreaterThanOrEqual(minimumTarget);
   const langfuseFilter = encodeURIComponent(

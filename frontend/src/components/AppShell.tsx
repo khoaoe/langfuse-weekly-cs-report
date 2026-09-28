@@ -12,10 +12,6 @@ import zMarkDark from "../../../assets/brand/graphics/zalopay-z-dark.png";
 import zMarkLight from "../../../assets/brand/graphics/zalopay-z-light.png";
 import type { DashboardSnapshot, WeekDefinition } from "../lib/dashboard-schema";
 import type { ActiveFilterChip } from "../lib/dashboard-filters";
-import {
-  DATA_STALE_DISPLAY_MS,
-  calculateDataQualityScore,
-} from "../lib/data-quality-score";
 import { AB_TEST_ENABLED } from "../lib/api";
 import { formatUpdatedAt } from "../lib/format";
 import type { DashboardRuntimeKind } from "../lib/runtime-state";
@@ -31,15 +27,16 @@ import styles from "./dashboard.module.css";
 import themeStyles from "./theme-toggle.module.css";
 
 const WEEK_DEFINITIONS: readonly WeekDefinition[] = ["mon_fri", "mon_sun"];
+// Page order; each label is the section's h2 text, word for word.
 const SECTIONS = [
   { id: "weekly", label: "Báo cáo tuần" },
   { id: "trend", label: "Xu hướng" },
-  { id: "ai-tag-coverage", label: "Độ phủ Freshdesk" },
   { id: "segments", label: "So sánh segment" },
   { id: "csat", label: "Mức hài lòng" },
-  { id: "diagnostics", label: "Chẩn đoán" },
+  { id: "diagnostics", label: "Chẩn đoán chuyển CS" },
   { id: "tickets", label: "Ticket Explorer" },
-  { id: "ab-test", label: "A/B Test" },
+  { id: "ai-tag-coverage", label: "Độ phủ Freshdesk" },
+  { id: "ab-test", label: "A/B Test model" },
 ] as const;
 const NAV_SECTIONS = SECTIONS.filter(
   (section) => AB_TEST_ENABLED || section.id !== "ab-test",
@@ -103,14 +100,6 @@ export function AppShell({
   const helpPanel = useRef<HTMLElement>(null);
   const helpButton = useRef<HTMLButtonElement>(null);
   const shellRef = useRef<HTMLElement>(null);
-  const snapshotQuality =
-    snapshot === null ? null : calculateDataQualityScore(snapshot);
-  const displaysStale =
-    runtimeKind === "stale_error" ||
-    (snapshotQuality?.ageMs !== null &&
-      snapshotQuality?.ageMs !== undefined &&
-      snapshotQuality.ageMs > DATA_STALE_DISPLAY_MS);
-  const displayedRuntimeKind = displaysStale ? "stale_error" : runtimeKind;
   const reportWindow =
     snapshot === null
       ? []
@@ -145,51 +134,51 @@ export function AppShell({
     };
   }, []);
 
+  // Scroll-spy: the current section is the one crossing a 1px band just
+  // under the sticky header. Rebuilt when the header height changes, because
+  // the band's offset is baked into rootMargin.
   useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") {
+      return;
+    }
     const nodes = SECTIONS.map((section) =>
       document.getElementById(section.id),
     ).filter((node): node is HTMLElement => node !== null);
-    const firstNode = nodes[0];
-    if (firstNode === undefined) {
+    if (nodes.length === 0) {
       return;
     }
-    const updateActiveSection = () => {
-      const offset =
-        (shellRef.current?.getBoundingClientRect().height ?? 0) + 1;
-      let current = firstNode.id as (typeof SECTIONS)[number]["id"];
+    let observer: IntersectionObserver | null = null;
+    const observe = () => {
+      observer?.disconnect();
+      const top = Math.round(shellRef.current?.getBoundingClientRect().height ?? 0) + 1;
+      const bottom = Math.max(0, window.innerHeight - top - 1);
+      observer = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              setActiveSection(entry.target.id as (typeof SECTIONS)[number]["id"]);
+            }
+          }
+        },
+        { rootMargin: `-${top}px 0px -${bottom}px 0px` },
+      );
       for (const node of nodes) {
-        if (node.getBoundingClientRect().top <= offset) {
-          current = node.id as (typeof SECTIONS)[number]["id"];
-        }
+        observer.observe(node);
       }
-      setActiveSection(current);
     };
-    updateActiveSection();
-    window.addEventListener("scroll", updateActiveSection, { passive: true });
-    window.addEventListener("resize", updateActiveSection);
+    observe();
+    window.addEventListener("resize", observe);
     return () => {
-      window.removeEventListener("scroll", updateActiveSection);
-      window.removeEventListener("resize", updateActiveSection);
+      window.removeEventListener("resize", observe);
+      observer?.disconnect();
     };
   }, [snapshot]);
 
   /**
-   * Section nav links jump via native anchor scrolling, which stops each
-   * `.section` at its CSS `scroll-margin-top` -- a fixed `min(30vh, 280px)`,
-   * independent of the sticky header's real height. `updateActiveSection`
-   * above decides the current link from the *actual* header height instead.
-   * The two disagreed whenever the header was shorter than that scroll
-   * margin (the common case), so the native jump landed a section below
-   * where the offset said "current" -- highlighting the previous link.
-   * Clicking again "fixed" it only because the second jump had nothing left
-   * to scroll, so no `scroll` event fired to run the wrong computation over
-   * the direct set below.
-   *
-   * Scrolling here with the same offset `updateActiveSection` reads makes
-   * the two agree by construction, so the fix cannot re-drift as the header
-   * height changes with filters or viewport width. `replaceState` keeps the
-   * URL a deep link without letting a plain `location.hash` assignment
-   * trigger its own scroll-margin-driven jump on top of this one.
+   * Nav clicks scroll to the section top minus the live header height -- the
+   * same offset the scroll-spy band sits at, so the clicked link is the one
+   * that lights up. The URL hash is left alone: it carries the filter deep
+   * link, not the section.
    */
   const handleSectionNavClick = (
     id: (typeof SECTIONS)[number]["id"],
@@ -204,7 +193,6 @@ export function AppShell({
     window.scrollTo({
       top: target.getBoundingClientRect().top + window.scrollY - offset,
     });
-    window.history.replaceState(null, "", `#${id}`);
     setActiveSection(id);
   };
 
@@ -262,119 +250,99 @@ export function AppShell({
 
       <header className={styles.shell} ref={shellRef}>
         <div className={styles.shellTop}>
-        <div className={styles.shellInner}>
-          {brandMark}
+          <div className={styles.shellInner}>
+            {brandMark}
 
-          <div className={styles.shellMeta}>
-            <span
-              id="statusChip"
-              className={`${styles.runtimeChip} ${
-                displayedRuntimeKind === "ready" ? styles.runtimeReady : ""
-              }`}
-              data-state={displayedRuntimeKind}
-            >
-              {displayedRuntimeKind === "loading"
-                ? "Đang tải"
-                : displayedRuntimeKind === "refreshing"
-                  ? "Đang cập nhật"
-                  : displayedRuntimeKind === "stale_error"
-                    ? "Dữ liệu cũ"
-                    : "Sẵn sàng"}
-            </span>
-            {freshdeskCookieState !== "ok" ? (
+            <div className={styles.controls}>
+              <div
+                id="weekDefinitionToggle"
+                className={styles.segmented}
+                role="group"
+                aria-label="Định nghĩa tuần"
+              >
+                {WEEK_DEFINITIONS.map((value) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={styles.segmentedButton}
+                    aria-pressed={weekDefinition === value}
+                    title={COHORT_DESCRIPTIONS[value]}
+                    onClick={() => onWeekDefinitionChange(value)}
+                  >
+                    {COHORT_LABELS[value]}
+                  </button>
+                ))}
+              </div>
+              {snapshot === null ? null : (
+                <ReportScopePicker
+                  reportWindow={reportWindow}
+                  selectedWeeks={selectedReportWeeks}
+                  allWeeksSelected={allReportWeeksSelected}
+                  weekDefinition={weekDefinition}
+                  onChange={onReportWeeksChange}
+                  activeRange={reportRange}
+                  onRangeChange={onReportRangeChange}
+                />
+              )}
+            </div>
+
+            <div className={styles.shellMeta}>
+              {runtimeKind === "ready" ? null : (
+                <span
+                  id="statusChip"
+                  className={styles.runtimeChip}
+                  data-state={runtimeKind}
+                >
+                  {runtimeKind === "loading"
+                    ? "Đang tải"
+                    : runtimeKind === "refreshing"
+                      ? "Đang cập nhật"
+                      : "Cập nhật lỗi"}
+                </span>
+              )}
+              <span>
+                Cập nhật lúc{" "}
+                <span id="updatedAt" className={styles.metaValue}>
+                  {formatUpdatedAt(snapshot?.generated_at ?? null)}
+                </span>
+              </span>
               <button
                 type="button"
-                id="freshdeskCookieChip"
-                className={styles.freshdeskCookieChip}
-                onClick={openFreshdeskCookieDialog}
+                id="refreshButton"
+                className={styles.action}
+                onClick={onRefresh}
+                disabled={refreshDisabled}
+                title={refreshHint}
               >
-                Freshdesk: cần cookie
+                Làm mới
               </button>
-            ) : null}
-            <span>
-              Cập nhật{" "}
-              <span
-                id="updatedAt"
-                className={`${styles.metaValue} ${
-                  displaysStale ? styles.staleTimestamp : ""
-                }`}
-              >
-                {displaysStale ? "dữ liệu cũ · " : ""}
-                {formatUpdatedAt(snapshot?.generated_at ?? null)}
-              </span>
-            </span>
-          </div>
-
-          <div className={styles.controls}>
-            <div
-              id="weekDefinitionToggle"
-              className={styles.segmented}
-              role="group"
-              aria-label="Định nghĩa tuần"
-            >
-              {WEEK_DEFINITIONS.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  className={styles.segmentedButton}
-                  aria-pressed={weekDefinition === value}
-                  title={COHORT_DESCRIPTIONS[value]}
-                  onClick={() => onWeekDefinitionChange(value)}
-                >
-                  {COHORT_LABELS[value]}
-                </button>
-              ))}
+              <ThemeToggle />
             </div>
-            <button
-              type="button"
-              id="refreshButton"
-              className={styles.action}
-              onClick={onRefresh}
-              disabled={refreshDisabled}
-              title={refreshHint}
-            >
-              Làm mới
-            </button>
-            <ThemeToggle />
           </div>
-        </div>
 
-        <span
-          className={styles.shellEdgeMark}
-          aria-hidden="true"
-          data-brand-mark-container="shell-z"
-        >
-          <img
-            className={`${styles.shellEdgeMarkImage} ${themeStyles.themedAsset} ${themeStyles.lightAsset}`}
-            src={zMarkLight}
-            alt=""
-            width="1249"
-            height="1439"
-            data-brand-mark="shell-z-light"
-          />
-          <img
-            className={`${styles.shellEdgeMarkImage} ${themeStyles.themedAsset} ${themeStyles.darkAsset}`}
-            src={zMarkDark}
-            alt=""
-            width="1249"
-            height="1439"
-            data-brand-mark="shell-z-dark"
-          />
-        </span>
-
-        {snapshot === null ? null : (
-          <div className={styles.reportScopeBar}>
-            <ReportScopePicker
-              reportWindow={reportWindow}
-              selectedWeeks={selectedReportWeeks}
-              allWeeksSelected={allReportWeeksSelected}
-              weekDefinition={weekDefinition}
-              onChange={onReportWeeksChange}
-              activeRange={reportRange}
-              onRangeChange={onReportRangeChange}
+          <span
+            className={styles.shellEdgeMark}
+            aria-hidden="true"
+            data-brand-mark-container="shell-z"
+          >
+            <img
+              className={`${styles.shellEdgeMarkImage} ${themeStyles.themedAsset} ${themeStyles.lightAsset}`}
+              src={zMarkLight}
+              alt=""
+              width="1249"
+              height="1439"
+              data-brand-mark="shell-z-light"
             />
-          </div>
-        )}
+            <img
+              className={`${styles.shellEdgeMarkImage} ${themeStyles.themedAsset} ${themeStyles.darkAsset}`}
+              src={zMarkDark}
+              alt=""
+              width="1249"
+              height="1439"
+              data-brand-mark="shell-z-dark"
+            />
+          </span>
+
         </div>
 
         <nav
@@ -416,46 +384,46 @@ export function AppShell({
             </button>
           </div>
         </nav>
-
-        {helpOpen ? (
-          <aside
-            id="howToReadPanel"
-            ref={helpPanel}
-            className={styles.helpPanel}
-            role="region"
-            aria-label="Cách đọc dashboard"
-            tabIndex={-1}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeHelp();
-              }
-            }}
-          >
-            <strong>Cách đọc</strong>
-            <button
-              type="button"
-              className={styles.action}
-              onClick={closeHelp}
-            >
-              Đóng
-            </button>
-            <p>
-              AI xử lý trọn là ticket kết thúc ở AI. AI trả lời rồi chuyển CS là
-              ticket đã có phản hồi AI trước khi bàn giao. Chuyển CS ngay từ đầu
-              là CS nhận ticket mà AI chưa trả lời thực chất; ledger gọi chính
-              nhóm này là CS First. Chưa phân loại là
-              ticket chưa đủ tín hiệu để kết luận.
-            </p>
-            <p>
-              Đọc bảng tuần từ số ticket đến kết quả và reopen. Với WTD,
-              phần tóm tắt và biểu đồ chỉ so các tuần tới cùng ngày đã hoàn tất
-              khi đủ dữ liệu đối chiếu; bảng tuần vẫn giữ số thực của tuần.
-              Transstatus và Step result là trạng thái xử lý giao dịch.
-            </p>
-          </aside>
-        ) : null}
       </header>
+
+      {helpOpen ? (
+        <aside
+          id="howToReadPanel"
+          ref={helpPanel}
+          className={styles.helpPanel}
+          role="region"
+          aria-label="Cách đọc dashboard"
+          tabIndex={-1}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              closeHelp();
+            }
+          }}
+        >
+          <strong>Cách đọc</strong>
+          <button
+            type="button"
+            className={styles.action}
+            onClick={closeHelp}
+          >
+            Đóng
+          </button>
+          <p>
+            AI xử lý trọn là ticket kết thúc ở AI. AI trả lời rồi chuyển CS là
+            ticket đã có phản hồi AI trước khi bàn giao. Chuyển CS ngay từ đầu
+            là CS nhận ticket mà AI chưa trả lời thực chất; bảng số chính gọi
+            nhóm này là CS First. Chưa phân loại là
+            ticket chưa đủ tín hiệu để kết luận.
+          </p>
+          <p>
+            Đọc bảng tuần từ số ticket đến kết quả và reopen. Với WTD,
+            phần tóm tắt và biểu đồ chỉ so các tuần tới cùng ngày đã hoàn tất
+            khi đủ dữ liệu đối chiếu; bảng tuần vẫn giữ số thực của tuần.
+            Transstatus và Step result là trạng thái xử lý giao dịch.
+          </p>
+        </aside>
+      ) : null}
 
       <p
         id="liveStatus"
@@ -469,6 +437,19 @@ export function AppShell({
       <main id="dashboardMain" className={styles.main} tabIndex={-1}>
         {children}
       </main>
+
+      {freshdeskCookieState === "expired" ? (
+        <footer className={styles.opsFooter}>
+          <button
+            type="button"
+            id="freshdeskCookieChip"
+            className={styles.freshdeskCookieChip}
+            onClick={openFreshdeskCookieDialog}
+          >
+            Cookie Freshdesk đã hết hạn — cập nhật
+          </button>
+        </footer>
+      ) : null}
     </div>
   );
 }

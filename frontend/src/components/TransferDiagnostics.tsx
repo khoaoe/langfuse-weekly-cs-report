@@ -594,7 +594,7 @@ export function TransferDiagnostics({
       <div className={styles.sectionHead}>
         <div>
           <h2 id="diagnostics-title" className={styles.sectionTitle}>
-            Tín hiệu chuyển CS và ticket có hơn 3 lượt xử lý
+            Chẩn đoán chuyển CS
           </h2>
         </div>
       </div>

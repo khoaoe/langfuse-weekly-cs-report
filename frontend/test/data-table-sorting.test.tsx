@@ -374,29 +374,6 @@ describe("sorting bảng dữ liệu", () => {
     expect(screen.queryByText(/đủ 14 cột/)).toBeNull();
   });
 
-  it("resets a hidden weekly sort when the mobile column set is collapsed", async () => {
-    const user = userEvent.setup();
-    renderWithQuery(
-      <WeeklyReport snapshot={baseSnapshot} weekDefinition="mon_sun" />,
-    );
-
-    const table = screen.getByRole("table", { name: /Báo cáo tuần/ });
-    await user.click(screen.getByRole("button", { name: "Xem đủ cột" }));
-    await user.click(
-      within(table).getByRole("button", {
-        name: /Sắp xếp theo AI xử lý trọn/,
-      }),
-    );
-    expect(
-      within(table).getByRole("columnheader", { name: /AI xử lý trọn/ }),
-    ).toHaveAttribute("aria-sort", "descending");
-
-    await user.click(screen.getByRole("button", { name: "Rút gọn cột" }));
-    expect(
-      within(table).getByRole("columnheader", { name: /Tuần/ }),
-    ).toHaveAttribute("aria-sort", "descending");
-  });
-
   it("sorts segment rows by natural labels and raw metrics", async () => {
     const user = userEvent.setup();
     renderWithQuery(belowFold(analysisSnapshot()));

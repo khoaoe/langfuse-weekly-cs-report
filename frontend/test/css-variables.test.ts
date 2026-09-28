@@ -37,3 +37,26 @@ describe("CSS custom properties", () => {
     expect(undefinedUses).toEqual([]);
   });
 });
+
+describe("dark theme tokens", () => {
+  it("defines the same tokens with the same values for the toggle and the OS preference", () => {
+    // The dark palette is written twice (explicit toggle, prefers-color-scheme)
+    // because CSS cannot share a declaration block between the two selectors.
+    const css = readFileSync(join(SRC, "styles", "global.css"), "utf8");
+    const block = (selector: string) => {
+      const start = css.indexOf(`${selector} {`);
+      expect(start).toBeGreaterThan(-1);
+      const body = css.slice(start, css.indexOf("}", start));
+      return Object.fromEntries(
+        [...body.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)].map((m) => [
+          m[1],
+          m[2]?.trim(),
+        ]),
+      );
+    };
+
+    const toggle = block(':root[data-theme="dark"]');
+    expect(Object.keys(toggle).length).toBeGreaterThan(10);
+    expect(block(":root:not([data-theme])")).toEqual(toggle);
+  });
+});

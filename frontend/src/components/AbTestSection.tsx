@@ -351,8 +351,8 @@ function DailyMetricChart({
   });
   const ticks = [0, 0.25, 0.5, 0.75, 1].map((fraction) => fraction * domainMax);
   const strokeClass = [
-    trendStyles.seriesPrimaryStroke ?? "",
-    trendStyles.seriesSecondaryStroke ?? "",
+    trendStyles.armAStroke ?? "",
+    trendStyles.armBStroke ?? "",
   ];
 
   const labelStride = dates.length > MAX_DENSE_X_LABELS ? 2 : 1;
@@ -447,8 +447,8 @@ function DailyMetricChart({
             <span
               className={
                 armIndex === 0
-                  ? trendStyles.swatchPrimary
-                  : trendStyles.swatchSecondary
+                  ? trendStyles.swatchArmA
+                  : trendStyles.swatchArmB
               }
             />
             {shortArmLabel(arm)}

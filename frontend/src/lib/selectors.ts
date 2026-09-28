@@ -650,16 +650,6 @@ export function selectAttentionItems(
     });
   }
 
-  if (!snapshot.gate_status.allowed) {
-    items.push({
-      id: "attention-gate",
-      severity: "critical",
-      headline: `${formatRate(snapshot.gate_status.structural_invalid_rate)} bản ghi lỗi cấu trúc, vượt ngưỡng 5%`,
-      action: "Số tuần này chưa dùng để ra quyết định. Kiểm tra nguồn dữ liệu trước.",
-      filterPatch: null,
-    });
-  }
-
   if (snapshot.enrichment_status === "partial") {
     items.push({
       id: "attention-enrichment",
@@ -670,14 +660,6 @@ export function selectAttentionItems(
       filterPatch: null,
     });
   }
-
-  // Coverage floors deliberately do NOT raise a rail item. They are measured
-  // over every ticket in the whole period, so putting one beside a single
-  // week's numbers compares two different denominators and reads as "this
-  // week is broken" when nothing about this week changed (SPEC-v2 §5.13).
-  // The "Dữ liệu này đáng tin tới đâu" panel used to state them with their
-  // own denominator; it was removed on 2026-09-02 and nothing reports them
-  // in the UI now.
 
   return items.slice(0, 3);
 }

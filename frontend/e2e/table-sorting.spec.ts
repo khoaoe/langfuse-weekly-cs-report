@@ -31,9 +31,9 @@ function dashboardWithSortableRows() {
         reopen_lifetime_denominator: 2,
       };
       const issueCategory = {
-        "Nhóm Zeta": { total: 3, ai_first: 2, transferred: 1, reopen: 0 },
-        "Nhóm Alpha": { total: 4, ai_first: 3, transferred: 1, reopen: 1 },
-        "Nhóm Beta": { total: 3, ai_first: 3, transferred: 1, reopen: 1 },
+        "Nhóm Zeta": { total: 3, ai_first: 2, transferred: 1, reopen: 0, ai_end_to_end: 2, direct_cs: 0 },
+        "Nhóm Alpha": { total: 4, ai_first: 3, transferred: 1, reopen: 1, ai_end_to_end: 3, direct_cs: 0 },
+        "Nhóm Beta": { total: 3, ai_first: 3, transferred: 1, reopen: 1, ai_end_to_end: 3, direct_cs: 0 },
       };
 
       return [

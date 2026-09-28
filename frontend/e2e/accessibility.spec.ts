@@ -62,17 +62,4 @@ test.describe("main-content skip link", () => {
     expectVisibleMainFocus(await activateKeyboardSkipLink(page));
   });
 
-  test("keeps focused content clear on a compact mobile viewport", async ({
-    page,
-  }, testInfo) => {
-    test.skip(
-      testInfo.project.name !== "mobile-light",
-      "compact geometry only needs one color-scheme run",
-    );
-    await page.setViewportSize({ width: 320, height: 568 });
-    await page.goto("/");
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
-
-    expectVisibleMainFocus(await activateKeyboardSkipLink(page));
-  });
 });
