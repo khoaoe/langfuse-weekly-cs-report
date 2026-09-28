@@ -287,21 +287,26 @@ export function AppShell({
             </div>
 
             <div className={styles.shellMeta}>
-              {runtimeKind === "ready" ? null : (
-                <span
-                  id="statusChip"
-                  className={styles.runtimeChip}
-                  data-state={runtimeKind}
-                >
-                  {runtimeKind === "loading"
-                    ? "Đang tải"
-                    : runtimeKind === "refreshing"
-                      ? "Đang cập nhật"
-                      : "Cập nhật lỗi"}
-                </span>
-              )}
+              {/* The chip takes the label's place; a CSS sizer keeps the
+                  slot as wide as the widest chip, so a refresh moves nothing. */}
               <span>
-                Cập nhật lúc{" "}
+                <span className={styles.metaLabel}>
+                  {runtimeKind === "ready" ? (
+                    <span>Cập nhật lúc</span>
+                  ) : (
+                    <span
+                      id="statusChip"
+                      className={styles.runtimeChip}
+                      data-state={runtimeKind}
+                    >
+                      {runtimeKind === "loading"
+                        ? "Đang tải"
+                        : runtimeKind === "refreshing"
+                          ? "Đang cập nhật"
+                          : "Cập nhật lỗi"}
+                    </span>
+                  )}
+                </span>{" "}
                 <span id="updatedAt" className={styles.metaValue}>
                   {formatUpdatedAt(snapshot?.generated_at ?? null)}
                 </span>
