@@ -297,9 +297,6 @@ describe("DashboardScreen", () => {
     expect(screen.getByRole("heading", { level: 1 })).not.toHaveTextContent(
       /đang chạy|đủ điều kiện/i,
     );
-    expect(document.getElementById("narrativeSummary")).not.toHaveTextContent(
-      /50,0% \(10 ticket\)|Reopen sau AI First 40,0%/,
-    );
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
       "1050,0%",
     );
@@ -319,9 +316,6 @@ describe("DashboardScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "T2–CN" }));
     expect(await screen.findByRole("heading", { name: /T2–CN.*10 ticket/i })).toBeVisible();
-    expect(document.getElementById("narrativeSummary")).not.toHaveTextContent(
-      /80,0% \(8 ticket\)|Reopen sau AI First 25,0%/,
-    );
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
       "880,0%",
     );
@@ -566,7 +560,6 @@ describe("DashboardScreen", () => {
     for (const id of [
       "statusChip",
       "dynamicTitle",
-      "narrativeSummary",
       "kpiGrid",
       "weeklyRows",
       "weeklyCopyButton",
@@ -697,13 +690,22 @@ describe("DashboardScreen", () => {
 
     await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
 
-    // AI First and reopen have no matching Explorer filter today, so they
-    // stay plain text rather than opening a filter narrower than the number.
+    // AI First is exactly ai_end_to_end + ai_then_cs (the pipeline validator
+    // enforces it), so it opens the Explorer on both outcomes.
+    const aiFirstCell = document.getElementById("ledger-ai-first");
+    await user.click(within(aiFirstCell as HTMLElement).getByRole("button"));
     expect(
-      within(document.getElementById("ledger-ai-first") as HTMLElement).queryByRole(
-        "button",
-      ),
-    ).toBeNull();
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent(
+      "Kết quả: AI xử lý trọn, AI trả lời rồi chuyển CS",
+    );
+
+    await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
+
+    // Reopen has no matching Explorer filter today, so it stays plain text
+    // rather than opening a filter narrower than the number.
     expect(
       within(document.getElementById("ledger-reopen") as HTMLElement).queryByRole(
         "button",

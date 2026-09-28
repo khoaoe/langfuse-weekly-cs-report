@@ -16,6 +16,15 @@
   position: relative;
 }
 
+/* At 1280px/200% zoom (a 640x400 viewport) the wrapped header is ~250px, over
+   60% of the screen: sticky, it hides whatever keyboard focus scrolls to
+   (WCAG 2.4.11). On a short viewport it scrolls away with the page instead. */
+@media (max-height: 560px) {
+  .shell {
+    position: relative;
+  }
+}
+
 .shellInner {
   position: relative;
   z-index: 1;
@@ -224,7 +233,7 @@
   display: flex;
   align-items: center;
   min-height: 44px;
-  padding: 0 var(--space-8) 0 var(--space-3);
+  padding: 0 var(--space-6) 0 var(--space-3);
   border: 1px solid var(--rule-strong);
   border-radius: var(--radius-tight);
   color: var(--ink);
@@ -250,7 +259,7 @@
 }
 
 .reportScopeSummary:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-color: var(--interactive);
 }
@@ -346,8 +355,8 @@
 }
 
 .reportScopeOption:has(input:focus-visible) {
-  outline: 3px solid color-mix(in srgb, var(--interactive) 35%, transparent);
-  outline-offset: -3px;
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
 }
 
 .reportScopeOption:has(input:disabled) {
@@ -465,7 +474,6 @@
   max-width: var(--content-max);
   margin: 0 auto;
   padding: var(--space-5) var(--gutter) var(--space-7);
-  scroll-margin-top: 280px;
 }
 
 .skeleton {
@@ -568,34 +576,6 @@
   color: var(--muted);
 }
 
-/* Nhóm gập lại (② theo lượt trả lời): giữ đúng dáng caption bar của nhóm mở,
-   chỉ thêm mũi chỉ hướng và vùng bấm. Marker mặc định của <summary> bị bỏ vì
-   nó chen vào bên trái và phá cột chữ đang thẳng hàng với nhãn ô KPI. */
-summary.ledgerGroupHeading {
-  cursor: pointer;
-  list-style: none;
-}
-
-summary.ledgerGroupHeading::-webkit-details-marker {
-  display: none;
-}
-
-summary.ledgerGroupHeading::after {
-  content: "▸";
-  margin-left: auto;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-details[open] > summary.ledgerGroupHeading::after {
-  content: "▾";
-}
-
-summary.ledgerGroupHeading:focus-visible {
-  outline: 2px solid var(--focus, currentColor);
-  outline-offset: 2px;
-}
-
 .ledgerScope {
   margin-top: 0;
 }
@@ -608,19 +588,6 @@ summary.ledgerGroupHeading:focus-visible {
 
 .title {
   font-size: clamp(20px, 2.2vw, 28px);
-}
-
-.narrative {
-  display: grid;
-  gap: var(--space-1);
-  max-width: 92ch;
-  color: var(--muted);
-  font-size: 14px;
-}
-
-.narrativeAlert {
-  color: var(--ink);
-  font-weight: 500;
 }
 
 /* Một hàng duy nhất, cột chia đều theo số ô thực có: nhóm ① có 4 KPI, nhóm ②
@@ -696,6 +663,45 @@ summary.ledgerGroupHeading:focus-visible {
   font-size: 13px;
 }
 
+/* The delta states direction with an arrow and a sign; colour only adds to
+   it on the one movement that is bad (a rising reopen rate). */
+.ledgerDelta {
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledgerDeltaWarning {
+  color: var(--warning-text);
+  font-weight: 500;
+}
+
+/* Five supporting numbers on one quieter row under the four headline cells. */
+.ledgerSecondary {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+}
+
+.ledgerSecondaryCell {
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  padding: var(--space-2) var(--space-4);
+  border-left: 1px solid var(--rule);
+}
+
+.ledgerSecondaryCell:first-child {
+  border-left: 0;
+}
+
+.ledgerSecondaryCell .ledgerValue {
+  font-size: 20px;
+}
+
 .toneBrand .ledgerValue {
   color: var(--brand-ink);
 }
@@ -737,7 +743,8 @@ summary.ledgerGroupHeading:focus-visible {
 }
 
 .railSeverity {
-  font-weight: 500;
+  margin-right: var(--space-2);
+  font-weight: 700;
 }
 
 .railCritical .railSeverity {
@@ -780,12 +787,11 @@ summary.ledgerGroupHeading:focus-visible {
 
 .railActionButton:hover,
 .railActionLink:hover {
-  background: var(--surface-raised);
+  background: var(--surface-sunken);
   border-color: var(--ink);
 }
 
 .section {
-  scroll-margin-top: min(30vh, 280px);
   padding-top: var(--space-6);
   margin-top: var(--space-6);
   border-top: 1px solid var(--rule);
@@ -875,6 +881,12 @@ summary.ledgerGroupHeading:focus-visible {
   background: var(--surface-sunken);
 }
 
+/* Body of an always-open diagnostic panel under its h3. */
+.diagnosticBody {
+  display: grid;
+  gap: var(--space-4);
+}
+
 .stickyColumn {
   position: sticky;
   left: 0;
@@ -917,33 +929,6 @@ summary.ledgerGroupHeading:focus-visible {
   font-size: 13px;
 }
 
-.qualityDisclosure {
-  border: 1px solid var(--rule-strong);
-  border-radius: var(--radius-tight);
-  background: var(--surface);
-}
-
-.qualitySummary {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-height: 56px;
-  padding: var(--space-3) var(--space-4);
-  cursor: pointer;
-}
-
-
-.qualityContent {
-  display: grid;
-  gap: var(--space-4);
-  padding: 0 var(--space-4) var(--space-4);
-  border-top: 1px solid var(--rule);
-}
-
-.qualityContent > :first-child {
-  padding-top: var(--space-4);
-}
 
 .qualityList {
   display: grid;
@@ -988,9 +973,18 @@ summary.ledgerGroupHeading:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .ledger {
+  .ledger,
+  .ledgerSecondary {
     grid-auto-flow: row;
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ledgerSecondaryCell {
+    border-left: 0;
+  }
+
+  .ledgerSecondaryCell:not(:first-child) {
+    border-top: 1px solid var(--rule);
   }
 
   .ledgerCell {
@@ -1040,7 +1034,8 @@ summary.ledgerGroupHeading:focus-visible {
     padding: var(--space-3) var(--space-4);
   }
 
-  .ledger {
+  .ledger,
+  .ledgerSecondary {
     border: 0;
     border-top: 1px solid var(--rule);
     border-radius: 0;

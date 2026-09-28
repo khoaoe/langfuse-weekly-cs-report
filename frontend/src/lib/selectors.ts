@@ -5,8 +5,14 @@ import type {
   WeeklyReportRow,
 } from "./dashboard-schema";
 import type { TicketFilters } from "./dashboard-filters";
-import type { NarrativeInput } from "./narrative";
-import { formatAverage, formatCount, formatRate } from "./format";
+import {
+  formatAverage,
+  formatCount,
+  formatPointDelta,
+  formatRate,
+  formatWeekStart,
+  formatWeekdayName,
+} from "./format";
 
 export const COHORT_LABELS: Readonly<Record<WeekDefinition, string>> = {
   mon_sun: "T2–CN",
@@ -108,63 +114,6 @@ export interface ReportRangeScope {
   readonly to: string;
 }
 
-export function buildNarrativeInput(
-  snapshot: DashboardSnapshot,
-  weekDefinition: WeekDefinition,
-  activeWeek?: string,
-  range?: ReportRangeScope | null,
-): NarrativeInput {
-  const view = selectView(snapshot, weekDefinition);
-  const current = range != null ? null : selectReportWeek(view, activeWeek);
-  const previous = selectPreviousWeek(view, current);
-  const samePeriod =
-    current?.cohort_status === "wtd" &&
-    view.same_period?.current.cohort_week === current.cohort_week
-      ? view.same_period
-      : null;
-
-  return {
-    current: {
-      aiFirst: {
-        count:
-          samePeriod?.current.ai_first_count ??
-          current?.ai_first_count ??
-          view.ai_first.count,
-        rate:
-          samePeriod?.current.ai_first_rate ??
-          current?.ai_first_rate ??
-          view.ai_first.rate,
-      },
-      reopenRate:
-        samePeriod?.current.reopen_lifetime_rate ??
-        current?.reopen_lifetime_rate ??
-        null,
-    },
-    previous:
-      previous === null
-        ? null
-        : {
-            aiFirst: {
-              count: previous.ai_first_count,
-              rate: previous.ai_first_rate,
-            },
-            reopenRate: previous.reopen_lifetime_rate,
-          },
-    enrichmentStatus: snapshot.enrichment_status,
-    ...(current?.cohort_status === "wtd" ? { isWtd: true } : {}),
-    ...(samePeriod === null
-      ? {}
-      : {
-          samePeriod: {
-            cutoffWeekday: samePeriod.cutoff_weekday,
-            weeksUsed: samePeriod.baseline.weeks_used,
-            aiFirstRate: samePeriod.baseline.ai_first_rate,
-            reopenRate: samePeriod.baseline.reopen_lifetime_rate,
-          },
-        }),
-  };
-}
-
 export type LedgerTone = "brand" | "neutral" | "warning" | "critical";
 
 export interface LedgerCell {
@@ -184,18 +133,117 @@ export interface LedgerCell {
   readonly tone: LedgerTone;
   /**
    * Null unless this exact count maps to an existing Ticket Explorer filter
-   * combination. AI First and reopen have no matching filter key today, so
-   * they stay non-interactive rather than open a filter that quietly means
-   * something narrower than the number shown.
+   * combination. Reopen has no matching filter key today, so it stays
+   * non-interactive rather than open a filter that quietly means something
+   * narrower than the number shown.
    */
   readonly filterPatch: Partial<TicketFilters> | null;
+  /** Movement against the group's `comparison` baseline; null when none is valid. */
+  readonly delta: LedgerDelta | null;
+}
+
+export interface LedgerDelta {
+  /** Arrow, sign and unit together, so the direction never rests on colour. */
+  readonly text: string;
+  readonly tone: "warning" | "neutral";
+}
+
+interface ComparableRates {
+  readonly aiFirst: number | null;
+  readonly aiEndToEnd: number | null;
+  readonly transfer: number | null;
+  readonly reopen: number | null;
+}
+
+function weekRates(row: WeeklyReportRow): ComparableRates {
+  const total = row.total_tickets;
+  return {
+    aiFirst: total === 0 ? null : row.ai_first_rate,
+    aiEndToEnd: total === 0 ? null : row.ai_end_to_end_count / total,
+    transfer:
+      total === 0 ? null : (row.ai_then_cs_count + row.direct_cs_count) / total,
+    reopen: row.reopen_lifetime_rate,
+  };
+}
+
+/**
+ * The like-for-like baseline for one scoped week, or null.
+ *
+ * A running week is compared only with `same_period` -- the previous weeks cut
+ * at the same weekday -- which carries AI First and reopen and nothing else,
+ * so the other two cells get no delta rather than one against a full week.
+ * A completed week is compared with the completed week before it. Multi-week,
+ * whole-period and day-range scopes have no single baseline.
+ */
+function selectComparison(
+  view: DashboardView,
+  week: WeeklyReportRow | null,
+): { readonly label: string; readonly current: ComparableRates; readonly baseline: ComparableRates } | null {
+  if (week === null) {
+    return null;
+  }
+  if (week.cohort_status === "wtd") {
+    const samePeriod = view.same_period;
+    if (samePeriod === null || samePeriod.current.cohort_week !== week.cohort_week) {
+      return null;
+    }
+    return {
+      label: `so với cùng kỳ tới ${formatWeekdayName(samePeriod.cutoff_weekday)}`,
+      current: {
+        aiFirst: samePeriod.current.ai_first_rate,
+        aiEndToEnd: null,
+        transfer: null,
+        reopen: samePeriod.current.reopen_lifetime_rate,
+      },
+      baseline: {
+        aiFirst: samePeriod.baseline.ai_first_rate,
+        aiEndToEnd: null,
+        transfer: null,
+        reopen: samePeriod.baseline.reopen_lifetime_rate,
+      },
+    };
+  }
+  const previous = selectPreviousWeek(view, week);
+  return previous === null
+    ? null
+    : {
+        label: `so với tuần ${formatWeekStart(previous.cohort_week)}`,
+        current: weekRates(week),
+        baseline: weekRates(previous),
+      };
+}
+
+function arrow(rounded: number): string {
+  return rounded > 0 ? "▲ " : rounded < 0 ? "▼ " : "";
+}
+
+function pointDelta(current: number | null, baseline: number | null): LedgerDelta | null {
+  if (current === null || baseline === null) {
+    return null;
+  }
+  // Rounded to the 0,1-point display step first, so "+0,0" never gets an arrow.
+  const rounded = Math.round((current - baseline) * 1000) / 1000;
+  return { text: `${arrow(rounded)}${formatPointDelta(rounded)}`, tone: "neutral" };
+}
+
+function reopenDelta(current: number | null, baseline: number | null): LedgerDelta | null {
+  if (current === null || baseline === null) {
+    return null;
+  }
+  const rounded = Math.round((current - baseline) * 100) / 100;
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "−" : "";
+  return {
+    text: `${arrow(rounded)}${sign}${formatAverage(Math.abs(rounded))} lần/ticket`,
+    // Reopen is the one cell where up is bad.
+    tone: rounded > 0 ? "warning" : "neutral",
+  };
 }
 
 function share(numerator: number, denominator: number): string {
   return denominator === 0 ? "—" : formatRate(numerator / denominator);
 }
 
-/** The numbers the ledger, the narrative and the title all read from. */
+/** The numbers the ledger and the title both read from. */
 export interface LedgerScope {
   readonly eligible: number;
   readonly aiFirstCount: number;
@@ -256,8 +304,8 @@ function replyTotals(weeks: readonly WeeklyReportRow[]): {
 /**
  * Resolves the reporting scope to the latest observed week.
  *
- * The ledger, the narrative and the dynamic title must describe the same
- * population. Mixing a twelve-week total into the ledger while the narrative
+ * The ledger and the dynamic title must describe the same
+ * population. Mixing a twelve-week total into the ledger while the title
  * talks about the current week produces two different, unlabelled truths next
  * to each other; when no week has data the range total is used and the caller
  * labels it as such.
@@ -346,44 +394,28 @@ export function selectScope(
 }
 
 export interface LedgerGroup {
-  readonly id: "ledger-group-ticket" | "ledger-group-response";
+  readonly id: "ledger-group-ticket" | "ledger-group-secondary";
   readonly label: string;
   /**
-   * Whether the group starts folded away. SPEC-v2 §5.5 asks for exactly 4 KPI
-   * above the fold at 1440x900 and says to cut ① rather than ② when there is
-   * not enough room. That once forced group ② closed: expanded, it pushed the
-   * first table row to y=862 with no row visible at all.
-   *
-   * Re-measured 2026-09-04 after the ledger was restructured: expanded now
-   * puts the first row at y=849 with 2 rows in view, and folding buys back
-   * 112px -- about two more rows. Two visible rows already say "the table
-   * continues below", which is all the fold has to do; four metrics parked
-   * behind a click cost more than the rows they buy. Both groups now open.
-   */
-  readonly collapsed: boolean;
-  /**
    * The one base every cell in the group divides by, or null when the group
-   * has no single base. Group ② has none: its four cells divide by three
-   * different things -- ai_first, ai_end_to_end and the whole eligible
-   * population -- so any number printed here is wrong for most of them. It
-   * used to print the ai_end_to_end ticket count, which was both wrong for
-   * half the group and a ticket count captioning a per-response heading. Each
-   * cell states its own base in its support line instead.
+   * has no single base. The secondary row has none: its cells divide by the
+   * eligible population, ai_first and ai_end_to_end, so any number printed
+   * here would be wrong for most of them. Each cell states its own base.
    */
   readonly denominator: string | null;
+  /** Names the baseline every cell delta in the group is measured against. */
+  readonly comparison: string | null;
   readonly cells: readonly LedgerCell[];
 }
 
 /**
- * Two ledger groups kept apart on purpose. "Theo ticket" answers how the
- * ticket population split; "Theo lượt CS-agent trả lời" answers how deep the
- * conversations went. Mixing the two under one flat list lets a reader add a
- * ticket-count cell to a turn-count cell, which is not a real number.
+ * Four headline cells, then one secondary row.
  *
- * The split is by subject, not by denominator: group ② holds a turn total, a
- * mean, a share of ai_end_to_end and a ticket count, because all four describe
- * turn depth. Its heading therefore prints no shared base -- see
- * `LedgerGroup.denominator`.
+ * The headline answers "better or worse than the baseline" in ten seconds:
+ * AI First, AI xử lý trọn, Tổng chuyển CS and reopen, each with a delta. The
+ * five supporting numbers -- CS First, the >3-turn tail and the three
+ * per-response cells -- sit in one smaller row below so they stay readable
+ * without competing with the four the week is judged on.
  */
 export function selectLedger(
   snapshot: DashboardSnapshot,
@@ -392,9 +424,12 @@ export function selectLedger(
   range?: ReportRangeScope | null,
 ): LedgerGroup[] {
   const scope = selectScope(snapshot, weekDefinition, activeWeek, range);
+  const comparison =
+    scope.kind === "week"
+      ? selectComparison(selectView(snapshot, weekDefinition), scope.week)
+      : null;
   // Named once, on the group heading. Every cell in the ticket group divides
-  // by the same number, so repeating "trong N ticket tuần này" under all three
-  // spends three lines saying what the caption above them already said.
+  // by the same number, so repeating it under each cell says it four times.
   const populationLabel =
     scope.kind === "all"
       ? "ticket trong toàn kỳ"
@@ -405,6 +440,10 @@ export function selectLedger(
           : "ticket tuần này";
 
   const gt4Total = scope.gt4WithCs + scope.gt4WithoutCs;
+  const reopenCellDelta =
+    comparison === null
+      ? null
+      : reopenDelta(comparison.current.reopen, comparison.baseline.reopen);
 
   const ticketCells: LedgerCell[] = [
     {
@@ -415,13 +454,18 @@ export function selectLedger(
       support:
         scope.eligible === 0 ? null : share(scope.aiFirstCount, scope.eligible),
       tone: "brand",
-      filterPatch: null,
+      // Exact, not approximate: the pipeline validator rejects any week where
+      // ai_first != ai_end_to_end + ai_then_cs, and `outcome` is multi-select.
+      filterPatch:
+        scope.aiFirstCount === 0 ? null : { outcome: "ai_end_to_end,ai_then_cs" },
+      delta:
+        comparison === null
+          ? null
+          : pointDelta(comparison.current.aiFirst, comparison.baseline.aiFirst),
     },
     {
       // The outcome the product is judged on: tickets AI closed with no human
-      // in the loop. It is ticket-denominated, so it belongs in this group --
-      // it previously appeared only as the caption of the collapsed group
-      // below, which meant the headline number was folded away by default.
+      // in the loop.
       id: "ledger-ai-end-to-end",
       label: "AI xử lý trọn",
       value: formatCount(scope.aiEndToEndCount),
@@ -433,6 +477,13 @@ export function selectLedger(
       tone: "brand",
       filterPatch:
         scope.aiEndToEndCount === 0 ? null : { outcome: "ai_end_to_end" },
+      delta:
+        comparison === null
+          ? null
+          : pointDelta(
+              comparison.current.aiEndToEnd,
+              comparison.baseline.aiEndToEnd,
+            ),
     },
     {
       id: "ledger-transfer",
@@ -443,59 +494,17 @@ export function selectLedger(
         scope.eligible === 0 ? null : share(scope.transferTotal, scope.eligible),
       tone: "neutral",
       filterPatch: scope.transferTotal === 0 ? null : { transferred: "true" },
-    },
-    {
-      // Same tickets as outcome `direct_cs`, read from the other side: CS
-      // answered first because AI never gave a substantive reply. CS asked
-      // for "CS First" in the 2026-08 review; it already existed here under
-      // a routing name, so this is a rename, not a fifth number.
-      // It stays in its original slot: the group reads entry -> win -> handoff
-      // -> part of that handoff -> quality, and reopen is a rate that must
-      // stay last so it is not read as a fourth member of the count partition.
-      // AI First + CS First falls short of `eligible` by `unclassified` --
-      // tickets with no classifiable trace. Those are a data-quality bucket,
-      // never CS work, so `eligible - aiFirst` must not be used here.
-      id: "ledger-direct-cs",
-      label: "CS First",
-      value: formatCount(scope.directCsCount),
-      unit: null,
-      support:
-        scope.eligible === 0 ? null : share(scope.directCsCount, scope.eligible),
-      tone: "neutral",
-      filterPatch:
-        scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
-    },
-    {
-      // The tail the mean hides. p50 is 1 reply in all ten observed weeks and
-      // p90 is 2 in nine of them, so "TB 1,27" describes almost every ticket
-      // and says nothing about the few that dragged on; this cell is the only
-      // place that group is visible outside the week it trips the rail alert.
-      //
-      // It counts tickets, so it belongs in the group whose denominator is
-      // tickets. It sat under "Theo lượt CS-agent trả lời" until 2026-09-04,
-      // where the heading promised a per-response number and the cell gave a
-      // ticket count. "lượt xử lý" stays in the label -- it counts
-      // `turn_count`, every turn in the conversation, not `ai_reply_count`.
-      id: "ledger-gt4-turn",
-      label: "Ticket >3 lượt xử lý",
-      value: formatCount(gt4Total),
-      unit: null,
-      support:
-        scope.eligible === 0 ? null : share(gt4Total, scope.eligible),
-      tone: "neutral",
-      filterPatch: gt4Total === 0 ? null : { gt4_turn: "true" },
+      delta:
+        comparison === null
+          ? null
+          : pointDelta(comparison.current.transfer, comparison.baseline.transfer),
     },
     {
       id: "ledger-reopen",
       label: "Reopen sau AI First",
       // Rate leads, count supports. The absolute count rises with volume by
-      // construction -- a week with more AI First tickets reopens more even
-      // when nothing got worse -- so leading with it invited a false "reopen
-      // is climbing" read every time traffic grew. lần/ticket is the number
-      // that compares across weeks and can be held to a target. It also stops
-      // this cell from looking like a fourth member of the count partition
-      // above it, which it never was: those three are composition, this is
-      // quality.
+      // construction, so leading with it invited a false "reopen is climbing"
+      // read every time traffic grew; lần/ticket compares across weeks.
       value:
         scope.reopenDenominator === 0
           ? "—"
@@ -507,18 +516,46 @@ export function selectLedger(
           : `${formatCount(scope.reopenNumerator)} lần trên ${formatCount(
               scope.reopenDenominator,
             )} ticket AI First`,
-      tone: scope.reopenNumerator > 0 ? "warning" : "neutral",
+      // Warning only when it rose against its baseline. A standing amber on
+      // any non-zero reopen taught readers to ignore the colour.
+      tone: reopenCellDelta?.tone === "warning" ? "warning" : "neutral",
       filterPatch: null,
+      delta: reopenCellDelta,
     },
   ];
 
-  const responseCells: LedgerCell[] = [
+  const secondaryCells: LedgerCell[] = [
     {
-      // The group's own volume, and the only absolute number in it. Every
-      // other cell here is a ratio, so before this existed "TB 1,27
-      // lượt/ticket" hung off a numerator the reader could not see -- and the
-      // count of AI reply turns, the work the agent actually did, appeared
-      // nowhere on the dashboard at all.
+      // Same tickets as outcome `direct_cs`, read from the CS side. AI First +
+      // CS First falls short of `eligible` by `unclassified`, so this must
+      // never be computed as `eligible - aiFirst`.
+      id: "ledger-direct-cs",
+      label: "CS First",
+      value: formatCount(scope.directCsCount),
+      unit: null,
+      support:
+        scope.eligible === 0 ? null : share(scope.directCsCount, scope.eligible),
+      tone: "neutral",
+      filterPatch:
+        scope.directCsCount === 0 ? null : { outcome: "direct_cs" },
+      delta: null,
+    },
+    {
+      // The tail the mean hides. "lượt xử lý" counts `turn_count`, every turn
+      // in the conversation, not `ai_reply_count`.
+      id: "ledger-gt4-turn",
+      label: "Ticket >3 lượt xử lý",
+      value: formatCount(gt4Total),
+      unit: null,
+      support:
+        scope.eligible === 0 ? null : share(gt4Total, scope.eligible),
+      tone: "neutral",
+      filterPatch: gt4Total === 0 ? null : { gt4_turn: "true" },
+      delta: null,
+    },
+    {
+      // The numerator the mean beside it divides, so the two read as one
+      // division; only this one spells out the base.
       id: "ledger-ai-reply-total",
       label: "Tổng lượt AI trả lời",
       value: formatCount(scope.aiReplySumAiFirst),
@@ -527,8 +564,9 @@ export function selectLedger(
         scope.aiFirstCount === 0
           ? null
           : `trên ${formatCount(scope.aiFirstCount)} ticket AI First`,
-      tone: "brand",
+      tone: "neutral",
       filterPatch: null,
+      delta: null,
     },
     {
       id: "ledger-replies-per-ticket",
@@ -538,12 +576,10 @@ export function selectLedger(
           ? "—"
           : formatAverage(scope.aiReplyMeanAiFirst),
       unit: scope.aiReplyMeanAiFirst === null ? null : "lượt",
-      // The base is in the label, and the cell to the left states it in full
-      // with the numerator beside it. Repeating "trên N ticket AI First" here
-      // would put the same line under two adjacent cells.
       support: null,
       tone: "neutral",
       filterPatch: null,
+      delta: null,
     },
     {
       id: "ledger-first-reply-resolved",
@@ -556,8 +592,9 @@ export function selectLedger(
           : `${formatCount(scope.resolvedFirstReply)} trong ${formatCount(
               scope.aiEndToEndCount,
             )} ticket AI xử lý trọn`,
-      tone: "brand",
+      tone: "neutral",
       filterPatch: null,
+      delta: null,
     },
   ];
 
@@ -566,15 +603,15 @@ export function selectLedger(
       id: "ledger-group-ticket",
       label: "Theo ticket",
       denominator: `${formatCount(scope.eligible)} ${populationLabel}`,
-      collapsed: false,
+      comparison: comparison?.label ?? null,
       cells: ticketCells,
     },
     {
-      id: "ledger-group-response",
-      label: "Theo lượt CS-agent trả lời",
+      id: "ledger-group-secondary",
+      label: "Chỉ số phụ",
       denominator: null,
-      collapsed: false,
-      cells: responseCells,
+      comparison: null,
+      cells: secondaryCells,
     },
   ];
 }
@@ -583,7 +620,8 @@ export interface AttentionItem {
   readonly id: string;
   readonly severity: "critical" | "warning";
   readonly headline: string;
-  readonly action: string;
+  /** Null when the item's own button already says what to do next. */
+  readonly action: string | null;
   readonly filterPatch: Partial<TicketFilters> | null;
 }
 
@@ -607,7 +645,7 @@ export function selectAttentionItems(
       id: "attention-gt4",
       severity: "critical",
       headline: `${formatCount(scope.gt4WithoutCs)} ticket có hơn 3 lượt xử lý mà chưa chuyển CS`,
-      action: "Mở Ticket Explorer, lọc >3 lượt xử lý để xem từng ticket.",
+      action: null,
       filterPatch: { gt4_turn: "true", transferred: "false" },
     });
   }
@@ -618,6 +656,17 @@ export function selectAttentionItems(
       severity: "critical",
       headline: `${formatRate(snapshot.gate_status.structural_invalid_rate)} bản ghi lỗi cấu trúc, vượt ngưỡng 5%`,
       action: "Số tuần này chưa dùng để ra quyết định. Kiểm tra nguồn dữ liệu trước.",
+      filterPatch: null,
+    });
+  }
+
+  if (snapshot.enrichment_status === "partial") {
+    items.push({
+      id: "attention-enrichment",
+      severity: "warning",
+      headline:
+        "Lần đọc này chưa lấy đủ dữ liệu phụ từ Langfuse, nên Intent, Skill, Transstatus và Step result còn thiếu.",
+      action: null,
       filterPatch: null,
     });
   }

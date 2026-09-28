@@ -35,7 +35,7 @@
 
 @media (max-width: 720px) {
   .diagnosticZones {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

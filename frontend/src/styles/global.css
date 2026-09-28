@@ -73,6 +73,9 @@
   --content-max: 1600px;
   --shell-shadow: 0 1px 0 rgb(17 20 24 / 8%), 0 2px 8px rgb(17 20 24 / 6%);
 
+  /* Live sticky-header height, set by AppShell; 0 until it mounts. */
+  --shell-height: 0px;
+
   --font-sans: "Aeonik Pro", "Segoe UI", system-ui, -apple-system, sans-serif;
   --duration: 140ms;
 }
@@ -147,6 +150,17 @@
 
 html {
   -webkit-text-size-adjust: 100%;
+  /* Every in-page scroll -- anchor jumps, scrollIntoView and keyboard focus --
+     stops below the sticky header instead of under it. */
+  scroll-padding-top: calc(var(--shell-height) + var(--space-2));
+}
+
+/* Matches the short-viewport rule in dashboard.module.css where the header
+   stops being sticky and so covers nothing. */
+@media (max-height: 560px) {
+  html {
+    scroll-padding-top: var(--space-2);
+  }
 }
 
 body {

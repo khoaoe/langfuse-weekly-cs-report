@@ -32,7 +32,7 @@ const wholeRateFormatter = new Intl.NumberFormat("vi-VN", {
  * Exactly none and exactly all are counted facts rather than measurements that
  * happened to round, so "0,0%" invites the reader to look for a fraction that
  * does not exist. Every value between keeps one decimal, because half a point
- * of week-over-week movement is what the narrative reports on.
+ * of week-over-week movement is what the ledger delta reports on.
  */
 export function formatRate(value: number | null | undefined): string {
   if (!isAvailableNumber(value)) {
