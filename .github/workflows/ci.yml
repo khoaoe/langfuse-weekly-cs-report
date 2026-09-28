@@ -218,8 +218,8 @@ jobs:
 
           container_id="$(
             docker run --detach \
+              --name "$network_name" \
               --network "$network_name" \
-              --publish 127.0.0.1:18080:8080 \
               --volume "$volume_name:/app/runtime" \
               --env DASHBOARD_AUTH_MODE=proxy \
               --env DASHBOARD_IDENTITY_HEADER=X-Authenticated-User \
@@ -229,10 +229,27 @@ jobs:
               langfuse-weekly-cs-report:ci
           )"
 
+          # Docker 28+ no longer publishes ports from an --internal network,
+          # so probe from a sibling container on that same egress-free network.
+          # Prints the HTTP status, or 0 when the server is not reachable.
+          probe() {
+            docker run --rm --network "$network_name" --entrypoint python \
+              langfuse-weekly-cs-report:ci -c '
+          import sys, urllib.error, urllib.request
+          headers = dict(h.split(": ", 1) for h in sys.argv[2:])
+          request = urllib.request.Request(sys.argv[1], headers=headers)
+          try:
+              print(urllib.request.urlopen(request, timeout=5).status)
+          except urllib.error.HTTPError as error:
+              print(error.code)
+          except OSError:
+              print(0)
+          ' "http://${network_name}:8080$1" "${@:2}"
+          }
+
           healthy=false
           for attempt in {1..30}; do
-            if curl --fail --silent --show-error \
-              http://127.0.0.1:18080/healthz >/dev/null; then
+            if [[ "$(probe /healthz)" == 200 ]]; then
               healthy=true
               break
             fi
@@ -243,21 +260,10 @@ jobs:
             exit 1
           fi
 
-          unauthenticated_status="$(
-            curl --silent --output /dev/null --write-out '%{http_code}' \
-              http://127.0.0.1:18080/
-          )"
+          unauthenticated_status="$(probe /)"
           test "$unauthenticated_status" = "401"
-          unauthenticated_api_status="$(
-            curl --silent --output /dev/null --write-out '%{http_code}' \
-              http://127.0.0.1:18080/api/dashboard
-          )"
+          unauthenticated_api_status="$(probe /api/dashboard)"
           test "$unauthenticated_api_status" = "401"
-          curl --fail --silent --show-error \
-            http://127.0.0.1:18080/readyz >/dev/null
-          curl --fail --silent --show-error \
-            --header "X-Authenticated-User: ci-smoke" \
-            http://127.0.0.1:18080/api/dashboard >/dev/null
-          curl --fail --silent --show-error \
-            --header "X-Authenticated-User: ci-smoke" \
-            http://127.0.0.1:18080/ >/dev/null
+          test "$(probe /readyz)" = "200"
+          test "$(probe /api/dashboard "X-Authenticated-User: ci-smoke")" = "200"
+          test "$(probe / "X-Authenticated-User: ci-smoke")" = "200"
