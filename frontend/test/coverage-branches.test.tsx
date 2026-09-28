@@ -106,45 +106,11 @@ describe("App shell operating states", () => {
     // ticket"). Task 6 of the 2026-08-18 critique remediation later added a
     // governed `qualityChip` composite in its place; the 2026-08-18 request
     // to drop "Độ tin cậy" retired that chip too. Both stay gone for good.
-    const current = new Date().toISOString();
-    const allHealthy: DashboardSnapshot = {
-      ...baseSnapshot,
-      generated_at: current,
-      coverage: {
-        issue_category: 0.9,
-        app: 0.85,
-        tpe: 0.9,
-        intent: 0.82,
-        skill: 0.8,
-      },
-      gate_status: {
-        ...baseSnapshot.gate_status,
-        structural_invalid_rate: 0,
-      },
-    };
-    const oneWeak: DashboardSnapshot = {
-      ...allHealthy,
-      coverage: { ...allHealthy.coverage, skill: 0.5 },
-    };
-    const weakerStill: DashboardSnapshot = {
-      ...allHealthy,
-      coverage: { ...allHealthy.coverage, skill: 0.1 },
-    };
-
     const view = render(shell(null));
     expect(document.getElementById("dqBadge")).toBeNull();
     expect(screen.queryByTestId("qualityChip")).toBeNull();
 
-    view.rerender(shell(allHealthy));
-    expect(document.getElementById("dqBadge")).toBeNull();
-    expect(screen.queryByTestId("qualityChip")).toBeNull();
-
-    view.rerender(shell(oneWeak));
-    expect(document.getElementById("dqBadge")).toBeNull();
-    expect(screen.queryByText(/Skill: thiếu 50,0% ticket/)).toBeNull();
-    expect(screen.queryByTestId("qualityChip")).toBeNull();
-
-    view.rerender(shell(weakerStill));
+    view.rerender(shell(baseSnapshot));
     expect(document.getElementById("dqBadge")).toBeNull();
     expect(screen.queryByTestId("qualityChip")).toBeNull();
   });
@@ -291,10 +257,6 @@ function belowFoldSnapshot(
     data_range: {
       ...baseSnapshot.data_range,
       weeks_without_data: ["2026-07-13"],
-    },
-    data_quality: {
-      ...baseSnapshot.data_quality,
-      counts: { invalid_turn: 2 },
     },
     unmapped_tpe_codes: [
       { code: "-999", status: "", count: 1 },

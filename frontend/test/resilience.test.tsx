@@ -137,11 +137,6 @@ describe("selectors under degraded data", () => {
     const degraded: DashboardSnapshot = {
       ...baseSnapshot,
       enrichment_status: "partial",
-      gate_status: {
-        allowed: false,
-        structural_invalid_rate: 0.12,
-        reasons: ["structural_invalid_rate_gt_5pct"],
-      },
       views: {
         ...baseSnapshot.views,
         mon_sun: {
@@ -189,13 +184,6 @@ describe("selectors under degraded data", () => {
   it("does not turn global Transstatus coverage into a misleading first-view alert", () => {
     const tpeOnlyCoverageGap: DashboardSnapshot = {
       ...baseSnapshot,
-      coverage: {
-        issue_category: 1,
-        app: 1,
-        tpe: 0.1,
-        intent: 1,
-        skill: 1,
-      },
       views: {
         ...baseSnapshot.views,
         mon_sun: {

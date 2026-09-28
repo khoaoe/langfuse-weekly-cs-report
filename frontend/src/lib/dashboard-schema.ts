@@ -206,8 +206,6 @@ export const WeeklyReportRowSchema = z
     ai_then_cs_count: nonNegativeInteger,
     direct_cs_count: nonNegativeInteger,
     unclassified_count: nonNegativeInteger,
-    reopen_7d_rate: rate.nullable(),
-    reopen_7d_denominator: nonNegativeInteger.nullable(),
     reopen_lifetime_rate: nonNegativeRatio.nullable(),
     reopen_lifetime_numerator: nonNegativeInteger,
     reopen_lifetime_denominator: nonNegativeInteger,
@@ -219,9 +217,6 @@ export const WeeklyReportRowSchema = z
      */
     ai_reply_sum_ai_first: nonNegativeInteger,
     ai_reply_mean_ai_first: nonNegativeNumber.nullable(),
-    ai_reply_p50: nonNegativeInteger.nullable(),
-    ai_reply_p90: nonNegativeInteger.nullable(),
-    ai_reply_max: nonNegativeInteger.nullable(),
     gt4_turn_with_cs: nonNegativeInteger,
     gt4_turn_without_cs: nonNegativeInteger,
     max_replies_rule_fired: nonNegativeInteger,
@@ -886,10 +881,9 @@ export const CsatWeekSchema = z
       })
       .strict()
       .optional(),
-    /** Keys into the view's `feedback_pool`. Entries are stored once per view,
-     * not inlined per bucket -- a comment belongs to both its week and its day
-     * bucket, which duplicated all responses 3.5x in storage (v32). */
-    feedback_entry_keys: z.array(z.string()),
+    /** Comments in this bucket. The comments themselves are fetched on demand
+     * from /api/csat-feedback when the disclosure opens. */
+    feedback_count: nonNegativeInteger,
   })
   .strict()
   .superRefine((value, context) => {
@@ -909,10 +903,10 @@ export const CsatWeekSchema = z
         message: "CSAT ticket count exceeds the response count.",
       });
     }
-    if (value.feedback_entry_keys.length > value.response_count) {
+    if (value.feedback_count > value.response_count) {
       context.addIssue({
         code: "custom",
-        path: ["feedback_entry_keys"],
+        path: ["feedback_count"],
         message: "CSAT feedback count exceeds the response count.",
       });
     }
@@ -950,17 +944,6 @@ export const CsatWeekSchema = z
         }
       }
     }
-    const seen = new Set<string>();
-    for (const key of value.feedback_entry_keys) {
-      if (seen.has(key)) {
-        context.addIssue({
-          code: "custom",
-          path: ["feedback_entry_keys"],
-          message: "CSAT feedback key is duplicated.",
-        });
-      }
-      seen.add(key);
-    }
   });
 export type CsatWeek = z.infer<typeof CsatWeekSchema>;
 
@@ -975,134 +958,9 @@ export const CsatSchema = z
      * fall back to `by_week` when it is absent.
      */
     by_day: z.record(IsoDateSchema, CsatWeekSchema).optional(),
-    /** Every distinct comment in this view, stored once and referenced by
-     * buckets through `feedback_entry_keys` (storage v32). */
-    feedback_pool: z.record(z.string(), CsatFeedbackEntrySchema),
   })
-  .strict()
-  .superRefine((value, context) => {
-    // Every bucket key must resolve to a pooled entry. Without this a bucket
-    // could reference a comment that does not exist and the panel would
-    // silently render fewer comments than the count claims.
-    const buckets = [
-      ...Object.values(value.by_week),
-      ...Object.values(value.by_day ?? {}),
-    ];
-    for (const bucket of buckets) {
-      for (const key of bucket.feedback_entry_keys) {
-        if (!(key in value.feedback_pool)) {
-          context.addIssue({
-            code: "custom",
-            path: ["feedback_pool"],
-            message: `CSAT feedback key ${key} is not in the pool.`,
-          });
-        }
-      }
-    }
-  });
+  .strict();
 export type Csat = z.infer<typeof CsatSchema>;
-
-const OutcomeReconciliationWeekSchema = z
-  .object({
-    langfuse_ai_end_to_end: nonNegativeInteger,
-    checked_ticket_count: nonNegativeInteger,
-    human_replied_after_ai: nonNegativeInteger,
-    unresolved_ticket_count: nonNegativeInteger,
-    mismatch_rate: rate.nullable(),
-  })
-  .strict()
-  .superRefine((value, context) => {
-    if (
-      value.checked_ticket_count + value.unresolved_ticket_count >
-        value.langfuse_ai_end_to_end ||
-      value.human_replied_after_ai > value.checked_ticket_count
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "Outcome reconciliation counts do not reconcile.",
-      });
-    }
-    const expectedRate =
-      value.checked_ticket_count === 0
-        ? null
-        : value.human_replied_after_ai / value.checked_ticket_count;
-    if (
-      (expectedRate === null && value.mismatch_rate !== null) ||
-      (expectedRate !== null &&
-        (value.mismatch_rate === null ||
-          Math.abs(value.mismatch_rate - expectedRate) > 1e-12))
-    ) {
-      context.addIssue({
-        code: "custom",
-        path: ["mismatch_rate"],
-        message: "Outcome reconciliation rate does not reconcile.",
-      });
-    }
-  });
-export type OutcomeReconciliationWeek = z.infer<
-  typeof OutcomeReconciliationWeekSchema
->;
-
-export const OutcomeReconciliationSchema = z
-  .object({
-    source: z.literal("freshdesk"),
-    fetched_at: UtcDateTimeSchema,
-    by_week: z.record(WeekStringSchema, OutcomeReconciliationWeekSchema),
-  })
-  .strict();
-export type OutcomeReconciliation = z.infer<
-  typeof OutcomeReconciliationSchema
->;
-
-export const EntryCoverageStatusSchema = z.enum([
-  "ai_replied_only",
-  "ai_replied_then_transferred",
-  "transferred_without_ai_reply",
-  "invoked_no_result",
-]);
-export type EntryCoverageStatus = z.infer<typeof EntryCoverageStatusSchema>;
-
-const EntryCoverageWeekSchema = z
-  .object({
-    freshdesk_ticket_count: nonNegativeInteger,
-    ai_replied_only: nonNegativeInteger,
-    ai_replied_then_transferred: nonNegativeInteger,
-    transferred_without_ai_reply: nonNegativeInteger,
-    invoked_no_result: nonNegativeInteger,
-  })
-  .strict()
-  .superRefine((value, context) => {
-    const statusTotal =
-      value.ai_replied_only +
-      value.ai_replied_then_transferred +
-      value.transferred_without_ai_reply +
-      value.invoked_no_result;
-    if (statusTotal !== value.freshdesk_ticket_count) {
-      context.addIssue({
-        code: "custom",
-        path: ["freshdesk_ticket_count"],
-        message: "Freshdesk entry statuses must reconcile.",
-      });
-    }
-  });
-
-export type EntryCoverageWeek = z.infer<typeof EntryCoverageWeekSchema>;
-
-export const EntryCoverageSchema = z
-  .object({
-    source: z.literal("freshdesk"),
-    source_start_week: z.literal("2026-07-06"),
-    fetched_at: UtcDateTimeSchema,
-    by_week: z.record(WeekStringSchema, EntryCoverageWeekSchema),
-    /**
-     * Same buckets keyed by the ticket's Vietnam-local opening day. Optional
-     * only for snapshots written before day-grain coverage existed; readers
-     * must fall back to `by_week` when it is absent.
-     */
-    by_day: z.record(IsoDateSchema, EntryCoverageWeekSchema).optional(),
-  })
-  .strict();
-export type EntryCoverage = z.infer<typeof EntryCoverageSchema>;
 
 const AiTagCoverageBucketSchema = z
   .object({
@@ -1367,12 +1225,6 @@ export const DashboardViewSchema = z
             denominator: nonNegativeInteger,
           })
           .strict(),
-        within_7d: z
-          .object({
-            numerator: nonNegativeInteger,
-            denominator: nonNegativeInteger,
-          })
-          .strict(),
       })
       .strict(),
     weekly: z.array(WeeklyReportRowSchema),
@@ -1381,8 +1233,6 @@ export const DashboardViewSchema = z
     by_week: z.record(WeekStringSchema, ByWeekDetailSchema),
     same_period: SamePeriodSchema.nullable(),
     csat: CsatSchema.nullable(),
-    outcome_reconciliation: OutcomeReconciliationSchema.nullable(),
-    entry_coverage: EntryCoverageSchema.nullable(),
     ai_tag_coverage: AiTagCoverageSchema.nullable(),
     ai_review: AiReviewSchema.nullable(),
     rule_gt4: z
@@ -1472,33 +1322,6 @@ export const DashboardViewSchema = z
         }
       }
     }
-    if (view.outcome_reconciliation !== null) {
-      for (const [cohortWeek, row] of Object.entries(
-        view.outcome_reconciliation.by_week,
-      )) {
-        if (!weeklyKeys.has(cohortWeek)) {
-          context.addIssue({
-            code: "custom",
-            message: "Outcome reconciliation weeks must stay inside the dashboard view.",
-            path: ["outcome_reconciliation", "by_week", cohortWeek],
-          });
-          continue;
-        }
-        const weekly = view.weekly.find(
-          (item) => item.cohort_week === cohortWeek,
-        );
-        if (
-          weekly === undefined ||
-          row.langfuse_ai_end_to_end > weekly.ai_end_to_end_count
-        ) {
-          context.addIssue({
-            code: "custom",
-            message: "Outcome reconciliation population does not reconcile.",
-            path: ["outcome_reconciliation", "by_week", cohortWeek],
-          });
-        }
-      }
-    }
   });
 export type DashboardView = z.infer<typeof DashboardViewSchema>;
 
@@ -1525,15 +1348,6 @@ export const DashboardSnapshotSchema = z
         mon_fri: DashboardViewSchema,
       })
       .strict(),
-    coverage: z
-      .object({
-        issue_category: rate,
-        app: rate,
-        tpe: rate,
-        intent: rate,
-        skill: rate,
-      })
-      .strict(),
     unmapped_tpe_codes: z.array(
       z
         .object({
@@ -1555,23 +1369,6 @@ export const DashboardSnapshotSchema = z
         })
         .strict(),
     ),
-    gate_status: z
-      .object({
-        allowed: z.boolean(),
-        structural_invalid_rate: rate,
-        reasons: z.array(z.enum(["structural_invalid_rate_gt_5pct"])),
-      })
-      .strict(),
-    data_quality: z
-      .object({
-        counts: z.partialRecord(QualityLabelSchema, nonNegativeInteger),
-        weekend_start_count: nonNegativeInteger,
-        left_censored_count: nonNegativeInteger,
-        pre_window_start_count: nonNegativeInteger,
-        invalid_keyed_session_count: nonNegativeInteger,
-        unkeyed_trace_count: nonNegativeInteger,
-      })
-      .strict(),
   })
   .strict();
 export type DashboardSnapshot = z.infer<typeof DashboardSnapshotSchema>;
@@ -1721,28 +1518,15 @@ export function parseDayAggregatesResponse(
   return { ok: true, data: parsed.data };
 }
 
-export const EntryCoverageTicketSchema = z
+export const CsatFeedbackPageSchema = z
   .object({
-    ticket_id: TicketIdSchema,
-    opened_at: UtcDateTimeSchema,
-    cohort_week: WeekStringSchema,
-    status: EntryCoverageStatusSchema,
-    human_replied: z.boolean().nullable(),
-  })
-  .strict();
-export type EntryCoverageTicket = z.infer<typeof EntryCoverageTicketSchema>;
-
-export const EntryCoverageTicketPageSchema = z
-  .object({
-    items: z.array(EntryCoverageTicketSchema),
-    page: positiveInteger,
-    page_size: positiveInteger.max(100),
+    items: z.array(CsatFeedbackEntrySchema).max(10),
     total: nonNegativeInteger,
+    page: positiveInteger,
+    page_count: nonNegativeInteger,
   })
   .strict();
-export type EntryCoverageTicketPage = z.infer<
-  typeof EntryCoverageTicketPageSchema
->;
+export type CsatFeedbackPage = z.infer<typeof CsatFeedbackPageSchema>;
 
 export type SafeParseResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -1764,12 +1548,12 @@ export function parseTicketPage(value: unknown): SafeParseResult<TicketPage> {
   return { ok: true, data: parsed.data };
 }
 
-export function parseEntryCoverageTicketPage(
+export function parseCsatFeedbackPage(
   value: unknown,
-): SafeParseResult<EntryCoverageTicketPage> {
-  const parsed = EntryCoverageTicketPageSchema.safeParse(value);
+): SafeParseResult<CsatFeedbackPage> {
+  const parsed = CsatFeedbackPageSchema.safeParse(value);
   if (!parsed.success) {
-    return { ok: false, message: "Không thể đọc dữ liệu độ phủ Freshdesk." };
+    return { ok: false, message: "Không thể đọc nội dung phản hồi CSAT." };
   }
   return { ok: true, data: parsed.data };
 }

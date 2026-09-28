@@ -3,7 +3,6 @@ import type {
   DashboardSnapshot,
   DashboardView,
   DayAggregate,
-  EntryCoverage,
   Segments,
   TransferReasons,
   WeekDefinition,
@@ -415,24 +414,6 @@ function aggregateTransferReasons(
   };
 }
 
-function scopeEntryCoverage(
-  coverage: EntryCoverage | null,
-  selected: ReadonlySet<string>,
-): EntryCoverage | null {
-  return coverage === null
-    ? null
-    : {
-        ...coverage,
-        by_week: filterByWeek(coverage.by_week, selected),
-        // A spread would carry every day of every unselected week through
-        // untouched, leaving a projection whose two grains disagree about
-        // what is in scope.
-        ...(coverage.by_day === undefined
-          ? {}
-          : { by_day: filterByWeekOfDay(coverage.by_day, selected) }),
-      };
-}
-
 function scopeAiTagCoverage(
   coverage: AiTagCoverage | null,
   selected: ReadonlySet<string>,
@@ -572,16 +553,6 @@ export function scopeSnapshotToWeeks(
     (total, row) => total + row.reopen_lifetime_denominator,
     0,
   );
-  const within7dDenominator = weekly.reduce(
-    (total, row) => total + (row.reopen_7d_denominator ?? 0),
-    0,
-  );
-  const within7dNumerator = weekly.reduce(
-    (total, row) =>
-      total +
-      Math.round((row.reopen_7d_rate ?? 0) * (row.reopen_7d_denominator ?? 0)),
-    0,
-  );
   const transferReasons = aggregateTransferReasons(details);
   const monFriByWeek = new Map(
     snapshot.views.mon_fri.weekly.map((row) => [row.cohort_week, row]),
@@ -641,10 +612,6 @@ export function scopeSnapshotToWeeks(
         numerator: lifetimeNumerator,
         denominator: lifetimeDenominator,
       },
-      within_7d: {
-        numerator: within7dNumerator,
-        denominator: within7dDenominator,
-      },
     },
     weekly,
     segments: aggregateSegments(details),
@@ -664,17 +631,6 @@ export function scopeSnapshotToWeeks(
               ? {}
               : { by_day: filterByWeekOfDay(view.csat.by_day, selected) }),
           },
-    outcome_reconciliation:
-      view.outcome_reconciliation === null
-        ? null
-        : {
-            ...view.outcome_reconciliation,
-            by_week: filterByWeek(
-              view.outcome_reconciliation.by_week,
-              selected,
-            ),
-          },
-    entry_coverage: scopeEntryCoverage(view.entry_coverage, selected),
     ai_tag_coverage: scopeAiTagCoverage(view.ai_tag_coverage, selected),
     rule_gt4: {
       gt4_turn_total: weekly.reduce(
@@ -731,8 +687,8 @@ function daySegmentsToSegments(days: readonly DayAggregate[]): Segments {
  * grain sums up, it is never derived by decomposing a weekly aggregate).
  *
  * Several WeeklyReportRow/DashboardView fields have no day-grain source
- * (ai_reply_p50/p90/max, reopen_reason, same_period, csat,
- * outcome_reconciliation, and the full TransferReasons breakdown incl. TPE):
+ * (reopen_reason, same_period, csat, and the full TransferReasons
+ * breakdown incl. TPE):
  * these become null/zero/empty placeholders here. Callers must not read them
  * from this view -- TransferDiagnostics in particular must keep reading the
  * real weekly snapshot's latest complete week, never this synthetic one.
@@ -779,8 +735,6 @@ export function scopeSnapshotToDayRange(
       ai_then_cs_count: merged.outcomes.ai_then_cs,
       direct_cs_count: merged.direct_cs_count,
       unclassified_count: merged.outcomes.unclassified,
-      reopen_7d_rate: null,
-      reopen_7d_denominator: null,
       reopen_lifetime_rate:
         merged.reopen_lifetime_denominator === 0
           ? 0
@@ -792,9 +746,6 @@ export function scopeSnapshotToDayRange(
         merged.ai_first_count === 0
           ? null
           : merged.ai_reply_sum_ai_first / merged.ai_first_count,
-      ai_reply_p50: null,
-      ai_reply_p90: null,
-      ai_reply_max: null,
       gt4_turn_with_cs: merged.gt4_turn_with_cs,
       gt4_turn_without_cs: merged.gt4_turn_without_cs,
       max_replies_rule_fired: 0,
@@ -836,7 +787,6 @@ export function scopeSnapshotToDayRange(
         numerator: totals.reopenLifetimeNumerator,
         denominator: totals.reopenLifetimeDenominator,
       },
-      within_7d: { numerator: 0, denominator: 0 },
     },
     weekly,
     segments,
@@ -844,8 +794,6 @@ export function scopeSnapshotToDayRange(
     by_week: byWeek,
     same_period: null,
     csat: null,
-    outcome_reconciliation: null,
-    entry_coverage: null,
     ai_tag_coverage: null,
     ai_review: null,
     rule_gt4: {

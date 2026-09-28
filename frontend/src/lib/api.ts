@@ -8,6 +8,7 @@
  */
 export const DASHBOARD_ENDPOINT = "/api/dashboard";
 export const TICKETS_ENDPOINT = "/api/tickets";
+export const CSAT_FEEDBACK_ENDPOINT = "/api/csat-feedback";
 export const REFRESH_ENDPOINT = "/api/refresh";
 export const FRESHDESK_COOKIE_ENDPOINT = "/api/freshdesk-cookie";
 export const AB_TEST_ENDPOINT = "/api/ab-test";
@@ -114,6 +115,44 @@ export async function fetchTicketPage(
   return readJson(response);
 }
 
+
+export interface CsatFeedbackQuery {
+  readonly view: "mon_fri" | "mon_sun";
+  readonly grain: "week" | "day";
+  readonly buckets: readonly string[];
+  readonly satisfaction: "all" | "positive" | "neutral" | "negative";
+  readonly groupField?: string;
+  readonly groupValue?: string;
+  readonly sort: "newest" | "oldest";
+  readonly page: number;
+}
+
+export async function fetchCsatFeedback(
+  query: CsatFeedbackQuery,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const params = new URLSearchParams({
+    view: query.view,
+    grain: query.grain,
+    satisfaction: query.satisfaction,
+    sort: query.sort,
+    page: String(query.page),
+  });
+  for (const bucket of query.buckets) {
+    params.append("bucket", bucket);
+  }
+  if (query.groupField !== undefined && query.groupValue !== undefined) {
+    params.set("group_field", query.groupField);
+    params.set("group_value", query.groupValue);
+  }
+  const response = await fetch(`${CSAT_FEEDBACK_ENDPOINT}?${params.toString()}`, {
+    method: "GET",
+    credentials: "same-origin",
+    headers: JSON_HEADERS,
+    ...(signal ? { signal } : {}),
+  });
+  return readJson(response);
+}
 
 export interface FreshdeskCookieState {
   readonly state: "ok" | "expired" | "missing";

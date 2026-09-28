@@ -21,6 +21,7 @@ from typing import Sequence
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 import uvicorn
 
@@ -38,7 +39,6 @@ from .ai_tag_cache import AiTagCacheError, load_ai_tag_cache
 from .csat_cache import CSATCacheError, load_csat_cache
 from .dashboard_cache import CacheView, ProtectedSnapshotStore, SnapshotManager
 from .dashboard_schema import (
-    entry_coverage_ticket_page,
     project_dashboard,
     ticket_day_aggregate,
     ticket_page,
@@ -471,6 +471,10 @@ def create_app(
         redoc_url=None,
         openapi_url=None,
     )
+    # Static JS/CSS and /api/tickets were served uncompressed. Responses that
+    # already carry Content-Encoding (the prebuilt /api/dashboard envelope)
+    # pass through untouched.
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
     app.state.snapshot_manager = manager
     app.state.resources_closed = False
     app.state.freshdesk_cookie_post_times = []
@@ -710,9 +714,9 @@ def create_app(
             {"status": "ready", "data": payload, "last_error_code": error_code}
         )
 
-    @app.get("/api/freshdesk-entry-coverage/tickets")
-    async def freshdesk_entry_coverage_tickets(request: Request):
-        parsed, invalid_parameter = _parse_entry_coverage_query(request)
+    @app.get("/api/csat-feedback")
+    async def csat_feedback(request: Request):
+        parsed, invalid_parameter = _parse_csat_feedback_query(request)
         if invalid_parameter is not None:
             return _invalid_query(invalid_parameter)
         view = manager.get()
@@ -721,11 +725,7 @@ def create_app(
                 {"detail": {"code": "dashboard_not_ready"}},
                 status_code=503,
             )
-        try:
-            payload = entry_coverage_ticket_page(view.snapshot, **parsed)
-        except ValueError as error:
-            return _invalid_query(_entry_parameter_for_validation_error(error))
-        return JSONResponse(payload)
+        return JSONResponse(_csat_feedback_page(view.snapshot.dashboard, **parsed))
 
     @app.post("/api/refresh")
     async def refresh(request: Request):
@@ -1279,6 +1279,158 @@ def _json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+# Fields the SPA never reads. They stay in storage (CLI, reconciliation and
+# the P0 path read them); only the browser copy drops them. The CSAT comment
+# pool is the bulk of the payload and is served by /api/csat-feedback instead.
+_BROWSER_DROPPED_TOP = ("coverage", "data_quality", "gate_status")
+_BROWSER_DROPPED_VIEW = ("entry_coverage", "outcome_reconciliation")
+_BROWSER_DROPPED_WEEKLY = (
+    "ai_reply_p50",
+    "ai_reply_p90",
+    "ai_reply_max",
+    "reopen_7d_rate",
+    "reopen_7d_denominator",
+)
+
+
+def _browser_dashboard(dashboard: dict[str, object]) -> dict[str, object]:
+    """Trim a validated (already deep-copied) dashboard in place for the SPA."""
+
+    for key in _BROWSER_DROPPED_TOP:
+        dashboard.pop(key, None)
+    for view in dashboard["views"].values():
+        for key in _BROWSER_DROPPED_VIEW:
+            view.pop(key, None)
+        view["reopen"].pop("within_7d", None)
+        for row in view["weekly"]:
+            for key in _BROWSER_DROPPED_WEEKLY:
+                row.pop(key, None)
+        csat = view.get("csat")
+        if csat is not None:
+            csat.pop("feedback_pool", None)
+            for grain in ("by_week", "by_day"):
+                for bucket in csat.get(grain, {}).values():
+                    bucket["feedback_count"] = len(bucket.pop("feedback_entry_keys"))
+    return dashboard
+
+
+_CSAT_FEEDBACK_PAGE_SIZE = 10
+_CSAT_VIEWS = frozenset({"mon_fri", "mon_sun"})
+_CSAT_GRAINS = {"week": "by_week", "day": "by_day"}
+_CSAT_SATISFACTION = frozenset({"all", "positive", "neutral", "negative"})
+_CSAT_GROUP_FIELDS = frozenset({"outcome", "skill", "issue_category", "app"})
+_CSAT_BUCKET_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CSAT_MAX_BUCKETS = 400
+
+
+def _parse_csat_feedback_query(
+    request: Request,
+) -> tuple[dict[str, object], str | None]:
+    params = request.query_params
+    for name in params:
+        if name not in {
+            "view", "grain", "bucket", "satisfaction", "group_field",
+            "group_value", "sort", "page",
+        }:
+            return {}, name
+    for name in ("view", "grain", "satisfaction", "group_field", "group_value", "sort", "page"):
+        if len(params.getlist(name)) > 1:
+            return {}, name
+    view = params.get("view", "mon_fri")
+    if view not in _CSAT_VIEWS:
+        return {}, "view"
+    grain = params.get("grain", "week")
+    if grain not in _CSAT_GRAINS:
+        return {}, "grain"
+    buckets = params.getlist("bucket")
+    if not buckets or len(buckets) > _CSAT_MAX_BUCKETS or any(
+        _CSAT_BUCKET_PATTERN.fullmatch(bucket) is None for bucket in buckets
+    ):
+        return {}, "bucket"
+    satisfaction = params.get("satisfaction", "all")
+    if satisfaction not in _CSAT_SATISFACTION:
+        return {}, "satisfaction"
+    group_field = params.get("group_field")
+    group_value = params.get("group_value")
+    if (group_field is None) != (group_value is None):
+        return {}, "group_field" if group_field is None else "group_value"
+    if group_field is not None and group_field not in _CSAT_GROUP_FIELDS:
+        return {}, "group_field"
+    if group_value is not None and not 1 <= len(group_value) <= 256:
+        return {}, "group_value"
+    sort = params.get("sort", "newest")
+    if sort not in {"newest", "oldest"}:
+        return {}, "sort"
+    page_text = params.get("page", "1")
+    if not page_text.isdigit() or not 1 <= int(page_text) <= 100_000:
+        return {}, "page"
+    return {
+        "view": view,
+        "grain": grain,
+        "buckets": tuple(dict.fromkeys(buckets)),
+        "satisfaction": satisfaction,
+        "group_field": group_field,
+        "group_value": group_value,
+        "sort": sort,
+        "page": int(page_text),
+    }, None
+
+
+def _csat_feedback_page(
+    dashboard: dict[str, object],
+    *,
+    view: str,
+    grain: str,
+    buckets: tuple[str, ...],
+    satisfaction: str,
+    group_field: str | None,
+    group_value: str | None,
+    sort: str,
+    page: int,
+) -> dict[str, object]:
+    """One page of the scope's CSAT comments, read from the published snapshot.
+
+    Entries were privacy-validated when the snapshot was built; this only
+    selects and orders them, the way the SPA used to do client-side.
+    """
+
+    csat = dashboard["views"][view].get("csat")
+    entries: list[dict[str, object]] = []
+    if csat is not None:
+        source = csat.get(_CSAT_GRAINS[grain], {})
+        pool = csat["feedback_pool"]
+        for bucket_key in buckets:
+            bucket = source.get(bucket_key)
+            if bucket is None:
+                continue
+            for key in bucket["feedback_entry_keys"]:
+                entry = pool[key]
+                if satisfaction != "all" and entry["satisfaction_bucket"] != satisfaction:
+                    continue
+                if group_field is not None and entry[group_field] != group_value:
+                    continue
+                entries.append(entry)
+    # Parsed, not compared as text: "...:00.5Z" sorts before "...:00Z" as a
+    # string. The stable sort keeps bucket order for equal timestamps, as the
+    # client sort did.
+    entries.sort(
+        key=lambda entry: datetime.fromisoformat(
+            str(entry["responded_at"]).replace("Z", "+00:00")
+        ),
+        reverse=sort == "newest",
+    )
+    total = len(entries)
+    page_count = -(-total // _CSAT_FEEDBACK_PAGE_SIZE)
+    current = min(page, max(1, page_count))
+    start = (current - 1) * _CSAT_FEEDBACK_PAGE_SIZE
+    return {
+        "items": entries[start : start + _CSAT_FEEDBACK_PAGE_SIZE],
+        "total": total,
+        "page": current,
+        "page_count": page_count,
+    }
+
+
 _NO_SNAPSHOT = object()
 
 
@@ -1313,7 +1465,7 @@ class _EnvelopeCache:
                 self._snapshot_json = (
                     b"null"
                     if view.snapshot is None
-                    else _json_bytes(view.snapshot.dashboard_dict())
+                    else _json_bytes(_browser_dashboard(view.snapshot.dashboard_dict()))
                 )
                 self._snapshot = view.snapshot
                 self._state = None
@@ -1671,59 +1823,11 @@ def _parse_ticket_query(
     return parsed, None
 
 
-def _parse_entry_coverage_query(
-    request: Request,
-) -> tuple[dict[str, object], str | None]:
-    raw_query = request.scope.get("query_string", b"")
-    if (
-        not isinstance(raw_query, bytes)
-        or len(raw_query) > _MAX_RAW_QUERY_BYTES
-        or (raw_query.count(b"&") + 1 if raw_query else 0) > len(_ENTRY_QUERY_NAMES)
-    ):
-        return {}, "unknown"
-    items = list(request.query_params.multi_items())
-    if len(items) > len(_ENTRY_QUERY_NAMES):
-        return {}, "unknown"
-    if any(name not in _ENTRY_QUERY_NAME_SET for name, _value in items):
-        return {}, "unknown"
-    if any(
-        sum(item_name == name for item_name, _value in items) > 1
-        for name in _ENTRY_QUERY_NAMES
-    ):
-        return {}, "unknown"
-    values = dict(items)
-    parsed: dict[str, object] = {}
-    for name, value in values.items():
-        if len(value) > (1024 if name == "cohort_weeks" else _MAX_QUERY_VALUE_LENGTH):
-            return {}, name
-        if name in {"page", "page_size"}:
-            if not _INTEGER_QUERY.fullmatch(value):
-                return {}, name
-            parsed[name] = int(value)
-        elif name == "sort_dir":
-            if value not in {"asc", "desc"}:
-                return {}, name
-            parsed[name] = value
-        else:
-            parsed[name] = value
-    return parsed, None
-
-
 def _parameter_for_validation_error(error: ValueError) -> str:
     message = str(error)
     for name in _QUERY_NAMES:
         if message.startswith(f"{name} "):
             return name
-    return "unknown"
-
-
-def _entry_parameter_for_validation_error(error: ValueError) -> str:
-    message = str(error)
-    for name in _ENTRY_QUERY_NAMES:
-        if message.startswith(f"{name} "):
-            return name
-    if message.startswith("status "):
-        return "status"
     return "unknown"
 
 

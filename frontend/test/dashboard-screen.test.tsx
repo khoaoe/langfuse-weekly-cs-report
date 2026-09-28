@@ -99,7 +99,7 @@ describe("DashboardScreen", () => {
           { value: "Chưa ghi nhận", ticket_count: 1, positive: 0, neutral: 0, negative: 1 },
         ],
       },
-      feedback_entry_keys: ["6991254:1", "6991255:1"],
+      feedback_count: 2,
     };
     const feedbackPool = {
       "6991254:1": {
@@ -182,9 +182,29 @@ describe("DashboardScreen", () => {
         source: "freshdesk" as const,
         fetched_at: "2026-08-03T01:00:00Z",
         by_week: { "2026-07-20": week },
-        feedback_pool: feedbackPool,
       },
     });
+    // Comment text is served by /api/csat-feedback, not the dashboard payload.
+    server.use(
+      http.get("/api/csat-feedback", ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const field = params.get("group_field") as
+          | keyof (typeof feedbackPool)["6991254:1"]
+          | null;
+        const satisfaction = params.get("satisfaction") ?? "all";
+        const items = Object.values(feedbackPool).filter(
+          (entry) =>
+            (field === null || entry[field] === params.get("group_value")) &&
+            (satisfaction === "all" || entry.satisfaction_bucket === satisfaction),
+        );
+        return HttpResponse.json({
+          items,
+          total: items.length,
+          page: 1,
+          page_count: items.length === 0 ? 0 : 1,
+        });
+      }),
+    );
     return {
       ...dashboardEnvelopeFixture,
       snapshot: {

@@ -9,6 +9,7 @@
   },
   "scripts": {
     "build": "vite build",
+    "check:bundle": "node scripts/check_bundle_size.mjs",
     "dev": "vite",
     "test": "npm run test:unit",
     "test:unit": "vitest run",

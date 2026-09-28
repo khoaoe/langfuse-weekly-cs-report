@@ -1,3 +1,4 @@
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import type {
@@ -32,6 +33,8 @@ import {
   type CsatGrouping,
 } from "./CsatBreakdownTable";
 import { CsatCharts } from "./CsatCharts";
+import { fetchCsatFeedback } from "../lib/api";
+import { parseCsatFeedbackPage } from "../lib/dashboard-schema";
 import { FreshdeskTicketLink } from "./FreshdeskTicketLink";
 import { Pagination } from "./Pagination";
 import { SatisfactionBadge } from "./SatisfactionBadge";
@@ -170,7 +173,7 @@ function aggregateWeeks(weeks: readonly CsatWeek[]): CsatWeek | null {
       issue_category: aggregateDimension("issue_category", true),
       app: aggregateDimension("app", true),
     },
-    feedback_entry_keys: weeks.flatMap((week) => week.feedback_entry_keys),
+    feedback_count: weeks.reduce((total, week) => total + week.feedback_count, 0),
   };
 }
 
@@ -318,31 +321,28 @@ function selectAiReviewScope(
   return aggregateAiReviewBuckets(Object.values(aiReview.by_week));
 }
 
-interface FeedbackWithBucket extends CsatFeedbackEntry {
-  readonly bucketKey: string;
-}
-
 function FeedbackDisclosure({
   buckets,
+  grain,
+  weekDefinition,
   defaultBucketFilter,
   bucketFieldLabel,
   allBucketsLabel,
   formatBucketOption,
   data,
-  feedbackPool,
   grouping,
   activeValue,
   onActiveValueChange,
 }: {
   /** The scope's buckets, keyed by cohort week or by cohort day. */
   readonly buckets: readonly (readonly [string, CsatWeek])[];
+  readonly grain: "week" | "day";
+  readonly weekDefinition: WeekDefinition;
   readonly defaultBucketFilter: string;
   readonly bucketFieldLabel: string;
   readonly allBucketsLabel: string;
   readonly formatBucketOption: (key: string) => string;
   readonly data: CsatWeek;
-  /** The view's shared comment pool; buckets reference it by key (v32). */
-  readonly feedbackPool: Csat["feedback_pool"];
   readonly grouping: CsatGrouping;
   readonly activeValue: string;
   readonly onActiveValueChange: (value: string) => void;
@@ -358,66 +358,94 @@ function FeedbackDisclosure({
     () => csatBreakdownOptions(data, grouping),
     [data, grouping],
   );
-  const feedback = useMemo<FeedbackWithBucket[]>(
-    () =>
-      buckets.flatMap(([bucketKey, bucket]) =>
-        bucket.feedback_entry_keys.flatMap((key) => {
-          // Entries live once per view in `feedback_pool` (storage v32); a
-          // bucket only references them by key.
-          const comment = feedbackPool[key];
-          return comment === undefined ? [] : [{ ...comment, bucketKey }];
-        }),
-      ),
-    [buckets],
-  );
   const availableWeeks = useMemo(
     () =>
       buckets
-        .filter(([, bucket]) => bucket.feedback_entry_keys.length > 0)
+        .filter(([, bucket]) => bucket.feedback_count > 0)
         .map(([bucketKey]) => bucketKey)
         .sort((left, right) => right.localeCompare(left)),
     [buckets],
   );
-  const filteredComments = useMemo(
+  const selectedBuckets = useMemo(
     () =>
-      feedback
-        .filter(
-          (comment) =>
-            (weekFilter === "all" || comment.bucketKey === weekFilter) &&
-            (satisfactionFilter === "all" ||
-              comment.satisfaction_bucket === satisfactionFilter),
-        )
-        .filter(
-          (entry) => activeValue === "" || entry[grouping] === activeValue,
-        )
-        .sort((left, right) => {
-          const order =
-            Date.parse(left.responded_at) - Date.parse(right.responded_at);
-          return timeSort === "oldest" ? order : -order;
-        }),
-    [activeValue, feedback, grouping, satisfactionFilter, timeSort, weekFilter],
+      weekFilter === "all"
+        ? availableWeeks
+        : availableWeeks.filter((bucketKey) => bucketKey === weekFilter),
+    [availableWeeks, weekFilter],
   );
+  // Comment text stays off /api/dashboard; it is fetched only once the reader
+  // opens the disclosure (CSAT privacy exception, condition 3).
+  const feedbackQuery = useQuery({
+    queryKey: [
+      "csat-feedback",
+      weekDefinition,
+      grain,
+      selectedBuckets,
+      satisfactionFilter,
+      grouping,
+      activeValue,
+      timeSort,
+      page,
+    ],
+    enabled: expanded && selectedBuckets.length > 0,
+    retry: false,
+    placeholderData: keepPreviousData,
+    queryFn: async ({ signal }) => {
+      const parsed = parseCsatFeedbackPage(
+        await fetchCsatFeedback(
+          {
+            view: weekDefinition,
+            grain,
+            buckets: selectedBuckets,
+            satisfaction: satisfactionFilter,
+            ...(activeValue === ""
+              ? {}
+              : { groupField: grouping, groupValue: activeValue }),
+            sort: timeSort,
+            page,
+          },
+          signal,
+        ),
+      );
+      if (!parsed.ok) {
+        throw new Error(parsed.message);
+      }
+      return parsed.data;
+    },
+  });
   useEffect(() => {
     setPage(1);
   }, [activeValue, grouping]);
-  const pageCount = Math.ceil(filteredComments.length / FEEDBACK_PER_PAGE);
-  const currentPage = Math.min(page, Math.max(1, pageCount));
+  const result = feedbackQuery.data;
+  const total =
+    result?.total ??
+    buckets.reduce(
+      (sum, [bucketKey, bucket]) =>
+        selectedBuckets.includes(bucketKey) ? sum + bucket.feedback_count : sum,
+      0,
+    );
+  const pageCount = result?.page_count ?? 0;
+  const currentPage = result?.page ?? 1;
   const pageStart = (currentPage - 1) * FEEDBACK_PER_PAGE;
-  const visibleComments = filteredComments.slice(
-    pageStart,
-    pageStart + FEEDBACK_PER_PAGE,
-  );
+  const visibleComments = result?.items ?? [];
 
   const changePage = (nextPage: number) => {
     setPage(nextPage);
   };
 
-  if (feedback.length === 0) {
+  if (availableWeeks.length === 0) {
     return null;
   }
 
-  const count = formatCount(filteredComments.length);
-  const disclosureLabel = `${expanded ? "Ẩn" : "Xem"} ${count} nội dung phản hồi`;
+  const count = formatCount(total);
+  // Unfiltered, the bucket counts are exact; filtered, only a fresh server
+  // total is, so the closed label drops the number rather than overstate it.
+  const countKnown =
+    (result !== undefined && !feedbackQuery.isPlaceholderData) ||
+    (activeValue === "" && satisfactionFilter === "all");
+  const disclosureLabel = `${expanded ? "Ẩn" : "Xem"} ${
+    countKnown ? `${count} ` : ""
+  }nội dung phản hồi`;
 
   return (
     <div className={csatStyles.commentDisclosure}>
@@ -520,11 +548,15 @@ function FeedbackDisclosure({
             className={csatStyles.commentResultCount}
             aria-live="polite"
           >
-            {filteredComments.length === 0
-              ? "Không có nội dung phản hồi phù hợp."
-              : `Hiển thị ${formatCount(pageStart + 1)}–${formatCount(
-                  pageStart + visibleComments.length,
-                )} / ${formatCount(filteredComments.length)} nội dung phản hồi`}
+            {feedbackQuery.isError
+              ? "Không tải được nội dung phản hồi."
+              : result === undefined
+                ? "Đang tải nội dung phản hồi…"
+                : total === 0
+                  ? "Không có nội dung phản hồi phù hợp."
+                  : `Hiển thị ${formatCount(pageStart + 1)}–${formatCount(
+                      pageStart + visibleComments.length,
+                    )} / ${formatCount(total)} nội dung phản hồi`}
           </p>
           {visibleComments.length > 0 ? (
             <ul className={csatStyles.commentList}>
@@ -822,6 +854,8 @@ export function CsatSection({
             <FeedbackDisclosure
               key={`${dayGrain ? `${dayRange?.from}:${dayRange?.to}` : effectiveWeek}:${csat.fetched_at}`}
               buckets={scopedBuckets}
+              grain={dayGrain ? "day" : "week"}
+              weekDefinition={weekDefinition}
               defaultBucketFilter={
                 !dayGrain && scopeWeeks === undefined && effectiveWeek !== ""
                   ? effectiveWeek
@@ -835,7 +869,6 @@ export function CsatSection({
                   : `Tuần ${formatWeekRange(key, weekDefinition)}`
               }
               data={data}
-              feedbackPool={csat.feedback_pool}
               grouping={grouping}
               activeValue={activeValue}
               onActiveValueChange={(value) => onBreakdownSelect(grouping, value)}

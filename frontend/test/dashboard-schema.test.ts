@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { dashboardEnvelopeFixture, loadingEnvelopeFixture } from "./fixtures/dashboard";
 import {
+  CsatFeedbackPageSchema,
   DashboardEnvelopeSchema,
   TransferReasonsSchema,
   TicketRowSchema,
@@ -255,18 +256,12 @@ describe("dashboard API envelope", () => {
         },
       ],
     },
-    feedback_entry_keys: [
-      `${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`,
-    ],
+    feedback_count: 1,
   };
   const csat = {
     source: "freshdesk" as const,
     fetched_at: "2026-08-01T03:00:00Z",
     by_week: { "2026-07-20": csatWeek },
-    feedback_pool: {
-      [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
-        csatFeedbackEntry,
-    },
   };
 
   function envelopeWithSamePeriod(
@@ -324,35 +319,26 @@ describe("dashboard API envelope", () => {
     };
   }
 
-  const reconciliation = {
-    source: "freshdesk" as const,
-    fetched_at: "2026-08-03T01:00:00Z",
-    by_week: {
-      "2026-07-20": {
-        langfuse_ai_end_to_end: 6,
-        checked_ticket_count: 4,
-        human_replied_after_ai: 1,
-        unresolved_ticket_count: 1,
-        mismatch_rate: 0.25,
-      },
-    },
-  };
-
-  function envelopeWithReconciliation(value: unknown = reconciliation) {
-    return {
-      ...dashboardEnvelopeFixture,
-      snapshot: {
-        ...dashboardEnvelopeFixture.snapshot,
-        views: {
-          ...dashboardEnvelopeFixture.snapshot.views,
-          mon_sun: {
-            ...dashboardEnvelopeFixture.snapshot.views.mon_sun,
-            outcome_reconciliation: value,
-          },
-        },
-      },
-    };
+  /** Comments no longer ride on /api/dashboard; a `feedback_pool` in a case
+   * below is checked the way /api/csat-feedback delivers it. */
+  function csatAccepted(value: Record<string, unknown>): boolean {
+    const { feedback_pool: pool, ...rest } = value;
+    if (pool === undefined) {
+      return DashboardEnvelopeSchema.safeParse(envelopeWithCsat(rest)).success;
+    }
+    const items = Object.values(pool as Record<string, unknown>);
+    return (
+      DashboardEnvelopeSchema.safeParse(envelopeWithCsat(rest)).success &&
+      CsatFeedbackPageSchema.safeParse({
+        items,
+        total: items.length,
+        page: 1,
+        page_count: 1,
+      }).success
+    );
   }
+
+
 
   it("accepts the current ready envelope without storage-only fields", () => {
     const parsed = DashboardEnvelopeSchema.parse(dashboardEnvelopeFixture);
@@ -372,162 +358,10 @@ describe("dashboard API envelope", () => {
     expect(parsed.snapshot?.views.mon_sun.csat).toBeNull();
   });
 
-  it("accepts reconciled Freshdesk entry coverage aggregates", () => {
-    const entryCoverage = {
-      source: "freshdesk" as const,
-      source_start_week: "2026-07-06" as const,
-      fetched_at: "2026-08-04T03:00:00Z",
-      by_week: {
-        "2026-07-20": {
-          freshdesk_ticket_count: 10,
-          ai_replied_only: 4,
-          ai_replied_then_transferred: 2,
-          transferred_without_ai_reply: 1,
-          invoked_no_result: 3,
-        },
-      },
-    };
-    const envelope = {
-      ...dashboardEnvelopeFixture,
-      snapshot: {
-        ...dashboardEnvelopeFixture.snapshot,
-        views: {
-          ...dashboardEnvelopeFixture.snapshot.views,
-          mon_sun: {
-            ...dashboardEnvelopeFixture.snapshot.views.mon_sun,
-            entry_coverage: entryCoverage,
-          },
-        },
-      },
-    };
-
-    const parsed = DashboardEnvelopeSchema.parse(envelope);
-    expect(parsed.snapshot?.views.mon_sun.entry_coverage).toEqual(entryCoverage);
-  });
-
-  it.each(["unknown status", "status total mismatch"])(
-    "rejects invalid Freshdesk entry coverage: %s",
-    (label) => {
-      const invalidCounts =
-        label === "unknown status"
-          ? { extra_status: 1 }
-          : { freshdesk_ticket_count: 2 };
-    const entryCoverage = {
-      source: "freshdesk" as const,
-      source_start_week: "2026-07-06" as const,
-      fetched_at: "2026-08-04T03:00:00Z",
-      by_week: {
-        "2026-07-20": {
-          freshdesk_ticket_count: 1,
-          ai_replied_only: 1,
-          ai_replied_then_transferred: 0,
-          transferred_without_ai_reply: 0,
-          invoked_no_result: 0,
-          ...invalidCounts,
-        },
-      },
-    };
-    const envelope = {
-      ...dashboardEnvelopeFixture,
-      snapshot: {
-        ...dashboardEnvelopeFixture.snapshot,
-        views: {
-          ...dashboardEnvelopeFixture.snapshot.views,
-          mon_sun: {
-            ...dashboardEnvelopeFixture.snapshot.views.mon_sun,
-            entry_coverage: entryCoverage,
-          },
-        },
-      },
-    };
-
-      expect(DashboardEnvelopeSchema.safeParse(envelope).success).toBe(false);
-    },
-  );
-
   it("accepts the strict bot-only CSAT and redacted-comment contract", () => {
     const parsed = DashboardEnvelopeSchema.parse(envelopeWithCsat());
 
     expect(parsed.snapshot?.views.mon_sun.csat).toEqual(csat);
-  });
-
-  it("accepts strict observational Freshdesk reconciliation", () => {
-    const parsed = DashboardEnvelopeSchema.parse(envelopeWithReconciliation());
-
-    expect(
-      parsed.snapshot?.views.mon_sun.outcome_reconciliation,
-    ).toEqual(reconciliation);
-  });
-
-  it("accepts a fetchable reconciliation population below the Langfuse outcome total", () => {
-    const fetchableOnly = {
-      ...reconciliation,
-      by_week: {
-        "2026-07-20": {
-          ...reconciliation.by_week["2026-07-20"],
-          langfuse_ai_end_to_end: 5,
-        },
-      },
-    };
-
-    expect(
-      DashboardEnvelopeSchema.safeParse(
-        envelopeWithReconciliation(fetchableOnly),
-      ).success,
-    ).toBe(true);
-  });
-
-  it.each([
-    {
-      ...reconciliation,
-      by_week: {
-        "2026-07-20": {
-          ...reconciliation.by_week["2026-07-20"],
-          checked_ticket_count: 99,
-        },
-      },
-    },
-    {
-      ...reconciliation,
-      by_week: {
-        "2026-07-20": {
-          ...reconciliation.by_week["2026-07-20"],
-          mismatch_rate: null,
-        },
-      },
-    },
-    {
-      ...reconciliation,
-      by_week: {
-        "2026-07-20": {
-          ...reconciliation.by_week["2026-07-20"],
-          agent_id: 42,
-        },
-      },
-    },
-  ])("rejects non-reconciling or private reconciliation fields", (value) => {
-    expect(
-      DashboardEnvelopeSchema.safeParse(envelopeWithReconciliation(value)).success,
-    ).toBe(false);
-  });
-
-  it("requires the nullable outcome reconciliation key on every view", () => {
-    const view = dashboardEnvelopeFixture.snapshot.views.mon_sun;
-    const { outcome_reconciliation: removed, ...withoutReconciliation } = view;
-    expect(removed).toBeNull();
-
-    expect(
-      DashboardEnvelopeSchema.safeParse({
-        ...dashboardEnvelopeFixture,
-        snapshot: {
-          ...dashboardEnvelopeFixture.snapshot,
-          views: {
-            ...dashboardEnvelopeFixture.snapshot.views,
-            mon_sun: withoutReconciliation,
-          },
-        },
-      }).success,
-    ).toBe(false);
   });
 
   it("requires the nullable csat key on every dashboard view", () => {
@@ -548,17 +382,15 @@ describe("dashboard API envelope", () => {
     expect(DashboardEnvelopeSchema.safeParse(malformed).success).toBe(false);
   });
 
-  it("requires a feedback_entry_keys array in every CSAT week", () => {
-    const { feedback_entry_keys: removedEntries, ...withoutEntries } = csatWeek;
-    expect(removedEntries).toHaveLength(1);
+  it("requires a feedback_count in every CSAT week", () => {
+    const { feedback_count: removedCount, ...withoutEntries } = csatWeek;
+    expect(removedCount).toBe(1);
 
     expect(
-      DashboardEnvelopeSchema.safeParse(
-        envelopeWithCsat({
+      csatAccepted({
           ...csat,
           by_week: { "2026-07-20": withoutEntries },
         }),
-      ).success,
     ).toBe(false);
   });
 
@@ -573,20 +405,8 @@ describe("dashboard API envelope", () => {
         },
       },
     ],
-    [
-      "feedback entry",
-      {
-        ...csat,
-        by_week: {
-          "2026-07-20": {
-            ...csatWeek,
-            feedback_entry_keys: ["missing:1"],
-          },
-        },
-      },
-    ],
   ])("rejects unknown privacy-sensitive fields in the %s", (_name, value) => {
-    expect(DashboardEnvelopeSchema.safeParse(envelopeWithCsat(value)).success).toBe(
+    expect(csatAccepted(value as Record<string, unknown>)).toBe(
       false,
     );
   });
@@ -595,15 +415,13 @@ describe("dashboard API envelope", () => {
     "rejects the private feedback field %s",
     (field) => {
       expect(
-        DashboardEnvelopeSchema.safeParse(
-          envelopeWithCsat({
+        csatAccepted({
             ...csat,
             feedback_pool: {
               [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
                 { ...csatFeedbackEntry, [field]: "private" },
             },
           }),
-        ).success,
       ).toBe(false);
     },
   );
@@ -790,7 +608,7 @@ describe("dashboard API envelope", () => {
       },
     ],
   ])("rejects %s", (_name, value) => {
-    expect(DashboardEnvelopeSchema.safeParse(envelopeWithCsat(value)).success).toBe(
+    expect(csatAccepted(value as Record<string, unknown>)).toBe(
       false,
     );
   });
@@ -803,15 +621,13 @@ describe("dashboard API envelope", () => {
     ["Vietnamese personal name", "Nguyễn Văn An"],
   ])("rejects CSAT feedback containing a %s", (_name, text) => {
     expect(
-      DashboardEnvelopeSchema.safeParse(
-        envelopeWithCsat({
+      csatAccepted({
           ...csat,
           feedback_pool: {
             [`${csatFeedbackEntry.ticket_id}:${csatFeedbackEntry.response_number}`]:
               { ...csatFeedbackEntry, text },
           },
         }),
-      ).success,
     ).toBe(false);
   });
 

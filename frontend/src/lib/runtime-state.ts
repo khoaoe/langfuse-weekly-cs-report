@@ -78,6 +78,16 @@ export function reduceDashboardRuntime(
   state: DashboardRuntime,
   action: DashboardRuntimeAction,
 ): DashboardRuntime {
+  const next = nextRuntime(state, action);
+  // Same kind and snapshot object: hand back the old state so an unchanged
+  // poll (a 304, or the same envelope again) re-renders nothing.
+  return next.kind === state.kind && next.snapshot === state.snapshot ? state : next;
+}
+
+function nextRuntime(
+  state: DashboardRuntime,
+  action: DashboardRuntimeAction,
+): DashboardRuntime {
   switch (action.type) {
     case "refresh-start":
       return transition(

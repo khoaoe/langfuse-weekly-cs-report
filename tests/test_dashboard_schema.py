@@ -19,7 +19,6 @@ from weekly_cs_report.dashboard_schema import (
     _ticket_public_dict,
     _ticket_sort_value,
     _tpe_rows_from_signals,
-    entry_coverage_ticket_page,
     project_dashboard,
     ticket_day_aggregate,
     ticket_page,
@@ -672,23 +671,6 @@ def test_entry_coverage_buckets_by_vietnam_day_and_sums_back_to_its_week():
     assert (
         sum(day["freshdesk_ticket_count"] for day in mon_fri["by_day"].values()) == 2
     )
-
-
-def test_entry_coverage_ticket_page_cuts_to_the_picked_days():
-    snapshot = _entry_coverage_snapshot()
-
-    days = entry_coverage_ticket_page(
-        snapshot,
-        opened_from="2026-07-20",
-        opened_to="2026-07-22",
-    )
-    weeks = entry_coverage_ticket_page(snapshot, cohort_weeks="2026-07-20")
-
-    # The drill-down must answer for the same population as the counts above
-    # it: the whole week holds the weekend record, the picked days do not.
-    assert [item["ticket_id"] for item in days["items"]] == ["145667", "145665"]
-    assert days["total"] == 2
-    assert weeks["total"] == 3
 
 
 def _ai_tag_coverage_snapshot() -> DashboardSnapshot:

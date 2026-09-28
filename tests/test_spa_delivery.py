@@ -95,6 +95,20 @@ def test_hashed_assets_are_privately_cacheable_forever(spa_client):
     assert response.headers["X-Content-Type-Options"] == "nosniff"
 
 
+def test_assets_are_gzipped_and_keep_their_cache_policy(spa_client):
+    spa, manager = spa_client
+    source = "export const value = 1;\n" * 200
+    (spa / "assets" / "index-abc123.js").write_text(source, encoding="utf-8")
+    with _client(manager) as client:
+        response = client.get(
+            "/assets/index-abc123.js", headers={"Accept-Encoding": "gzip"}
+        )
+
+    assert response.headers["Content-Encoding"] == "gzip"
+    assert response.headers["Cache-Control"] == SPA_ASSET_CACHE_CONTROL
+    assert response.text == source
+
+
 def test_assets_require_the_same_proxy_identity_as_the_document(spa_client):
     _spa, manager = spa_client
     with _client(manager, auth="proxy") as client:
