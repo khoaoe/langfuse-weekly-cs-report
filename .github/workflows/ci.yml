@@ -133,13 +133,9 @@ jobs:
           )"
           test "$(stat -c '%a' "$pytest_basetemp")" = "700"
           .venv/bin/python -m compileall -q src/weekly_cs_report
-          .venv/bin/pytest -q --basetemp "$pytest_basetemp" --cov=src/weekly_cs_report --cov-fail-under=85 --cov-report=json:"$RUNNER_TEMP/weekly-cs-python-coverage.json"
-          .venv/bin/python scripts/check_python_coverage.py "$RUNNER_TEMP/weekly-cs-python-coverage.json" 85 80 \
-            src/weekly_cs_report/langfuse_client.py \
-            src/weekly_cs_report/report.py \
-            src/weekly_cs_report/dashboard_cache.py \
-            src/weekly_cs_report/dashboard_schema.py \
-            src/weekly_cs_report/web.py
+          # Python coverage gate removed 2026-09-28 by PO decision (main sat at
+          # 83% < 85%); scripts/check_python_coverage.py is kept for re-enabling.
+          .venv/bin/pytest -q --basetemp "$pytest_basetemp"
 
       - name: Install the Playwright browser
         run: npx playwright install --with-deps chromium
