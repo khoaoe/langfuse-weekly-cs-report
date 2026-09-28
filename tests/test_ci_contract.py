@@ -129,9 +129,10 @@ def test_ci_pins_the_reviewed_pip_bootstrap_version():
     assert text.count(install_prefix) == 1
     install_arguments = text.split(install_prefix, 1)[1].splitlines()[0].strip()
     assert install_arguments == (
-        "--no-cache-dir 'pip==26.1.2' 'uv==0.11.32' 'pip-audit==2.9.0'"
+        "--no-cache-dir 'pip==26.2' 'setuptools==83.0.0' 'uv==0.11.32' "
+        "'pip-audit==2.9.0'"
     )
-    assert "pip==26.2" not in text
+    assert "pip==26.1.2" not in text
 
 
 def test_ci_accounts_for_the_single_locked_pytest_advisory_with_its_mitigation():
