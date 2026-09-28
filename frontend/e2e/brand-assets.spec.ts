@@ -244,8 +244,9 @@ test("ships and switches the official mode-specific logo and Z mark", async ({
     expect(placement.right).toBe(placement.viewport);
     expect(placement.overflow).toBe("hidden");
     expect(placement.zIndex).toBeGreaterThan(1);
-    expect(placement.objectFit).toBe("cover");
-    expect(placement.objectPosition).toBe("0% 50%");
+    // contain, not cover: cover cropped the Z inside its box.
+    expect(placement.objectFit).toBe("contain");
+    expect(placement.objectPosition).toBe("100% 50%");
   } else {
     await expect(markContainer).toBeHidden();
   }

@@ -1580,7 +1580,6 @@ describe("Below-fold analysis", () => {
   });
 
   it("keeps TPE, source-faithful transfer reasons, and actionable >3-turn diagnostics", async () => {
-    const user = userEvent.setup();
     renderWithQuery(belowFold(baseSnapshot));
 
     expect(screen.queryByText(/không phải nguyên nhân đã chứng minh/)).toBeNull();
@@ -1594,10 +1593,6 @@ describe("Below-fold analysis", () => {
       name: "Transstatus và Step result",
     });
     expect(tpeRegion).toHaveAttribute("id", "tpeDistribution");
-    // Collapsed by default; open it to reach the table underneath.
-    await user.click(
-      screen.getByRole("heading", { name: "Transstatus và Step result" }),
-    );
     const tpeTable = within(tpeRegion).getByRole("table", {
       name: "Transstatus và Step result",
     });
@@ -1700,7 +1695,10 @@ describe("Below-fold analysis", () => {
         name: "Ticket có hơn 3 lượt xử lý · 3",
       }),
     ).toBeVisible();
-    expect(document.querySelector("#diagnostics details")).toBeNull();
+    // Each diagnostic folds on its own and starts open.
+    const panels = [...document.querySelectorAll("#diagnostics details")];
+    expect(panels).toHaveLength(2);
+    expect(panels.every((panel) => panel.hasAttribute("open"))).toBe(true);
     expect(within(gt4Region).getByRole("row", { name: /^Tổng/ })).toHaveTextContent(
       "3",
     );

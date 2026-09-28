@@ -338,7 +338,6 @@ describe("below-fold degraded states", () => {
   });
 
   it("renders exact-source TPE signals without dividing by zero", async () => {
-    const user = userEvent.setup();
     const snapshot = belowFoldSnapshot({
       observed_transfer_denominator: 0,
       triggers: [],
@@ -352,9 +351,6 @@ describe("below-fold degraded states", () => {
     });
 
     renderBelowFold(snapshot);
-    await user.click(
-      screen.getByRole("heading", { name: "Transstatus và Step result" }),
-    );
 
     const tpeTable = screen.getByRole("table", {
       name: "Transstatus và Step result",
