@@ -133,7 +133,7 @@ describe("formatting edge cases", () => {
 });
 
 describe("selectors under degraded data", () => {
-  it("escalates a blocked quality gate and a partial enrichment read", () => {
+  it("surfaces stuck tickets and a partial enrichment read, never a quality gate", () => {
     const degraded: DashboardSnapshot = {
       ...baseSnapshot,
       enrichment_status: "partial",
@@ -171,7 +171,6 @@ describe("selectors under degraded data", () => {
     const ids = items.map((item) => item.id);
     expect(ids).toEqual([
       "attention-gt4",
-      "attention-gate",
       "attention-enrichment",
     ]);
     expect(items.find((item) => item.id === "attention-gt4")).toMatchObject({
@@ -181,10 +180,6 @@ describe("selectors under degraded data", () => {
     });
     expect(items.find((item) => item.id === "attention-enrichment")).toMatchObject({
       severity: "warning",
-    });
-    expect(items.find((item) => item.id === "attention-gate")).toMatchObject({
-      headline: "12,0% bản ghi lỗi cấu trúc, vượt ngưỡng 5%",
-      action: "Số tuần này chưa dùng để ra quyết định. Kiểm tra nguồn dữ liệu trước.",
     });
     expect(items.map((item) => item.headline).join(" ")).not.toMatch(
       /taxonomy|chưa có trong taxonomy/i,

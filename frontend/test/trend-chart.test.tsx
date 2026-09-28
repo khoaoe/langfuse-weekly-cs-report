@@ -255,7 +255,7 @@ describe("trend chart data gaps", () => {
     );
 
     const volumeChart = screen.getByRole("img", {
-      name: "Volume ticket theo tuần",
+      name: "Số ticket theo tuần",
     });
     vi.spyOn(volumeChart, "getBoundingClientRect").mockReturnValue({
       bottom: 300,

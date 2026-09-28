@@ -558,7 +558,7 @@ describe("DashboardScreen", () => {
 
     expect(await screen.findByRole("heading", { level: 1 })).toBeVisible();
     for (const id of [
-      "statusChip",
+      "updatedAt",
       "dynamicTitle",
       "kpiGrid",
       "weeklyRows",
@@ -572,8 +572,7 @@ describe("DashboardScreen", () => {
     const header = screen.getByRole("banner");
     expect(document.getElementById("dqBadge")).toBeNull();
     expect(within(header).queryByText(/Skill.*(?:thiếu|%)/)).toBeNull();
-    expect(document.getElementById("updatedAt")).toHaveTextContent("dữ liệu cũ");
-    expect(document.getElementById("statusChip")).toHaveTextContent("Dữ liệu cũ");
+    expect(document.body).not.toHaveTextContent(/dữ liệu cũ/i);
   });
 
   it("ships the required operating controls and applies the stuck-ticket drill-down", async () => {
@@ -645,6 +644,45 @@ describe("DashboardScreen", () => {
     expect(document.body).not.toHaveTextContent(
       /rule đã bắn|guard chặn|khoảng trống rule/i,
     );
+  });
+
+  it("loads the Explorer's first page once, already scoped to the report week", async () => {
+    const ticketQueries: string[] = [];
+    const listener = ({ request }: { request: Request }) => {
+      const url = new URL(request.url);
+      if (url.pathname === "/api/tickets") {
+        ticketQueries.push(url.searchParams.get("cohort_week") ?? "");
+      }
+    };
+    server.events.on("request:start", listener);
+    render(<DashboardScreen />);
+
+    expect(
+      await screen.findByRole("heading", { name: /T2–T6.*7 ticket/i }),
+    ).toBeVisible();
+    await waitFor(() => expect(ticketQueries.length).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    server.events.removeListener("request:start", listener);
+    expect(ticketQueries).toHaveLength(1);
+    expect(ticketQueries[0]).not.toBe("");
+  });
+
+  it("reopens the linked view from the hash and writes changes back (D7)", async () => {
+    window.history.replaceState(null, "", "/#v=mon_sun&f=outcome:direct_cs");
+    const user = userEvent.setup();
+    render(<DashboardScreen />);
+
+    expect(
+      await screen.findByRole("heading", { name: /T2–CN/i }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toHaveTextContent("Kết quả: Chuyển CS ngay từ đầu");
+
+    await user.click(screen.getByRole("button", { name: "Xoá lọc" }));
+    expect(window.location.hash).toBe("#v=mon_sun");
   });
 
   it("opens the Ticket Explorer with matching filters from a clickable ledger cell", async () => {
@@ -721,7 +759,7 @@ describe("DashboardScreen", () => {
     render(<DashboardScreen />);
 
     await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
-    const csatSection = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
+    const csatSection = screen.getByRole("region", { name: "Mức hài lòng" });
     await user.click(within(csatSection).getByRole("button", { name: "Xem 2 nội dung phản hồi" }));
     expect(
       within(csatSection).queryByRole("button", { name: "AI xử lý trọn" }),
@@ -809,7 +847,7 @@ describe("DashboardScreen", () => {
 
     await screen.findByRole("heading", { name: /T2–T6.*ticket/i });
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     await user.click(
       within(csatSection).getByRole("button", {
@@ -957,7 +995,7 @@ describe("DashboardScreen", () => {
 
     expect(document.getElementById("csatBreakdownGroupingInput")).not.toBeNull();
 
-    const csatSection = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
+    const csatSection = screen.getByRole("region", { name: "Mức hài lòng" });
     await user.click(
       within(csatSection).getByRole("button", { name: "Xem 2 nội dung phản hồi" }),
     );

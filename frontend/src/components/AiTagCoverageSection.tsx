@@ -79,7 +79,7 @@ export function AiTagCoverageSection({
         aria-labelledby="ai-tag-coverage-title"
       >
         <h2 id="ai-tag-coverage-title" className={styles.sectionTitle}>
-          Độ phủ xử lý từ Freshdesk
+          Độ phủ Freshdesk
         </h2>
         <p className={entryStyles.empty}>
           {aiTagCoverage === null
@@ -150,7 +150,7 @@ export function AiTagCoverageSection({
     >
       <div className={styles.sectionHead}>
         <h2 id="ai-tag-coverage-title" className={styles.sectionTitle}>
-          Độ phủ xử lý từ Freshdesk
+          Độ phủ Freshdesk
         </h2>
         <span className={entryStyles.fetchedAt}>
           Cập nhật {formatUpdatedAt(aiTagCoverage.fetched_at)}

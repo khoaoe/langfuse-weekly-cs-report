@@ -3,7 +3,8 @@ import { defineConfig, devices } from "@playwright/test";
 const BASE_URL = "http://127.0.0.1:18765";
 
 /**
- * Four runs cover the contract: desktop and mobile, light and dark.
+ * Two runs cover the contract: light and dark at desktop width. The dashboard
+ * is desktop only (1280–2560px); specs that need another width set it.
  * The server is the real FastAPI application with a fixed snapshot, so the
  * security headers, `/assets` route and SPA document under test are the ones
  * that ship.
@@ -38,28 +39,6 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 900 },
-        colorScheme: "dark",
-      },
-    },
-    {
-      name: "mobile-light",
-      use: {
-        ...devices["Desktop Chrome"],
-        viewport: { width: 390, height: 844 },
-        deviceScaleFactor: 3,
-        isMobile: true,
-        hasTouch: true,
-        colorScheme: "light",
-      },
-    },
-    {
-      name: "mobile-dark",
-      use: {
-        ...devices["Desktop Chrome"],
-        viewport: { width: 390, height: 844 },
-        deviceScaleFactor: 3,
-        isMobile: true,
-        hasTouch: true,
         colorScheme: "dark",
       },
     },

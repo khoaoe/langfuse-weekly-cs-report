@@ -1,6 +1,6 @@
 .fetchedAt {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .flow {
@@ -81,7 +81,7 @@
 
 .detailTitle {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-h3);
 }
 
 .ticketChipGrid {
@@ -118,7 +118,7 @@
   gap: var(--space-3);
   margin-top: var(--space-3);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .empty {

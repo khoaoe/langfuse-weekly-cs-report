@@ -335,7 +335,7 @@ describe("Weekly Report", () => {
     const table = screen.getByRole("table", { name: /Báo cáo tuần/ });
     expect(
       screen.getByRole("region", {
-        name: "Báo cáo tuần T2–CN",
+        name: "Báo cáo tuần",
       }),
     ).toBeVisible();
     const firstResponseGroup = within(table).getByRole("columnheader", {
@@ -501,17 +501,13 @@ describe("Weekly Report", () => {
     );
   });
 
-  it("exposes the full column set through an explicit control", async () => {
-    const user = userEvent.setup();
+  it("always shows every column, with no collapse control (D13)", () => {
     renderWithQuery(<WeeklyReport snapshot={baseSnapshot} weekDefinition="mon_sun" />);
 
-    const toggle = screen.getByRole("button", { name: "Xem đủ cột" });
-    expect(toggle).toHaveAttribute("aria-pressed", "false");
-    await user.click(toggle);
-    expect(screen.getByRole("button", { name: "Rút gọn cột" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    const table = screen.getByRole("table", { name: /Báo cáo tuần/ });
+    const lastHeaderRow = within(table).getAllByRole("row")[1];
+    expect(within(lastHeaderRow!).getAllByRole("columnheader")).toHaveLength(19);
+    expect(screen.queryByRole("button", { name: /Xem đủ cột|Rút gọn cột/ })).toBeNull();
   });
 
   it("keeps CSAT comments out of the governed 14-column TSV and CSV", async () => {
@@ -577,7 +573,7 @@ describe("Below-fold analysis", () => {
       ),
     );
 
-    const section = screen.getByRole("region", { name: "Độ phủ xử lý từ Freshdesk" });
+    const section = screen.getByRole("region", { name: "Độ phủ Freshdesk" });
     const missedRow = within(section)
       .getByText("Có tag #AI nhưng CS agent không xử lý")
       .closest("div")!;
@@ -593,7 +589,7 @@ describe("Below-fold analysis", () => {
       belowFold(snapshotWithAiTagCoverage({ "2026-07-20": aiTagBucket() })),
     );
 
-    const section = screen.getByRole("region", { name: "Độ phủ xử lý từ Freshdesk" });
+    const section = screen.getByRole("region", { name: "Độ phủ Freshdesk" });
     expect(within(section).getAllByText("—")).toHaveLength(3);
     for (const button of within(section).getAllByRole("button", { name: "Xem ticket" })) {
       expect(button).toBeDisabled();
@@ -606,7 +602,7 @@ describe("Below-fold analysis", () => {
     expect(
       screen.getByText(/Cần ít nhất 2 tuần có dữ liệu mới vẽ được xu hướng/),
     ).toBeVisible();
-    expect(screen.queryByRole("img", { name: /Volume ticket theo tuần/ })).toBeNull();
+    expect(screen.queryByRole("img", { name: /Số ticket theo tuần/ })).toBeNull();
   });
 
   it("draws aligned week labels and marks WTD in both separate trend charts", () => {
@@ -620,13 +616,13 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const volumeChart = screen.getByRole("img", {
-      name: /Volume ticket theo tuần/,
+      name: /Số ticket theo tuần/,
     });
     expect(volumeChart).toBeVisible();
     const rateChart = screen.getByRole("img", {
       name: /Tỷ lệ AI First và reopen theo tuần/,
     });
-    expect(rateChart).toHaveAccessibleDescription(/Volume nằm ở biểu đồ phía trên/);
+    expect(rateChart).toHaveAccessibleDescription(/Số ticket nằm ở biểu đồ phía trên/);
     expect(within(volumeChart).getByText("06/07")).toBeVisible();
     expect(within(rateChart).getByText("06/07")).toBeVisible();
     expect(within(volumeChart).getByText("27/07 · WTD")).toBeVisible();
@@ -645,7 +641,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot, { onWeekSelect }));
 
     const volumeChart = screen.getByRole("img", {
-      name: /Volume ticket theo tuần/,
+      name: /Số ticket theo tuần/,
     });
     const pointerTarget = volumeChart.querySelector(
       '[data-week-target="2026-07-13"]',
@@ -709,7 +705,7 @@ describe("Below-fold analysis", () => {
 
     const segmentSection = document.getElementById("segments");
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(segmentSection?.nextElementSibling).toBe(csatSection);
     // freshdeskCookieState defaults to null (unknown) here — the section must
@@ -753,7 +749,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(csatSection).not.toHaveTextContent("Chưa kết nối Freshdesk");
     expect(
@@ -793,7 +789,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(csatSection).getByText(/Phạm vi CSAT: 20\/07–21\/07/),
@@ -829,7 +825,7 @@ describe("Below-fold analysis", () => {
     );
 
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(csatSection).toHaveTextContent(
       "Khoảng ngày đã chọn không chạm tuần nào có dữ liệu CSAT.",
@@ -841,7 +837,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(baseSnapshot, { freshdeskCookieState: null }));
 
     const csatSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(csatSection).getByRole("button", { name: "Kết nối Freshdesk" }),
@@ -941,7 +937,7 @@ describe("Below-fold analysis", () => {
     });
 
     renderWithQuery(belowFold(snapshot));
-    const section = screen.getByRole("region", { name: "Câu trả lời tốt tới đâu" });
+    const section = screen.getByRole("region", { name: "Mức hài lòng" });
     const grouping = within(section).getByRole("combobox", { name: "Nhóm theo" });
     expect(within(grouping).getAllByRole("option").map((option) => option.textContent)).toEqual([
       "Kết quả xử lý",
@@ -1024,7 +1020,7 @@ describe("Below-fold analysis", () => {
       renderWithQuery(belowFold(snapshot, { activeWeek: "2026-07-13" }));
 
       const section = screen.getByRole("region", {
-        name: "Câu trả lời tốt tới đâu",
+        name: "Mức hài lòng",
       });
       const rows = within(section).getAllByRole("row");
       expect(rows).toHaveLength(3);
@@ -1078,7 +1074,7 @@ describe("Below-fold analysis", () => {
     const latestRender = renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(section).queryByRole("combobox", { name: "Tuần CSAT" }),
@@ -1092,7 +1088,7 @@ describe("Below-fold analysis", () => {
       belowFold(snapshot, { activeWeek: "2026-07-13" }),
     );
     const previousSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(previousSection).getByRole("row", { name: /Tổng/ }),
@@ -1103,7 +1099,7 @@ describe("Below-fold analysis", () => {
     previousRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(allPeriodSection).getByRole("row", { name: /Tổng/ }),
@@ -1171,7 +1167,7 @@ describe("Below-fold analysis", () => {
     const latestRender = renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(section)
@@ -1201,7 +1197,7 @@ describe("Below-fold analysis", () => {
     latestRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
 
     expect(
@@ -1289,7 +1285,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     const disclosure = within(section).getByRole("button", {
       name: "Xem 3 nội dung phản hồi",
@@ -1367,7 +1363,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     await user.click(
       within(section).getByRole("button", {
@@ -1449,7 +1445,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     const disclosure = within(section).getByRole("button", {
       name: "Xem 11 nội dung phản hồi",
@@ -1483,7 +1479,7 @@ describe("Below-fold analysis", () => {
     renderWithQuery(belowFold(snapshot));
 
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     await user.click(
       within(section).getByRole("button", {
@@ -1552,7 +1548,7 @@ describe("Below-fold analysis", () => {
 
     const latestRender = renderWithQuery(belowFold(snapshot));
     const section = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(section).queryByRole("button", { name: /nội dung phản hồi/ }),
@@ -1561,7 +1557,7 @@ describe("Below-fold analysis", () => {
     latestRender.unmount();
     renderWithQuery(belowFold(snapshot, { allWeeks: true }));
     const allPeriodSection = screen.getByRole("region", {
-      name: "Câu trả lời tốt tới đâu",
+      name: "Mức hài lòng",
     });
     expect(
       within(allPeriodSection).getByRole("button", {
@@ -1601,7 +1597,7 @@ describe("Below-fold analysis", () => {
     expect(screen.queryByText(/không phải nguyên nhân đã chứng minh/)).toBeNull();
     expect(
       screen.getByRole("heading", {
-        name: "Tín hiệu chuyển CS và ticket có hơn 3 lượt xử lý",
+        name: "Chẩn đoán chuyển CS",
       }),
     ).toBeVisible();
 
@@ -1894,7 +1890,7 @@ describe("Below-fold analysis", () => {
 
     expect(
       screen.getByRole("heading", {
-        name: "So sánh theo thuộc tính ticket",
+        name: "So sánh segment",
       }),
     ).toBeVisible();
     expect(screen.queryByText(/không tự gộp hoặc diễn giải lại/)).toBeNull();

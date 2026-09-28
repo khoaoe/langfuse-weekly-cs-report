@@ -54,9 +54,19 @@
   --critical-text: #b42318;
   --focus: #0033c9;
 
-  /* dataviz palette, contrast-validated as a pair against surface */
-  --series-primary: #0068ff;
-  --series-secondary: #a45f00;
+  /* Type scale (D18): numbers are tabular everywhere they are compared. */
+  --text-caption: 12px;
+  --text-table: 13px;
+  --text-body: 15px;
+  --text-h3: 17px;
+  --text-h2: 20px;
+
+  /* One colour, one meaning, on every chart (D19). Each mark is >=3:1
+     against surface and surface-sunken in both themes. */
+  --interactive-soft: #eaf0fe;
+  --series-ai-first: #0033c9;
+  --series-total: #7b8594;
+  --series-reopen: #c46a00;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -70,7 +80,8 @@
   --radius-tight: 2px;
 
   --gutter: 32px;
-  --content-max: 1600px;
+  /* Tables and charts may use up to ~2400px; running text stops at 75ch. */
+  --content-max: 2400px;
   --shell-shadow: 0 1px 0 rgb(17 20 24 / 8%), 0 2px 8px rgb(17 20 24 / 6%);
 
   /* Live sticky-header height, set by AppShell; 0 until it mounts. */
@@ -101,8 +112,10 @@
   --warning-text: #ffc978;
   --critical-text: #ff9c93;
   --focus: #8fa9ec;
-  --series-primary: #3b86e8;
-  --series-secondary: #b07a2e;
+  --interactive-soft: #1c2742;
+  --series-ai-first: #6685df;
+  --series-total: #6b7684;
+  --series-reopen: #ffab3d;
   --shell-shadow: 0 1px 0 rgb(0 0 0 / 60%), 0 2px 10px rgb(0 0 0 / 40%);
 }
 
@@ -124,8 +137,10 @@
     --warning-text: #ffc978;
     --critical-text: #ff9c93;
     --focus: #8fa9ec;
-    --series-primary: #3b86e8;
-    --series-secondary: #b07a2e;
+    --interactive-soft: #1c2742;
+    --series-ai-first: #6685df;
+    --series-total: #6b7684;
+    --series-reopen: #ffab3d;
     --shell-shadow: 0 1px 0 rgb(0 0 0 / 60%), 0 2px 10px rgb(0 0 0 / 40%);
   }
 }
@@ -168,7 +183,8 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
   font-weight: 400;
   line-height: 1.5;
   /* `clip` refuses sideways scrolling without turning the body into a scroll

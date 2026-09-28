@@ -37,7 +37,7 @@
   color: var(--ink);
   background: var(--surface);
   box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 14%, transparent);
-  font-size: 13px;
+  font-size: var(--text-table);
   line-height: 1.35;
   pointer-events: none;
 }
@@ -53,8 +53,9 @@
 
 .chartSvg {
   display: block;
-  width: max(720px, 100%);
+  width: 100%;
   height: auto;
+  max-height: 300px;
 }
 
 .chartViewport {
@@ -69,7 +70,7 @@
 
 .axisLabel {
   fill: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-caption);
 }
 
 .wtdMarker {
@@ -106,23 +107,38 @@
   stroke: var(--focus);
 }
 
-.seriesPrimaryFill {
-  fill: var(--series-primary);
+.seriesTotalFill {
+  fill: var(--series-total);
 }
 
-.seriesSecondaryFill {
-  fill: var(--series-secondary);
+.seriesAiFirstFill {
+  fill: var(--series-ai-first);
 }
 
-.seriesPrimaryStroke {
+.seriesAiFirstStroke {
   fill: none;
-  stroke: var(--series-primary);
+  stroke: var(--series-ai-first);
   stroke-width: 2;
 }
 
-.seriesSecondaryStroke {
+.seriesReopenStroke {
   fill: none;
-  stroke: var(--series-secondary);
+  stroke: var(--series-reopen);
+  stroke-width: 2;
+  stroke-dasharray: 6 3;
+}
+
+/* A/B arms are models, not outcomes: neutral ink vs dashed gray so they never
+   borrow the AI First or reopen colour. */
+.armAStroke {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.armBStroke {
+  fill: none;
+  stroke: var(--series-total);
   stroke-width: 2;
   stroke-dasharray: 6 3;
 }
@@ -132,7 +148,7 @@
   flex-wrap: wrap;
   gap: var(--space-3);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .legendItem {
@@ -141,22 +157,34 @@
   gap: var(--space-2);
 }
 
-.swatchPrimary,
-.swatchSecondary {
+.swatchTotal,
+.swatchAiFirst,
+.swatchReopen,
+.swatchArmA,
+.swatchArmB {
   width: 12px;
   height: 12px;
   border-radius: var(--radius-tight);
 }
 
-.swatchPrimary {
-  background: var(--series-primary);
+.swatchTotal,
+.swatchArmB {
+  background: var(--series-total);
 }
 
-.swatchSecondary {
-  background: var(--series-secondary);
+.swatchAiFirst {
+  background: var(--series-ai-first);
 }
 
-@media (min-width: 1500px) {
+.swatchReopen {
+  background: var(--series-reopen);
+}
+
+.swatchArmA {
+  background: var(--ink);
+}
+
+@media (min-width: 1200px) {
   .charts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

@@ -24,6 +24,7 @@ import {
   scopeSnapshotToWeeks,
 } from "../lib/report-scope";
 import { AB_TEST_ENABLED } from "../lib/api";
+import { decodeDeepLink, encodeDeepLink, type DeepLinkScope } from "../lib/deep-link";
 import { formatDateRangeLabel } from "../lib/format";
 import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
@@ -46,11 +47,27 @@ function scrollToSection(id: string, focusId?: string) {
   }
 }
 
-type ReportScopeState =
-  | { readonly mode: "latest" }
-  | { readonly mode: "all" }
-  | { readonly mode: "weeks"; readonly weeks: readonly string[] }
-  | { readonly mode: "range"; readonly from: string; readonly to: string };
+type ReportScopeState = DeepLinkScope;
+
+/** Read once at mount: a shared link reopens the same scope and filters. */
+function initialDeepLink() {
+  const link = decodeDeepLink(window.location.hash);
+  const scope: ReportScopeState = link.scope ?? { mode: "latest" };
+  const scopePatch =
+    scope.mode === "range"
+      ? explorerDayRangePatch(scope.from, scope.to)
+      : scope.mode === "weeks"
+        ? explorerWeekPatch(scope.weeks)
+        : {};
+  return {
+    weekDefinition: link.weekDefinition ?? ("mon_fri" as WeekDefinition),
+    scope,
+    filters: updateTicketFilters(
+      { ...EMPTY_TICKET_FILTERS, ...link.filters },
+      scopePatch,
+    ),
+  };
+}
 
 function explorerWeekPatch(value: "all" | readonly string[]) {
   if (value === "all") {
@@ -69,11 +86,27 @@ function explorerDayRangePatch(from: string, to: string) {
 }
 
 function DashboardBody() {
-  const [weekDefinition, setWeekDefinition] = useState<WeekDefinition>("mon_fri");
-  const [reportScope, setReportScope] = useState<ReportScopeState>({
-    mode: "latest",
-  });
-  const [filters, setFilters] = useState<TicketFilters>(EMPTY_TICKET_FILTERS);
+  const [initial] = useState(initialDeepLink);
+  const [weekDefinition, setWeekDefinition] = useState<WeekDefinition>(
+    initial.weekDefinition,
+  );
+  const [reportScope, setReportScope] = useState<ReportScopeState>(
+    initial.scope,
+  );
+  const [filters, setFilters] = useState<TicketFilters>(initial.filters);
+  useEffect(() => {
+    const hash = encodeDeepLink({ weekDefinition, scope: reportScope, filters });
+    // Leave a hash this view did not write (e.g. `#ab-test`) alone until the
+    // reader changes something worth linking.
+    if (hash === "" && !window.location.hash.includes("=")) {
+      return;
+    }
+    window.history.replaceState(
+      null,
+      "",
+      hash === "" ? window.location.pathname + window.location.search : `#${hash}`,
+    );
+  }, [filters, reportScope, weekDefinition]);
   const [activeDay, setActiveDay] = useState("");
   const { state, refresh, refreshDisabled, refreshHint } = useDashboardRuntime();
   const { state: freshdeskCookie, submitCookie } = useFreshdeskCookieStatus();
@@ -224,6 +257,9 @@ function DashboardBody() {
   // value, not by object reference, makes the "once" in the comment above
   // actually true.
   const syncedWeekPatchKeyRef = useRef<string | null>(null);
+  // The Explorer waits for the first scope sync; otherwise it fetches an
+  // unscoped page and then the scoped one, doubling the load's ticket query.
+  const [explorerScoped, setExplorerScoped] = useState(false);
   useEffect(() => {
     if (!hasSnapshot) {
       return;
@@ -244,6 +280,7 @@ function DashboardBody() {
     }
     syncedWeekPatchKeyRef.current = patchKey;
     setFilters((current) => updateTicketFilters(current, currentExplorerWeekPatch));
+    setExplorerScoped(true);
   }, [currentExplorerWeekPatch, hasSnapshot]);
 
   useEffect(() => {
@@ -454,13 +491,15 @@ function DashboardBody() {
             }}
             freshdeskCookieState={freshdeskCookie?.state ?? null}
             onOpenFreshdeskCookieDialog={() => setCookieDialogOpen(true)}
-          />
-          <TicketExplorer
-            snapshot={snapshot}
-            weekDefinition={weekDefinition}
-            enabled={state.kind !== "loading"}
-            filters={filters}
-            onFiltersChange={setFilters}
+            explorer={
+              <TicketExplorer
+                snapshot={snapshot}
+                weekDefinition={weekDefinition}
+                enabled={state.kind !== "loading" && explorerScoped}
+                filters={filters}
+                onFiltersChange={setFilters}
+              />
+            }
           />
         </>
       )}

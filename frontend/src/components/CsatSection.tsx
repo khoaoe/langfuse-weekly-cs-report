@@ -751,7 +751,7 @@ export function CsatSection({
       <div className={styles.sectionHead}>
         <div>
           <h2 id="csat-title" className={styles.sectionTitle}>
-            Câu trả lời tốt tới đâu
+            Mức hài lòng
           </h2>
         </div>
       </div>

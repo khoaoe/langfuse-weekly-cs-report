@@ -1,7 +1,7 @@
 .scopeNote {
   margin: 0 0 var(--space-3);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .rangeRow {
@@ -28,7 +28,7 @@
   align-items: center;
   padding: 0 var(--space-3);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
 }
 
@@ -46,7 +46,7 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   white-space: nowrap;
 }
 
@@ -84,7 +84,7 @@
 .tableTitle {
   margin: 0 0 var(--space-3);
   color: var(--ink);
-  font-size: 16px;
+  font-size: var(--text-h3);
   font-weight: 500;
 }
 
@@ -118,7 +118,7 @@
   align-items: center;
   gap: var(--space-2);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 .chartMetricPicker select {
@@ -129,7 +129,7 @@
   background: var(--surface);
   color: var(--ink);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-table);
 }
 
 /* Unlike the trend charts this one must shrink into its column, so it scales
@@ -144,7 +144,7 @@
 .warningNote {
   margin: 0 0 var(--space-2);
   color: var(--warning-text);
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
 }
 
@@ -153,7 +153,7 @@
 .groupRow th {
   background: var(--surface-sunken);
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-caption);
   font-weight: 600;
   letter-spacing: 0.02em;
   text-transform: uppercase;
@@ -164,7 +164,7 @@
   display: block;
   margin-top: 2px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--text-caption);
   font-weight: 400;
   white-space: normal;
 }
@@ -216,7 +216,7 @@
   border-radius: var(--radius-tight);
   background: var(--surface);
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--text-table);
   cursor: pointer;
 }
 
@@ -239,7 +239,7 @@
   align-items: center;
   padding: 0 var(--space-3);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--text-table);
   font-weight: 500;
 }
 

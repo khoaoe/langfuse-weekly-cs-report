@@ -27,10 +27,6 @@ import {
   type TicketFilters,
 } from "../src/lib/dashboard-filters";
 import {
-  calculateDataQualityScore,
-  formatDataAge,
-} from "../src/lib/data-quality-score";
-import {
   TICKET_COLUMNS,
   TICKET_COLUMN_STORAGE_KEY,
 } from "../src/lib/ticket-columns";
@@ -75,12 +71,33 @@ function shell(
 }
 
 describe("App shell operating states", () => {
-  it("marks the ready status with the dedicated success treatment", () => {
-    render(shell({ ...baseSnapshot, generated_at: new Date().toISOString() }));
+  it("shows no status chip once ready and never calls old data stale", () => {
+    // D14: no freshness judgement -- a snapshot hours old reads exactly like
+    // a new one; only the neutral update time is shown.
+    render(shell({ ...baseSnapshot, generated_at: "2020-01-01T00:00:00Z" }));
 
-    const status = document.getElementById("statusChip");
-    expect(status).toHaveAttribute("data-state", "ready");
-    expect(status?.className).toMatch(/runtimeReady/);
+    expect(document.getElementById("statusChip")).toBeNull();
+    expect(document.getElementById("updatedAt")?.parentElement).toHaveTextContent(
+      /^Cập nhật lúc /,
+    );
+    expect(document.body).not.toHaveTextContent(/dữ liệu cũ/i);
+  });
+
+  it("names a failed refresh without a staleness verdict", () => {
+    render(shell(baseSnapshot, { runtimeKind: "stale_error" }));
+
+    expect(document.getElementById("statusChip")).toHaveTextContent("Cập nhật lỗi");
+    expect(document.body).not.toHaveTextContent(/dữ liệu cũ/i);
+  });
+
+  it("keeps the Freshdesk cookie prompt out of the header and shows it only when expired", () => {
+    const { rerender } = render(shell(baseSnapshot, { freshdeskCookieState: "missing" }));
+    expect(document.getElementById("freshdeskCookieChip")).toBeNull();
+
+    rerender(shell(baseSnapshot, { freshdeskCookieState: "expired" }));
+    const chip = document.getElementById("freshdeskCookieChip");
+    expect(chip).not.toBeNull();
+    expect(screen.getByRole("banner")).not.toContainElement(chip);
   });
 
   it("never renders the retired per-dimension coverage badge or the quality chip", () => {
@@ -151,53 +168,52 @@ describe("App shell operating states", () => {
     expect(document.getElementById("data-trust")).toBeNull();
   });
 
-  it("tracks the section whose top has scrolled under the sticky header, and stops updating after unmount", () => {
-    const view = render(shell(baseSnapshot));
-    const header = screen.getByRole("banner");
-    const weekly = document.getElementById("weekly");
-    const tickets = document.getElementById("tickets");
-    if (weekly === null || tickets === null) {
-      throw new Error("fixture is missing the weekly/tickets sections");
+  it("tracks the section crossing the band under the sticky header, and stops after unmount", () => {
+    const observers: Array<{
+      callback: IntersectionObserverCallback;
+      options: IntersectionObserverInit | undefined;
+      disconnect: ReturnType<typeof vi.fn>;
+    }> = [];
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        disconnect = vi.fn();
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          observers.push({ callback, options, disconnect: this.disconnect });
+        }
+        observe() {}
+      },
+    );
+    try {
+      const view = render(shell(baseSnapshot));
+      const latest = observers.at(-1)!;
+      expect(latest.options?.rootMargin).toMatch(/^-\d+px 0px -\d+px 0px$/);
+
+      const cross = (id: string) =>
+        act(() => {
+          latest.callback(
+            [{ target: document.getElementById(id)!, isIntersecting: true } as unknown as IntersectionObserverEntry],
+            {} as IntersectionObserver,
+          );
+        });
+      cross("tickets");
+      expect(screen.getByRole("link", { name: "Ticket Explorer" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+      expect(screen.getByRole("link", { name: "Báo cáo tuần" })).not.toHaveAttribute("aria-current");
+
+      cross("weekly");
+      expect(screen.getByRole("link", { name: "Báo cáo tuần" })).toHaveAttribute(
+        "aria-current",
+        "location",
+      );
+
+      view.unmount();
+      expect(latest.disconnect).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
     }
-
-    vi.spyOn(header, "getBoundingClientRect").mockReturnValue({
-      height: 100,
-    } as unknown as DOMRect);
-    const weeklyRect = vi.spyOn(weekly, "getBoundingClientRect");
-    const ticketsRect = vi.spyOn(tickets, "getBoundingClientRect");
-
-    // Both sections have scrolled past the header — the last one wins.
-    weeklyRect.mockReturnValue({ top: -400 } as unknown as DOMRect);
-    ticketsRect.mockReturnValue({ top: 50 } as unknown as DOMRect);
-    act(() => {
-      window.dispatchEvent(new Event("scroll"));
-    });
-    expect(
-      screen.getByRole("link", { name: "Ticket Explorer" }),
-    ).toHaveAttribute("aria-current", "location");
-    expect(
-      screen.getByRole("link", { name: "Báo cáo tuần" }),
-    ).not.toHaveAttribute("aria-current");
-
-    // Ticket Explorer scrolls back below the header — Báo cáo tuần leads again.
-    ticketsRect.mockReturnValue({ top: 500 } as unknown as DOMRect);
-    act(() => {
-      window.dispatchEvent(new Event("scroll"));
-    });
-    expect(
-      screen.getByRole("link", { name: "Báo cáo tuần" }),
-    ).toHaveAttribute("aria-current", "location");
-
-    const removeListener = vi.spyOn(window, "removeEventListener");
-    view.unmount();
-    expect(removeListener).toHaveBeenCalledWith(
-      "scroll",
-      expect.any(Function),
-    );
-    expect(removeListener).toHaveBeenCalledWith(
-      "resize",
-      expect.any(Function),
-    );
   });
 });
 
@@ -818,42 +834,6 @@ describe("Ticket Explorer behavioral branches", () => {
   });
 });
 
-describe("data-quality boundary formatting", () => {
-  it("treats invalid and future timestamps safely and names every age band", () => {
-    const invalid = calculateDataQualityScore(
-      { ...baseSnapshot, generated_at: "not-a-date" },
-      Date.parse("2026-07-30T00:00:00Z"),
-    );
-    const future = calculateDataQualityScore(
-      { ...baseSnapshot, generated_at: "2026-07-30T00:01:00Z" },
-      Date.parse("2026-07-30T00:00:00Z"),
-    );
-    const farFuture = calculateDataQualityScore(
-      { ...baseSnapshot, generated_at: "2026-07-30T00:05:00Z" },
-      Date.parse("2026-07-30T00:00:00Z"),
-    );
-
-    expect(invalid).toMatchObject({
-      ageMs: null,
-      freshnessOk: false,
-    });
-    expect(future).toMatchObject({
-      ageMs: -60_000,
-      freshnessOk: true,
-    });
-    expect(farFuture).toMatchObject({
-      ageMs: -5 * 60_000,
-      freshnessOk: false,
-    });
-    expect(formatDataAge(null)).toBe("không xác định");
-    expect(formatDataAge(-1)).toBe("đồng hồ thiết bị lệch");
-    expect(formatDataAge(30_000)).toBe("dưới 1 phút");
-    expect(formatDataAge(12 * 60_000)).toBe("12 phút");
-    expect(formatDataAge(2 * 60 * 60_000 + 5 * 60_000)).toBe(
-      "2 giờ 5 phút",
-    );
-  });
-});
 
 const TOOL_ERROR_SNAPSHOT: DashboardSnapshot = {
   ...baseSnapshot,
