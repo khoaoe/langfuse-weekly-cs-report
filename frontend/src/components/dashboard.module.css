@@ -101,6 +101,27 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* Label and chip share one grid cell; an invisible copy of the widest chip
+   (CSS-only, so it stays out of the text) fixes the cell's width. */
+.metaLabel {
+  display: inline-grid;
+  align-items: center;
+  justify-items: end;
+}
+
+.metaLabel > *,
+.metaLabel::before {
+  grid-area: 1 / 1;
+}
+
+.metaLabel::before {
+  content: "Đang cập nhật";
+  visibility: hidden;
+  padding: 0 calc(var(--space-2) + 1px);
+  font-size: var(--text-caption);
+  font-weight: 500;
+}
+
 .runtimeChip {
   display: inline-flex;
   align-items: center;

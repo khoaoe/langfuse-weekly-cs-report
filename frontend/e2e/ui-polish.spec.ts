@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 
 const LONG_TOOL_ERRORS = [
   "get_bank_code_by_bank_name:UNKNOWN_BANK_NAME",
@@ -127,4 +127,38 @@ test.describe("UI polish round 1", () => {
     );
     expect(loose).toEqual([]);
   });
+
+  for (const width of [1280, 1440, 1920]) {
+    test(`the refreshing chip does not move the header at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openDashboard(page);
+      const layout = () =>
+        page.evaluate(() =>
+          ["#refreshButton", "#weekDefinitionToggle", "header nav"].map((selector) => {
+            const box = document.querySelector(selector)!.getBoundingClientRect();
+            return [Math.round(box.left), Math.round(box.top)];
+          }),
+        );
+      // Measure after the brand font swaps in; the swap itself resizes text.
+      await page.evaluate(() => document.fonts.ready);
+      const before = await layout();
+      // Serve a "refreshing" envelope for the refresh and every poll after it,
+      // so the chip shows regardless of the server's shared refresh cooldown.
+      const refreshing = async (route: Route) => {
+        try {
+          const response = await route.fetch({ url: "/api/dashboard", method: "GET" });
+          const body = await response.json();
+          body.refreshing = true;
+          await route.fulfill({ status: route.request().method() === "POST" ? 202 : 200, json: body });
+        } catch {
+          // page closed
+        }
+      };
+      await page.route("**/api/refresh", refreshing);
+      await page.route("**/api/dashboard**", refreshing);
+      await page.locator("#refreshButton").click();
+      await expect(page.locator("#statusChip")).toBeVisible();
+      expect(await layout()).toEqual(before);
+    });
+  }
 });
