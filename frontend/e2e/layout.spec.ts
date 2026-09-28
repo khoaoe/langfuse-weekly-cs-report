@@ -14,7 +14,9 @@ test("shows the first weekly row above the fold at 1280×800", async ({ page }, 
   expect(bottom).toBeLessThanOrEqual(800);
 });
 
-test("fits all 19 weekly columns at 1920 with a sticky week column", async ({ page }, testInfo) => {
+// PO 2026-09-28: one-line headers that scroll sideways beat wrapped headers
+// squeezed to fit, so 19 columns may overflow even at 1920.
+test("keeps 19 one-line weekly columns with a sticky week column at 1920", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop-light", "geometry, one run");
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto("/");
@@ -28,12 +30,12 @@ test("fits all 19 weekly columns at 1920 with a sticky week column", async ({ pa
     const weekCell = node.querySelector("tbody th");
     return {
       columns: columns.length,
-      overflow: scroller.scrollWidth - scroller.clientWidth,
+      scrollable: getComputedStyle(scroller).overflowX,
       weekPosition: weekCell === null ? "" : getComputedStyle(weekCell).position,
     };
   });
   expect(layout.columns).toBe(19);
-  expect(layout.overflow).toBeLessThanOrEqual(1);
+  expect(layout.scrollable).toBe("auto");
   expect(layout.weekPosition).toBe("sticky");
 });
 
