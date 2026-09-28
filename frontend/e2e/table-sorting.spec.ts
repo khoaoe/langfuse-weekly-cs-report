@@ -24,8 +24,6 @@ function dashboardWithSortableRows() {
         ai_then_cs_count: 1,
         direct_cs_count: 1,
         unclassified_count: 0,
-        reopen_7d_rate: 0.5,
-        reopen_7d_denominator: 2,
         reopen_lifetime_rate: 0.5,
         reopen_lifetime_numerator: 1,
         reopen_lifetime_denominator: 2,

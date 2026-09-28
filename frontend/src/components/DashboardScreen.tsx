@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import type { WeekDefinition } from "../lib/dashboard-schema";
@@ -26,7 +26,6 @@ import {
 import { AB_TEST_ENABLED } from "../lib/api";
 import { decodeDeepLink, encodeDeepLink, type DeepLinkScope } from "../lib/deep-link";
 import { formatDateRangeLabel } from "../lib/format";
-import { AbTestSection } from "./AbTestSection";
 import { AppShell } from "./AppShell";
 import { BelowFold } from "./BelowFold";
 import { DecisionLedger } from "./DecisionLedger";
@@ -34,6 +33,11 @@ import { FreshdeskCookieDialog } from "./FreshdeskCookieDialog";
 import { TicketExplorer } from "./TicketExplorer";
 import { WeeklyReport } from "./WeeklyReport";
 import styles from "./dashboard.module.css";
+
+// Off by default (AB_TEST_ENABLED); kept out of the initial bundle.
+const AbTestSection = lazy(() =>
+  import("./AbTestSection").then((module) => ({ default: module.AbTestSection })),
+);
 
 function scrollToSection(id: string, focusId?: string) {
   const section = document.getElementById(id);
@@ -507,11 +511,13 @@ function DashboardBody() {
           its own time window, so it must not wait on the (slower, more
           fragile) full weekly pipeline. */}
       {AB_TEST_ENABLED && (
-        <AbTestSection
-          selectedReportWeeks={selectedReportWeeks}
-          weekDefinition={weekDefinition}
-          reportRange={reportScope.mode === "range" ? reportScope : null}
-        />
+        <Suspense fallback={null}>
+          <AbTestSection
+            selectedReportWeeks={selectedReportWeeks}
+            weekDefinition={weekDefinition}
+            reportRange={reportScope.mode === "range" ? reportScope : null}
+          />
+        </Suspense>
       )}
     </AppShell>
     <FreshdeskCookieDialog

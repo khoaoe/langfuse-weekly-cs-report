@@ -29,3 +29,16 @@ describe("dashboard runtime state", () => {
     expect(stale.message).toBe("Chưa tải được dữ liệu dashboard. Hệ thống sẽ thử lại.");
   });
 });
+
+describe("unchanged polls", () => {
+  it("returns the same state object when the envelope changes nothing", () => {
+    const ready = reduceDashboardRuntime(initialDashboardRuntime(), {
+      type: "envelope",
+      envelope: dashboardEnvelopeFixture,
+    });
+    expect(ready.kind).toBe("ready");
+    expect(
+      reduceDashboardRuntime(ready, { type: "envelope", envelope: dashboardEnvelopeFixture }),
+    ).toBe(ready);
+  });
+});

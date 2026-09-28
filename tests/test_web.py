@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from starlette.requests import Request as StarletteRequest
 
 from tests.fixtures.traces import trace
+from tests.test_dashboard_schema import _csat_v11_snapshot
 from tests.test_dashboard_schema import _snapshot as schema_snapshot
 from weekly_cs_report.cli import (
     ConfigurationError,
@@ -27,11 +28,11 @@ from weekly_cs_report.dashboard_schema import (
     _ticket_public_dict,
     project_dashboard,
 )
-from weekly_cs_report.entry_coverage_cache import EntryCoverageRecord
 from weekly_cs_report.report import compute_report
 from weekly_cs_report.web import (
     _MAX_QUERY_PAIRS,
     WebSettings,
+    _browser_dashboard,
     _parse_ticket_query,
     _validated_runtime_directory,
     create_app,
@@ -139,77 +140,6 @@ def _snapshot(
     )
 
 
-def _entry_coverage_snapshot() -> DashboardSnapshot:
-    base = schema_snapshot()
-    records = (
-        EntryCoverageRecord(
-            ticket_id="700",
-            opened_at="2026-07-14T02:00:00Z",
-            cohort_week="2026-07-13",
-            status="ai_replied_only",
-            human_replied=None,
-        ),
-        EntryCoverageRecord(
-            ticket_id="701",
-            opened_at="2026-07-21T02:00:00Z",
-            cohort_week="2026-07-20",
-            status="invoked_no_result",
-            human_replied=True,
-        ),
-        EntryCoverageRecord(
-            ticket_id="702",
-            opened_at="2026-07-24T18:00:00Z",
-            cohort_week="2026-07-20",
-            status="invoked_no_result",
-            human_replied=False,
-        ),
-        EntryCoverageRecord(
-            ticket_id="703",
-            opened_at="2026-07-28T02:00:00Z",
-            cohort_week="2026-07-27",
-            status="invoked_no_result",
-            human_replied=None,
-        ),
-    )
-    dashboard = deepcopy(base.dashboard)
-    counts = {
-        "2026-07-13": {
-            "freshdesk_ticket_count": 1,
-            "ai_replied_only": 1,
-            "ai_replied_then_transferred": 0,
-            "transferred_without_ai_reply": 0,
-            "invoked_no_result": 0,
-        },
-        "2026-07-20": {
-            "freshdesk_ticket_count": 2,
-            "ai_replied_only": 0,
-            "ai_replied_then_transferred": 0,
-            "transferred_without_ai_reply": 0,
-            "invoked_no_result": 2,
-        },
-        "2026-07-27": {
-            "freshdesk_ticket_count": 1,
-            "ai_replied_only": 0,
-            "ai_replied_then_transferred": 0,
-            "transferred_without_ai_reply": 0,
-            "invoked_no_result": 1,
-        },
-    }
-    for view in dashboard["views"].values():
-        view["entry_coverage"] = {
-            "source": "freshdesk",
-            "source_start_week": "2026-07-06",
-            "fetched_at": "2026-08-04T03:00:00Z",
-            "by_week": deepcopy(counts),
-        }
-    return DashboardSnapshot(
-        generated_at=base.generated_at,
-        dashboard=dashboard,
-        tickets=base.tickets,
-        entry_coverage_tickets=records,
-    )
-
-
 def _aggregate_only_snapshot() -> DashboardSnapshot:
     class AggregateOnlyClient:
         def iter_traces(
@@ -302,7 +232,7 @@ def _state(snapshot: DashboardSnapshot, *, status: str = "ready", refreshing=Fal
         "refreshing": refreshing,
         "last_error_code": None,
         "last_error_at": None,
-        "snapshot": snapshot.dashboard_dict(),
+        "snapshot": _browser_dashboard(snapshot.dashboard_dict()),
     }
 
 
@@ -745,97 +675,121 @@ def test_ticket_endpoint_aggregate_forwards_week_definition_to_exclude_weekend_d
     assert mon_fri_total == 3
 
 
-def test_entry_coverage_endpoint_filters_multiple_weeks_and_keeps_safe_projection(
-    manager_factory,
-):
-    snapshot = _entry_coverage_snapshot()
+def test_dashboard_drops_fields_the_spa_never_reads(manager_factory):
+    snapshot = _csat_v11_snapshot()
     manager = manager_factory(initial=snapshot)
-
     with TestClient(
         create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
     ) as client:
-        response = client.get(
-            "/api/freshdesk-entry-coverage/tickets",
-            params={
-                "week_definition": "mon_sun",
-                "cohort_weeks": "2026-07-13,2026-07-20",
-                "sort_by": "opened_at",
-                "sort_dir": "desc",
-                "page": 1,
-                "page_size": 10,
-            },
-        )
+        served = client.get("/api/dashboard").json()["snapshot"]
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert [item["ticket_id"] for item in payload["items"]] == ["702", "701", "700"]
-    assert payload["total"] == 3
-    assert set(payload["items"][0]) == {
-        "ticket_id",
-        "opened_at",
-        "cohort_week",
-        "status",
-        "human_replied",
+    for key in ("coverage", "data_quality", "gate_status"):
+        assert key not in served
+    stored = snapshot.dashboard["views"]["mon_sun"]
+    view = served["views"]["mon_sun"]
+    assert "entry_coverage" not in view
+    assert "outcome_reconciliation" not in view
+    assert "within_7d" not in view["reopen"]
+    assert "reopen_reason" in view["weekly"][0]
+    assert not {"ai_reply_p50", "reopen_7d_rate"} & set(view["weekly"][0])
+    assert "feedback_pool" not in view["csat"]
+    week = next(iter(view["csat"]["by_week"]))
+    assert "feedback_entry_keys" not in view["csat"]["by_week"][week]
+    assert view["csat"]["by_week"][week]["feedback_count"] == len(
+        stored["csat"]["by_week"][week]["feedback_entry_keys"]
+    )
+    # Storage keeps everything; only the browser copy is trimmed.
+    assert "feedback_pool" in stored["csat"]
+
+
+def test_csat_feedback_filters_sorts_and_pages_the_published_pool(manager_factory):
+    snapshot = _csat_v11_snapshot()
+    manager = manager_factory(initial=snapshot)
+    csat = snapshot.dashboard["views"]["mon_sun"]["csat"]
+    week = next(iter(csat["by_week"]))
+    expected = sorted(
+        (csat["feedback_pool"][key] for key in csat["by_week"][week]["feedback_entry_keys"]),
+        key=lambda entry: datetime.fromisoformat(entry["responded_at"].replace("Z", "+00:00")),
+        reverse=True,
+    )
+    assert expected
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        newest = client.get(f"/api/csat-feedback?view=mon_sun&bucket={week}")
+        oldest = client.get(
+            f"/api/csat-feedback?view=mon_sun&bucket={week}&sort=oldest"
+        )
+        negative = client.get(
+            f"/api/csat-feedback?view=mon_sun&bucket={week}&satisfaction=negative"
+        )
+        grouped = client.get(
+            f"/api/csat-feedback?view=mon_sun&bucket={week}"
+            "&group_field=skill&group_value=withdraw"
+        )
+        bad = client.get("/api/csat-feedback?bucket=2026-07-20&debug=1")
+        missing = client.get("/api/csat-feedback")
+
+    assert newest.status_code == 200
+    assert newest.json() == {
+        "items": expected, "total": len(expected), "page": 1, "page_count": 1,
     }
-    assert "agent_id" not in response.text
-    assert "requester" not in response.text
+    assert oldest.json()["items"] == expected[::-1]
+    assert all(
+        item["satisfaction_bucket"] == "negative" for item in negative.json()["items"]
+    )
+    assert negative.json()["total"] == sum(
+        entry["satisfaction_bucket"] == "negative" for entry in expected
+    )
+    assert grouped.json()["total"] == sum(
+        entry["skill"] == "withdraw" for entry in expected
+    )
+    assert bad.status_code == 422
+    assert missing.status_code == 422
 
 
-def test_entry_coverage_endpoint_filters_status_paginates_and_excludes_weekend_for_mon_fri(
-    manager_factory,
-):
-    manager = manager_factory(initial=_entry_coverage_snapshot())
-
-    with TestClient(
-        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
-    ) as client:
-        status_page = client.get(
-            "/api/freshdesk-entry-coverage/tickets",
-            params={
-                "cohort_weeks": "2026-07-20",
-                "status": "invoked_no_result",
-                "sort_by": "ticket_id",
-                "sort_dir": "asc",
-                "page": 1,
-                "page_size": 1,
-            },
-        )
-        friday_only = client.get(
-            "/api/freshdesk-entry-coverage/tickets",
-            params={
-                "week_definition": "mon_fri",
-                "cohort_weeks": "2026-07-20",
-                "status": "invoked_no_result",
-            },
-        )
-
-    assert status_page.status_code == 200
-    assert status_page.json()["total"] == 2
-    assert [item["ticket_id"] for item in status_page.json()["items"]] == ["701"]
-    assert friday_only.status_code == 200
-    assert friday_only.json()["total"] == 1
-    assert [item["ticket_id"] for item in friday_only.json()["items"]] == ["701"]
-
-
-def test_entry_coverage_endpoint_has_same_auth_boundary_and_sanitized_queries(
-    manager_factory,
-):
-    manager = manager_factory(initial=_entry_coverage_snapshot())
-    app = create_app(manager, settings=WebSettings("proxy", IDENTITY_HEADER))
-
+def test_csat_feedback_pages_by_ten(manager_factory):
+    snapshot = _csat_v11_snapshot()
+    csat = snapshot.dashboard["views"]["mon_sun"]["csat"]
+    week = next(iter(csat["by_week"]))
+    manager = manager_factory(initial=snapshot)
+    app = create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
     with TestClient(app) as client:
-        missing = client.get("/api/freshdesk-entry-coverage/tickets")
-        malformed = client.get(
-            "/api/freshdesk-entry-coverage/tickets?status=not-a-status",
-            headers={IDENTITY_HEADER: "operator"},
-        )
+        manager.get()
+        pool = manager.get().snapshot.dashboard["views"]["mon_sun"]["csat"]
+        template = next(iter(pool["feedback_pool"].values()))
+        keys = []
+        for index in range(23):
+            key = f"{template['ticket_id']}:x{index}"
+            pool["feedback_pool"][key] = {
+                **template,
+                "responded_at": f"2026-07-21T01:{index:02d}:00Z",
+            }
+            keys.append(key)
+        pool["by_week"][week]["feedback_entry_keys"] = keys
+        last = client.get(f"/api/csat-feedback?view=mon_sun&bucket={week}&page=9")
 
-    assert missing.status_code == 401
-    assert missing.json() == {"detail": {"code": "authentication_required"}}
-    assert malformed.status_code == 422
-    assert malformed.json() == {
-        "detail": {"code": "invalid_query", "parameter": "status"}
-    }
+        pool["feedback_pool"][keys[0]]["responded_at"] = "2026-07-21T01:22:00.500000Z"
+        newest = client.get(f"/api/csat-feedback?view=mon_sun&bucket={week}")
+
+    # Fractional seconds sort by time, not as text.
+    assert newest.json()["items"][0]["responded_at"] == "2026-07-21T01:22:00.500000Z"
+    body = last.json()
+    assert (body["total"], body["page"], body["page_count"]) == (23, 3, 3)
+    assert len(body["items"]) == 3
+    assert body["items"][0]["responded_at"] == "2026-07-21T01:02:00Z"
+
+
+def test_dashboard_envelope_is_not_double_encoded(manager_factory):
+    snapshot = _snapshot()
+    manager = manager_factory(initial=snapshot)
+    with TestClient(
+        create_app(manager, settings=WebSettings("off", IDENTITY_HEADER))
+    ) as client:
+        dashboard = client.get("/api/dashboard", headers={"Accept-Encoding": "gzip"})
+
+    assert dashboard.headers["content-encoding"] == "gzip"
+    assert dashboard.json() == _state(snapshot)
 
 
 def test_ticket_endpoint_filters_strict_csat_satisfaction_states(manager_factory):

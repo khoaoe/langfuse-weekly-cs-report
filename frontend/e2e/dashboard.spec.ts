@@ -33,6 +33,60 @@ const CSAT_E2E_TICKETS = [
 
 const CSAT_E2E_APP = "241 - Chuyển Tiền ATM";
 
+const CSAT_FEEDBACK_ENTRIES = CSAT_E2E_TICKETS.flatMap((ticket, ticketIndex) =>
+  Array.from({ length: ticket.response_total }, (_, responseIndex) => ({
+    ticket_id: ticket.ticket_id,
+    responded_at: new Date(
+      Date.UTC(2026, 6, 20 + ticketIndex, responseIndex),
+    ).toISOString(),
+    satisfaction_bucket:
+      responseIndex === ticket.response_total - 1
+        ? ticket.satisfaction
+        : (["neutral", "negative", "positive"] as const)[responseIndex % 3] ?? "neutral",
+    outcome: ticket.outcome,
+    skill: ticket.skill,
+    issue_category: ticket.issue_category,
+    app: CSAT_E2E_APP,
+    text: `Nội dung phản hồi ${String.fromCharCode(65 + ticketIndex)}-${responseIndex + 1}`,
+    response_number: responseIndex + 1,
+    response_total: ticket.response_total,
+    is_latest_for_ticket: responseIndex === ticket.response_total - 1,
+  })),
+);
+
+/** Serves CSAT comments the way /api/csat-feedback does: filter, sort, page. */
+function fulfillCsatFeedback(url: URL) {
+  const satisfaction = url.searchParams.get("satisfaction") ?? "all";
+  const field = url.searchParams.get("group_field") as
+    | "outcome"
+    | "skill"
+    | "issue_category"
+    | "app"
+    | null;
+  const value = url.searchParams.get("group_value");
+  const items = CSAT_FEEDBACK_ENTRIES.filter(
+    (entry) =>
+      (satisfaction === "all" || entry.satisfaction_bucket === satisfaction) &&
+      (field === null || entry[field] === value),
+  ).sort((left, right) => {
+    const order = Date.parse(left.responded_at) - Date.parse(right.responded_at);
+    return url.searchParams.get("sort") === "oldest" ? order : -order;
+  });
+  const pageCount = Math.ceil(items.length / 10);
+  const page = Math.min(Number(url.searchParams.get("page") ?? "1"), Math.max(1, pageCount));
+  return {
+    status: 200,
+    contentType: "application/json",
+    body: JSON.stringify({
+      items: items.slice((page - 1) * 10, page * 10),
+      total: items.length,
+      page,
+      page_count: pageCount,
+    }),
+  };
+}
+
+
 function csatDecisionEnvelope() {
   const base = structuredClone(dashboardEnvelopeFixture);
   const countsFor = (tickets: readonly (typeof CSAT_E2E_TICKETS)[number][]) => ({
@@ -46,34 +100,8 @@ function csatDecisionEnvelope() {
       value,
       ...countsFor(CSAT_E2E_TICKETS.filter((ticket) => ticket[dimension] === value)),
     }));
-  const feedbackEntries = CSAT_E2E_TICKETS.flatMap((ticket, ticketIndex) =>
-    Array.from({ length: ticket.response_total }, (_, responseIndex) => ({
-      ticket_id: ticket.ticket_id,
-      responded_at: new Date(
-        Date.UTC(2026, 6, 20 + ticketIndex, responseIndex),
-      ).toISOString(),
-      satisfaction_bucket:
-        responseIndex === ticket.response_total - 1
-          ? ticket.satisfaction
-          : (["neutral", "negative", "positive"] as const)[responseIndex % 3] ?? "neutral",
-      outcome: ticket.outcome,
-      skill: ticket.skill,
-      issue_category: ticket.issue_category,
-      app: CSAT_E2E_APP,
-      text: `Nội dung phản hồi ${String.fromCharCode(65 + ticketIndex)}-${responseIndex + 1}`,
-      response_number: responseIndex + 1,
-      response_total: ticket.response_total,
-      is_latest_for_ticket: responseIndex === ticket.response_total - 1,
-    })),
-  );
-  const feedbackPool = Object.fromEntries(
-    feedbackEntries.map((entry) => [
-      `${entry.ticket_id}:${entry.response_number}`,
-      entry,
-    ]),
-  );
   const week = {
-    response_count: feedbackEntries.length,
+    response_count: CSAT_FEEDBACK_ENTRIES.length,
     ...countsFor(CSAT_E2E_TICKETS),
     by_outcome: {
       ai_end_to_end: countsFor(
@@ -92,7 +120,7 @@ function csatDecisionEnvelope() {
       issue_category: dimensionRows("issue_category"),
       app: [{ value: CSAT_E2E_APP, ...countsFor(CSAT_E2E_TICKETS) }],
     },
-    feedback_entry_keys: Object.keys(feedbackPool),
+    feedback_count: CSAT_FEEDBACK_ENTRIES.length,
   };
   const segmentCounts = (values: readonly string[]) =>
     Object.fromEntries([
@@ -130,20 +158,6 @@ function csatDecisionEnvelope() {
         source: "freshdesk" as const,
         fetched_at: "2026-08-03T03:00:00Z",
         by_week: { "2026-07-20": week },
-        feedback_pool: feedbackPool,
-      },
-      outcome_reconciliation: {
-        source: "freshdesk" as const,
-        fetched_at: "2026-08-03T03:05:00Z",
-        by_week: {
-          "2026-07-20": {
-            langfuse_ai_end_to_end: 6,
-            checked_ticket_count: 4,
-            human_replied_after_ai: 1,
-            unresolved_ticket_count: 1,
-            mismatch_rate: 0.25,
-          },
-        },
       },
     };
   };
@@ -282,6 +296,9 @@ test.describe("Zalopay weekly CS dashboard", () => {
         contentType: "application/json",
         body: JSON.stringify(csatDecisionEnvelope()),
       }),
+    );
+    await page.route("**/api/csat-feedback**", (route) =>
+      route.fulfill(fulfillCsatFeedback(new URL(route.request().url()))),
     );
     await page.route("**/api/tickets**", (route) => {
       const url = new URL(route.request().url());

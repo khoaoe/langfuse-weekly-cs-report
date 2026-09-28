@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HttpResponse, http } from "msw";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useState, type ComponentProps, type ReactElement } from "react";
 
 import { dashboardEnvelopeFixture } from "./fixtures/dashboard";
@@ -40,7 +40,7 @@ type CsatPayload = NonNullable<
   DashboardSnapshot["views"]["mon_sun"]["csat"]
 >;
 type CsatWeek = CsatPayload["by_week"][string];
-type CsatFeedbackEntry = CsatPayload["feedback_pool"][string];
+type CsatFeedbackEntry = import("../src/lib/dashboard-schema").CsatFeedbackEntry;
 
 function weekRow(
   overrides: Partial<WeeklyReportRow> & Pick<WeeklyReportRow, "cohort_week">,
@@ -84,7 +84,6 @@ function snapshotWithActiveSegmentBuckets(
   }
   return {
     ...baseSnapshot,
-    coverage: { ...baseSnapshot.coverage, skill: 1 },
     views: {
       ...baseSnapshot.views,
       mon_sun: {
@@ -104,30 +103,56 @@ function snapshotWithActiveSegmentBuckets(
   };
 }
 
-/** Entries handed to `csatWeek` are recorded here and hoisted into the view's
- * `feedback_pool` by `csatPayload` -- storage v32 stores each comment once and
- * has buckets reference it by key. */
-const FEEDBACK_POOL: Record<string, CsatFeedbackEntry> = {};
+/** Comments handed to `csatWeek`, remembered per bucket object so
+ * `snapshotWithCsat` can index them by `<grain>:<bucket key>` for the fake
+ * /api/csat-feedback below. The dashboard payload itself only carries counts. */
+const BUCKET_ENTRIES = new WeakMap<CsatWeek, readonly CsatFeedbackEntry[]>();
+const SERVED_ENTRIES = new Map<string, readonly CsatFeedbackEntry[]>();
 
-function feedbackKey(entry: CsatFeedbackEntry): string {
-  return `${entry.ticket_id}:${entry.response_number}`;
-}
+beforeEach(() => {
+  server.use(
+    http.get("/api/csat-feedback", ({ request }) => {
+      const params = new URL(request.url).searchParams;
+      const grain = params.get("grain");
+      const satisfaction = params.get("satisfaction") ?? "all";
+      const groupField = params.get("group_field") as keyof CsatFeedbackEntry | null;
+      const groupValue = params.get("group_value");
+      const entries = params
+        .getAll("bucket")
+        .flatMap((bucket) => SERVED_ENTRIES.get(`${grain}:${bucket}`) ?? [])
+        .filter(
+          (entry) =>
+            (satisfaction === "all" || entry.satisfaction_bucket === satisfaction) &&
+            (groupField === null || entry[groupField] === groupValue),
+        )
+        .sort((left, right) => {
+          const order = Date.parse(left.responded_at) - Date.parse(right.responded_at);
+          return params.get("sort") === "oldest" ? order : -order;
+        });
+      const pageCount = Math.ceil(entries.length / 10);
+      const page = Math.min(Number(params.get("page") ?? "1"), Math.max(1, pageCount));
+      return HttpResponse.json({
+        items: entries.slice((page - 1) * 10, page * 10),
+        total: entries.length,
+        page,
+        page_count: pageCount,
+      });
+    }),
+  );
+});
 
 function csatWeek(
-  overrides: Partial<Omit<CsatWeek, "feedback_entry_keys">> & {
+  overrides: Partial<Omit<CsatWeek, "feedback_count">> & {
     feedback_entries?: readonly CsatFeedbackEntry[];
   } = {},
 ): CsatWeek {
   const { feedback_entries: entries = [], ...rest } = overrides;
-  for (const entry of entries) {
-    FEEDBACK_POOL[feedbackKey(entry)] = entry;
-  }
   const positive = overrides.positive ?? 23;
   const neutral = overrides.neutral ?? 4;
   const negative = overrides.negative ?? 4;
   const ticketCount = overrides.ticket_count ?? positive + neutral + negative;
   const counts = { ticket_count: ticketCount, positive, neutral, negative };
-  return {
+  const week: CsatWeek = {
     response_count: overrides.response_count ?? ticketCount,
     ticket_count: ticketCount,
     positive,
@@ -144,9 +169,11 @@ function csatWeek(
       issue_category: [{ value: "Chuyển tiền", ...counts }],
       app: [],
     },
-    feedback_entry_keys: entries.map(feedbackKey),
+    feedback_count: entries.length,
     ...rest,
   };
+  BUCKET_ENTRIES.set(week, entries);
+  return week;
 }
 
 function csatComments(count: number): CsatFeedbackEntry[] {
@@ -177,6 +204,11 @@ function snapshotWithCsat(
   if (currentWeek === undefined || detail === undefined) {
     throw new Error("fixture must include the current week and its detail");
   }
+  for (const [grain, buckets] of [["week", byWeek], ["day", byDay ?? {}]] as const) {
+    for (const [key, bucket] of Object.entries(buckets)) {
+      SERVED_ENTRIES.set(`${grain}:${key}`, BUCKET_ENTRIES.get(bucket) ?? []);
+    }
+  }
   return {
     ...baseSnapshot,
     views: {
@@ -196,7 +228,6 @@ function snapshotWithCsat(
           fetched_at: fetchedAt,
           by_week: byWeek,
           ...(byDay === undefined ? {} : { by_day: byDay }),
-          feedback_pool: { ...FEEDBACK_POOL },
         },
       },
     },
@@ -730,7 +761,7 @@ describe("Below-fold analysis", () => {
       ...baseSnapshot,
       views: {
         ...baseSnapshot.views,
-        mon_sun: { ...baseSnapshot.views.mon_sun, csat: null, entry_coverage: null },
+        mon_sun: { ...baseSnapshot.views.mon_sun, csat: null },
       },
     };
 
@@ -842,48 +873,6 @@ describe("Below-fold analysis", () => {
     expect(
       within(csatSection).getByRole("button", { name: "Kết nối Freshdesk" }),
     ).toBeVisible();
-  });
-
-  it("keeps Freshdesk outcome reconciliation out of the dashboard UI", () => {
-    const snapshot = snapshotWithCsat({
-      "2026-07-20": csatWeek(),
-    });
-    const view = snapshot.views.mon_sun;
-    const withReconciliation: DashboardSnapshot = {
-      ...snapshot,
-      views: {
-        ...snapshot.views,
-        mon_sun: {
-          ...view,
-          outcome_reconciliation: {
-            source: "freshdesk",
-            fetched_at: "2026-08-03T01:00:00Z",
-            by_week: {
-              "2026-07-20": {
-                langfuse_ai_end_to_end: 6,
-                checked_ticket_count: 4,
-                human_replied_after_ai: 1,
-                unresolved_ticket_count: 1,
-                mismatch_rate: 0.25,
-              },
-            },
-          },
-        },
-      },
-    };
-
-    renderWithQuery(
-      belowFold(withReconciliation, { activeWeek: "2026-07-20" }),
-    );
-
-    expect(
-      screen.queryByRole("region", {
-        name: "Đối chiếu kết quả xử lý với Freshdesk",
-      }),
-    ).toBeNull();
-    expect(document.body).not.toHaveTextContent(
-      /Đối chiếu Freshdesk|đã xác định có CS người trả lời sau|AI First phía trên/i,
-    );
   });
 
   it("groups response-grain CSAT by outcome, Skill, or Category without showing zero rows", async () => {

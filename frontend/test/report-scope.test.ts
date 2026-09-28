@@ -454,13 +454,12 @@ describe("scopeSnapshotToDayRange", () => {
     expect(Object.keys(view.by_week)).toEqual(["2026-08-03", "2026-08-10"]);
   });
 
-  it("carries no same-period, csat, or outcome-reconciliation comparison data", () => {
+  it("carries no same-period or csat comparison data", () => {
     const days = [day({ day: "2026-08-03", total_tickets: 1 })];
     const view = scopeSnapshotToDayRange("mon_sun", days);
 
     expect(view.same_period).toBeNull();
     expect(view.csat).toBeNull();
-    expect(view.outcome_reconciliation).toBeNull();
   });
 
   it("satisfies DashboardViewSchema structurally aside from the day-sourced synthetic row", () => {
@@ -520,6 +519,5 @@ describe("scopeSnapshotToDayRangeSnapshot", () => {
     );
     expect(snapshot.generated_at).toBe(baseSnapshot.generated_at);
     expect(snapshot.source).toBe(baseSnapshot.source);
-    expect(snapshot.coverage).toBe(baseSnapshot.coverage);
   });
 });
