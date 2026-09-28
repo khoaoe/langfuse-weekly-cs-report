@@ -334,10 +334,21 @@
 }
 
 /* A long cell value (e.g. several tool errors) scrolls sideways inside a
-   capped width instead of stretching its column. */
+   capped width instead of stretching its column. The scrollbar is styled so
+   it stays visible: macOS overlay scrollbars hide it, and a mouse wheel does
+   not scroll sideways, so the value otherwise just looks cut off. Setting
+   `scrollbar-width` would switch Chromium back to the hidden overlay bar. */
 .cellValue {
   display: block;
   max-width: 320px;
   overflow-x: auto;
-  scrollbar-width: thin;
+}
+
+.cellValue::-webkit-scrollbar {
+  height: 6px;
+}
+
+.cellValue::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--rule-strong);
 }
