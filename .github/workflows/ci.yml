@@ -64,8 +64,7 @@ jobs:
         run: |
           python -m venv .ci-tools
           .ci-tools/bin/python -m pip install --disable-pip-version-check \
-            --no-cache-dir 'pip==26.2' 'setuptools==83.0.0' 'uv==0.11.32' \
-            'pip-audit==2.9.0'
+            --no-cache-dir 'pip==26.2' 'setuptools==83.0.0' 'uv==0.11.32' 'pip-audit==2.9.0'
 
       - name: Create the locked Python test environment
         run: |
