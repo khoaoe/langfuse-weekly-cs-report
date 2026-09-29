@@ -99,7 +99,13 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 34
+_STORAGE_VERSION = 33
+# Nullable ticket fields added after `_STORAGE_VERSION` was last bumped. A
+# stored ticket may lack them and loads with None, so the previous snapshot
+# keeps serving while the next refresh fills them. Bumping the version for
+# such a field instead leaves the dashboard empty until a full refresh ends
+# (18 minutes on 2026-09-29, when a new analysis fingerprint forced one).
+_ADDITIVE_TICKET_KEYS = frozenset({"skill_turns"})
 # `<tool>:<CODE>` as produced by `enrichment.tool_error_token`. The code half
 # is either an allowlisted upper-case enum or the `khac` bucket that absorbs
 # anything off the allowlist -- neither can carry free text or PII.
@@ -2337,8 +2343,8 @@ def _parse_multi_ticket_filter(
 
 def _ticket_from_storage(value: object) -> TicketRow:
     ticket = _require_mapping(value, "ticket")
-    _require_exact_keys(ticket, _TICKET_KEYS, "ticket")
-    fields = dict(ticket)
+    fields = {key: None for key in _ADDITIVE_TICKET_KEYS} | dict(ticket)
+    _require_exact_keys(fields, _TICKET_KEYS, "ticket")
     # JSON has no tuple type: `guardrail_rules`/`tpe_signals` round-trip
     # through disk as lists (and nested lists for tpe_signals' 3-tuples).
     # Restore the tuple shape `TicketRow` and `_validate_ticket_values`

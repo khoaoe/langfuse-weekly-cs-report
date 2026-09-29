@@ -149,7 +149,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     snapshot = _snapshot()
     dashboard = snapshot.dashboard_dict()
 
-    assert snapshot.storage_dict()["schema_version"] == 34
+    assert snapshot.storage_dict()["schema_version"] == 33
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
@@ -180,6 +180,20 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     assert "mô tả tuyệt đối" not in json.dumps(snapshot.storage_dict(), ensure_ascii=False)
 
 
+def test_stored_tickets_without_an_additive_field_still_load():
+    """A snapshot written before `skill_turns` existed keeps serving."""
+    value = _snapshot().storage_dict()
+    assert value["tickets"]
+    for ticket in value["tickets"]:
+        del ticket["skill_turns"]
+
+    restored = DashboardSnapshot.from_storage_dict(value)
+    assert all(ticket.skill_turns is None for ticket in restored.tickets)
+
+    value["tickets"][0]["not_a_field"] = 1
+    with pytest.raises(ValueError):
+        DashboardSnapshot.from_storage_dict(value)
+
 def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields():
     snapshot = _snapshot()
     record = EntryCoverageRecord(
@@ -199,7 +213,7 @@ def test_entry_coverage_storage_is_v18_and_rejects_v17_or_unknown_record_fields(
     with pytest.raises(ValueError, match="unsupported dashboard storage"):
         DashboardSnapshot.from_storage_dict(value)
 
-    value["schema_version"] = 34
+    value["schema_version"] = 33
     value["entry_coverage_tickets"][0]["raw_body"] = "must not be accepted"
     with pytest.raises(ValueError, match="unsupported or missing fields"):
         DashboardSnapshot.from_storage_dict(value)
