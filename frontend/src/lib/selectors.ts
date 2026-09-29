@@ -145,6 +145,12 @@ export interface LedgerCell {
 export interface LedgerDelta {
   /** Arrow, sign and unit together, so the direction never rests on colour. */
   readonly text: string;
+  /**
+   * What the movement is measured from, value first ("so với 60,0% tuần
+   * 13/07"). A bare "▲ +5,0 điểm" left readers asking "up against what?"
+   * when the baseline only lived in the group heading.
+   */
+  readonly baseline: string;
   readonly tone: "warning" | "neutral";
 }
 
@@ -178,7 +184,13 @@ function weekRates(row: WeeklyReportRow): ComparableRates {
 function selectComparison(
   view: DashboardView,
   week: WeeklyReportRow | null,
-): { readonly label: string; readonly current: ComparableRates; readonly baseline: ComparableRates } | null {
+): {
+  readonly label: string;
+  /** The baseline's own name, e.g. "tuần 13/07", used inside each delta. */
+  readonly name: string;
+  readonly current: ComparableRates;
+  readonly baseline: ComparableRates;
+} | null {
   if (week === null) {
     return null;
   }
@@ -187,8 +199,10 @@ function selectComparison(
     if (samePeriod === null || samePeriod.current.cohort_week !== week.cohort_week) {
       return null;
     }
+    const name = `cùng kỳ tới ${formatWeekdayName(samePeriod.cutoff_weekday)} các tuần trước`;
     return {
-      label: `so với cùng kỳ tới ${formatWeekdayName(samePeriod.cutoff_weekday)}`,
+      label: `so với ${name}`,
+      name,
       current: {
         aiFirst: samePeriod.current.ai_first_rate,
         aiEndToEnd: null,
@@ -208,6 +222,7 @@ function selectComparison(
     ? null
     : {
         label: `so với tuần ${formatWeekStart(previous.cohort_week)}`,
+        name: `tuần ${formatWeekStart(previous.cohort_week)}`,
         current: weekRates(week),
         baseline: weekRates(previous),
       };
@@ -217,16 +232,28 @@ function arrow(rounded: number): string {
   return rounded > 0 ? "▲ " : rounded < 0 ? "▼ " : "";
 }
 
-function pointDelta(current: number | null, baseline: number | null): LedgerDelta | null {
+function pointDelta(
+  current: number | null,
+  baseline: number | null,
+  baselineName: string,
+): LedgerDelta | null {
   if (current === null || baseline === null) {
     return null;
   }
   // Rounded to the 0,1-point display step first, so "+0,0" never gets an arrow.
   const rounded = Math.round((current - baseline) * 1000) / 1000;
-  return { text: `${arrow(rounded)}${formatPointDelta(rounded)}`, tone: "neutral" };
+  return {
+    text: `${arrow(rounded)}${formatPointDelta(rounded)}`,
+    baseline: `so với ${formatRate(baseline)} ${baselineName}`,
+    tone: "neutral",
+  };
 }
 
-function reopenDelta(current: number | null, baseline: number | null): LedgerDelta | null {
+function reopenDelta(
+  current: number | null,
+  baseline: number | null,
+  baselineName: string,
+): LedgerDelta | null {
   if (current === null || baseline === null) {
     return null;
   }
@@ -234,6 +261,7 @@ function reopenDelta(current: number | null, baseline: number | null): LedgerDel
   const sign = rounded > 0 ? "+" : rounded < 0 ? "−" : "";
   return {
     text: `${arrow(rounded)}${sign}${formatAverage(Math.abs(rounded))} lần/ticket`,
+    baseline: `so với ${formatAverage(baseline)} ${baselineName}`,
     // Reopen is the one cell where up is bad.
     tone: rounded > 0 ? "warning" : "neutral",
   };
@@ -443,7 +471,7 @@ export function selectLedger(
   const reopenCellDelta =
     comparison === null
       ? null
-      : reopenDelta(comparison.current.reopen, comparison.baseline.reopen);
+      : reopenDelta(comparison.current.reopen, comparison.baseline.reopen, comparison.name);
 
   const ticketCells: LedgerCell[] = [
     {
@@ -461,7 +489,7 @@ export function selectLedger(
       delta:
         comparison === null
           ? null
-          : pointDelta(comparison.current.aiFirst, comparison.baseline.aiFirst),
+          : pointDelta(comparison.current.aiFirst, comparison.baseline.aiFirst, comparison.name),
     },
     {
       // The outcome the product is judged on: tickets AI closed with no human
@@ -483,6 +511,7 @@ export function selectLedger(
           : pointDelta(
               comparison.current.aiEndToEnd,
               comparison.baseline.aiEndToEnd,
+              comparison.name,
             ),
     },
     {
@@ -497,7 +526,7 @@ export function selectLedger(
       delta:
         comparison === null
           ? null
-          : pointDelta(comparison.current.transfer, comparison.baseline.transfer),
+          : pointDelta(comparison.current.transfer, comparison.baseline.transfer, comparison.name),
     },
     {
       id: "ledger-reopen",
@@ -601,7 +630,9 @@ export function selectLedger(
   return [
     {
       id: "ledger-group-ticket",
-      label: "Theo ticket",
+      // Not "Theo ticket": the row also holds a lần/ticket rate, and the
+      // secondary row below counts lượt, so the old label contradicted it.
+      label: "Chỉ số chính",
       denominator: `${formatCount(scope.eligible)} ${populationLabel}`,
       comparison: comparison?.label ?? null,
       cells: ticketCells,

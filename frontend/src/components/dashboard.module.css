@@ -680,6 +680,14 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The baseline sits on its own line under the movement, so every delta says
+   what it moved from without the reader tracing it back to the heading. */
+.ledgerDeltaBaseline {
+  display: block;
+  color: var(--muted);
+  font-weight: 400;
+}
+
 .ledgerDeltaWarning {
   color: var(--warning-text);
   font-weight: 500;

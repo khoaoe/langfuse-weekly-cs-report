@@ -83,6 +83,9 @@ export function DecisionLedger({
             }`}
           >
             {cell.delta.text}
+            <span className={styles.ledgerDeltaBaseline}>
+              {cell.delta.baseline}
+            </span>
           </span>
         )}
       </>
@@ -164,11 +167,6 @@ export function DecisionLedger({
                 {primary.denominator === null ? null : (
                   <span className={styles.ledgerGroupDenominator}>
                     {primary.denominator}
-                  </span>
-                )}
-                {primary.comparison === null ? null : (
-                  <span className={styles.ledgerGroupDenominator}>
-                    {primary.comparison}
                   </span>
                 )}
               </p>

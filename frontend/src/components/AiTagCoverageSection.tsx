@@ -157,7 +157,7 @@ export function AiTagCoverageSection({
         </span>
       </div>
       <p className={styles.sectionNote}>
-        So khớp ticket gắn tag #AI trên Freshdesk với ticket Langfuse đã ghi nhận, mỗi bên xét theo tuần riêng.
+        So khớp ticket tag #AI trên Freshdesk với ticket Langfuse, mỗi bên theo tuần riêng.
       </p>
       {scopeNote === undefined ? null : (
         <p id="ai-tag-coverage-scope" className={styles.sectionNote}>

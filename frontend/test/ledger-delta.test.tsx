@@ -90,12 +90,12 @@ describe("ledger deltas", () => {
 
     expect(result.comparison).toBe("so với tuần 13/07");
     expect(result.byId).toEqual({
-      "ledger-ai-first": { text: "▲ +5,0 điểm", tone: "neutral" },
-      "ledger-ai-end-to-end": { text: "▲ +5,0 điểm", tone: "neutral" },
-      "ledger-transfer": { text: "▼ −5,0 điểm", tone: "neutral" },
+      "ledger-ai-first": { text: "▲ +5,0 điểm", baseline: "so với 60,0% tuần 13/07", tone: "neutral" },
+      "ledger-ai-end-to-end": { text: "▲ +5,0 điểm", baseline: "so với 40,0% tuần 13/07", tone: "neutral" },
+      "ledger-transfer": { text: "▼ −5,0 điểm", baseline: "so với 50,0% tuần 13/07", tone: "neutral" },
       // 13/65 = 0,20 vs 6/60 = 0,10 lần/ticket: rising reopen is the one
       // movement the ledger tones as bad.
-      "ledger-reopen": { text: "▲ +0,10 lần/ticket", tone: "warning" },
+      "ledger-reopen": { text: "▲ +0,10 lần/ticket", baseline: "so với 0,10 tuần 13/07", tone: "warning" },
     });
     expect(result.tones["ledger-reopen"]).toBe("warning");
   });
@@ -112,6 +112,7 @@ describe("ledger deltas", () => {
 
     expect(result.byId["ledger-reopen"]).toEqual({
       text: "▼ −0,05 lần/ticket",
+      baseline: "so với 0,10 tuần 13/07",
       tone: "neutral",
     });
     expect(result.tones["ledger-reopen"]).toBe("neutral");
@@ -147,14 +148,22 @@ describe("ledger deltas", () => {
       }),
     );
 
-    expect(result.comparison).toBe("so với cùng kỳ tới thứ Năm");
+    expect(result.comparison).toBe("so với cùng kỳ tới thứ Năm các tuần trước");
     // same_period carries AI First and reopen only; the other two cells have
     // no like-for-like baseline and so show no delta at all.
     expect(result.byId).toEqual({
-      "ledger-ai-first": { text: "▲ +5,0 điểm", tone: "neutral" },
+      "ledger-ai-first": {
+        text: "▲ +5,0 điểm",
+        baseline: "so với 55,0% cùng kỳ tới thứ Năm các tuần trước",
+        tone: "neutral",
+      },
       "ledger-ai-end-to-end": null,
       "ledger-transfer": null,
-      "ledger-reopen": { text: "▼ −0,02 lần/ticket", tone: "neutral" },
+      "ledger-reopen": {
+        text: "▼ −0,02 lần/ticket",
+        baseline: "so với 0,10 cùng kỳ tới thứ Năm các tuần trước",
+        tone: "neutral",
+      },
     });
   });
 
@@ -201,7 +210,13 @@ describe("ledger deltas", () => {
     expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
       "▲ +5,0 điểm",
     );
-    expect(screen.getByText(/so với tuần 13\/07/)).toBeVisible();
+    // Every delta names its own baseline; the heading no longer carries it.
+    expect(document.getElementById("ledger-ai-first")).toHaveTextContent(
+      "so với 60,0% tuần 13/07",
+    );
+    expect(document.getElementById("ledger-group-ticket")).toHaveTextContent(
+      "Chỉ số chính",
+    );
     const secondary = document.getElementById("ledger-secondary");
     expect(secondary?.children).toHaveLength(5);
     expect(document.getElementById("narrativeSummary")).toBeNull();
