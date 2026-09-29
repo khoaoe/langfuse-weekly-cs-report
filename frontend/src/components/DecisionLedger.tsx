@@ -73,22 +73,23 @@ export function DecisionLedger({
             </>
           )}
         </span>
-        {cell.support === null ? null : (
-          <span className={styles.ledgerSupport}>{cell.support}</span>
-        )}
-        {cell.delta === null ? null : (
-          <span
-            className={`${styles.ledgerDelta} ${
-              cell.delta.tone === "warning" ? styles.ledgerDeltaWarning : ""
-            }`}
-          >
-            {/* The baseline lives in the hover title: spelled out under every
-                cell it doubled the text of the brief. Screen readers still
-                get it inline. */}
-            <span title={cell.delta.baseline} className={styles.ledgerDeltaHint}>
-              {cell.delta.text}
-            </span>
-            <span className="visually-hidden">{` ${cell.delta.baseline}`}</span>
+        {cell.support === null && cell.delta === null ? null : (
+          // Support and delta share one line, so a cell with a delta is no
+          // taller than one without.
+          <span className={styles.ledgerSupport}>
+            {cell.support}
+            {cell.support === null || cell.delta === null ? null : " · "}
+            {cell.delta === null ? null : (
+              <span
+                className={`${styles.ledgerDelta} ${
+                  cell.delta.tone === "warning" ? styles.ledgerDeltaWarning : ""
+                }`}
+                data-tip={cell.delta.baseline}
+              >
+                {cell.delta.text}
+                <span className="visually-hidden">{` ${cell.delta.baseline}`}</span>
+              </span>
+            )}
           </span>
         )}
       </>

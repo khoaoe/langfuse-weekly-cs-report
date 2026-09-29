@@ -680,11 +680,41 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Dotted underline marks the delta as hoverable for its baseline. */
-.ledgerDeltaHint {
+/* The baseline shows as an instant CSS tooltip on hover/focus of the cell;
+   a native title took ~1s and never opened inside the cell button. */
+.ledgerDelta[data-tip] {
+  position: relative;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
-  cursor: help;
+}
+
+.ledgerDelta[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 5;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-tight);
+  background: var(--ink);
+  color: var(--canvas);
+  font-size: var(--text-caption);
+  font-weight: 400;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 80ms;
+}
+
+/* The last cell's delta sits at the frame's right edge; open leftwards. */
+.ledgerCell:last-child .ledgerDelta[data-tip]::after {
+  left: auto;
+  right: 0;
+}
+
+.ledgerDelta[data-tip]:hover::after,
+.ledgerCellButton:focus-visible .ledgerDelta[data-tip]::after {
+  opacity: 1;
 }
 
 .ledgerDeltaWarning {
