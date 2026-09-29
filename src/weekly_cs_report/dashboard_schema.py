@@ -192,6 +192,8 @@ class DashboardSnapshot:
             raise ValueError("unsupported dashboard storage schema_version")
         generated_at = _parse_utc_iso(storage["generated_at"], "generated_at")
         dashboard = dict(_require_mapping(storage["dashboard"], "dashboard"))
+        # Added without a version bump; see `_ADDITIVE_TICKET_KEYS`.
+        dashboard.setdefault("sub_skills", [])
         _validate_dashboard(dashboard, generated_at=generated_at)
         raw_tickets = storage["tickets"]
         if not isinstance(raw_tickets, list):
@@ -297,6 +299,7 @@ def ticket_page(
     tpe_code: str | None = None,
     model_core: str | None = None,
     tool_error_codes: str | None = None,
+    sub_skill: str | None = None,
     transfer_reason: str | None = None,
     csat_satisfaction: str | None = None,
     ai_review_rating: str | None = None,
@@ -362,6 +365,15 @@ def ticket_page(
         _tool_error_code_allowlist(snapshot),
         "tool_error_codes",
     )
+    selected_sub_skills = _parse_multi_ticket_filter(
+        sub_skill,
+        frozenset(
+            value
+            for ticket in snapshot.tickets
+            for value in sub_skill_values(ticket.sub_skill)
+        ),
+        "sub_skill",
+    )
     selected_transfer_reasons = _parse_multi_ticket_filter(
         transfer_reason, _TRANSFER_TRIGGER_REASONS, "transfer_reason"
     )
@@ -411,6 +423,14 @@ def ticket_page(
                 bool(row.tool_error_codes)
                 if selected_tool_error_codes == frozenset({_HAS_VALUE})
                 else not selected_tool_error_codes.isdisjoint(row.tool_error_codes)
+            )
+        )
+        and (
+            selected_sub_skills is None
+            or (
+                row.sub_skill is not None
+                if selected_sub_skills == frozenset({_HAS_VALUE})
+                else not selected_sub_skills.isdisjoint(sub_skill_values(row.sub_skill))
             )
         )
         and (selected_transfer_reasons is None or row.transfer_reason in selected_transfer_reasons)
@@ -807,6 +827,7 @@ def _dashboard_payload(
         "coverage": _coverage(result.sessions, safe_intents),
         "unmapped_tpe_codes": _unmapped_tpe_codes(result.sessions),
         "tool_error_codes": _tool_error_code_counts(result.sessions),
+        "sub_skills": _sub_skill_counts(result.sessions),
         "gate_status": {
             "allowed": result.gate_status.core_allowed,
             "structural_invalid_rate": result.gate_status.structural_invalid_rate,
@@ -2339,6 +2360,34 @@ def _parse_multi_ticket_filter(
     return frozenset(pieces)
 
 
+
+
+_TURN_SUFFIX = re.compile(r" \(lượt [0-9, ]+\)\Z")
+
+
+def sub_skill_values(text: str | None) -> frozenset[str]:
+    """The sub-skills in a Sub-skill cell, without their turn lists."""
+    if text is None:
+        return frozenset()
+    return frozenset(_TURN_SUFFIX.sub("", part) for part in text.split("; "))
+
+
+def _sub_skill_counts(
+    sessions: tuple[SessionMetrics, ...],
+) -> list[dict[str, object]]:
+    """Tickets per sub-skill, most frequent first: the filter's option list.
+
+    Top level for the same reason as `_tool_error_code_counts`: a ticket can
+    load several sub-skills, so the dimension does not partition tickets.
+    """
+    counts: Counter[str] = Counter()
+    for session in sessions:
+        safe = _safe_optional(session.dimensions.sub_skill)
+        counts.update(sub_skill_values(safe))
+    return [
+        {"code": code, "total": total}
+        for code, total in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
 
 
 def _ticket_from_storage(value: object) -> TicketRow:

@@ -526,7 +526,7 @@ _DASHBOARD_KEYS = frozenset(
     {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
-        "tool_error_codes",
+        "tool_error_codes", "sub_skills",
     }
 )
 

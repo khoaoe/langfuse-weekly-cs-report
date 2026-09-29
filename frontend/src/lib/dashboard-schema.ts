@@ -1369,6 +1369,18 @@ export const DashboardSnapshotSchema = z
         })
         .strict(),
     ),
+    /** Tickets per sub-skill, most frequent first: the Sub-skill filter's
+     * options. Same top-level reasoning as `tool_error_codes`. */
+    sub_skills: z
+      .array(
+        z
+          .object({
+            code: z.string().regex(/^[a-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64}$/),
+            total: positiveInteger,
+          })
+          .strict(),
+      )
+      .default([]),
   })
   .strict();
 export type DashboardSnapshot = z.infer<typeof DashboardSnapshotSchema>;

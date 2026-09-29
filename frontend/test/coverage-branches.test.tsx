@@ -680,7 +680,7 @@ describe("Ticket Explorer behavioral branches", () => {
     );
   });
 
-  it("shows a filter box only while its column is visible, unless it already has a value", async () => {
+  it("shows a filter box exactly while its column is visible", async () => {
     const user = userEvent.setup();
     renderWithQuery(<ExplorerHarness />);
     await screen.findByText("Không có ticket nào khớp bộ lọc hiện tại.");
@@ -699,25 +699,21 @@ describe("Ticket Explorer behavioral branches", () => {
       "Skill",
       "interbank-fund-transfer",
     );
-
-    // Hiding the column again must not silently drop the active filter.
-    await user.click(screen.getByRole("checkbox", { name: "Skill" }));
-    expect(screen.getByRole("button", { name: /^Skill:/ })).toBeVisible();
     expect(
       screen.getByRole("region", {
         name: "Bộ lọc đang áp dụng trong Ticket Explorer",
       }),
     ).toHaveTextContent("Skill: interbank-fund-transfer");
 
-    // Only clearing the value removes the filter box for a hidden column.
-    await toggleMultiSelectOption(
-      user,
-      document.body,
-      "skillInput",
-      "Skill",
-      "interbank-fund-transfer",
-    );
+    // Hiding the column removes its filter box and the value it held, so no
+    // filter stays active without a visible control.
+    await user.click(screen.getByRole("checkbox", { name: "Skill" }));
     expect(screen.queryByRole("button", { name: /^Skill:/ })).toBeNull();
+    expect(
+      screen.queryByRole("region", {
+        name: "Bộ lọc đang áp dụng trong Ticket Explorer",
+      }),
+    ).toBeNull();
   });
 
   it("restores Ticket as the row header before legacy-selected fields", async () => {

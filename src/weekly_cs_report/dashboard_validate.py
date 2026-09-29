@@ -113,6 +113,9 @@ def _validate_dashboard(value: Mapping[str, object], *, generated_at: datetime) 
     for key, rate in coverage.items(): _rate(rate, f"coverage.{key}")
     _validate_unmapped(value["unmapped_tpe_codes"])
     _validate_tool_error_code_counts(value["tool_error_codes"])
+    _validate_tool_error_code_counts(
+        value["sub_skills"], "sub_skills", _SUB_SKILL_PATTERN
+    )
     _validate_gate(value["gate_status"])
     _validate_quality(value["data_quality"])
     views = _require_mapping(value["views"], "views")
@@ -143,26 +146,34 @@ def _validate_unmapped(value: object) -> None:
         raise ValueError("unmapped_tpe_codes must be empty")
 
 
-def _validate_tool_error_code_counts(value: object) -> None:
+_SUB_SKILL_PATTERN = re.compile(r"[a-z0-9_-]{1,64}/[A-Za-z0-9_-]{1,64}")
+
+
+def _validate_tool_error_code_counts(
+    value: object,
+    name: str = "tool_error_codes",
+    pattern: re.Pattern[str] | None = None,
+) -> None:
+    pattern = pattern or _TOOL_ERROR_CODE_PATTERN
     if not isinstance(value, list):
-        raise ValueError("tool_error_codes must be a list")
+        raise ValueError(f"{name} must be a list")
     seen: set[str] = set()
     previous: tuple[int, str] | None = None
     for item in value:
-        mapping = _require_mapping(item, "tool_error_codes entry")
-        _require_exact_keys(mapping, {"code", "total"}, "tool_error_codes entry")
+        mapping = _require_mapping(item, f"{name} entry")
+        _require_exact_keys(mapping, {"code", "total"}, f"{name} entry")
         code = mapping["code"]
         if (
             not isinstance(code, str)
-            or _TOOL_ERROR_CODE_PATTERN.fullmatch(code) is None
+            or pattern.fullmatch(code) is None
             or code in seen
         ):
-            raise ValueError("tool_error_codes code is invalid")
+            raise ValueError(f"{name} code is invalid")
         seen.add(code)
-        total = _positive_int(mapping["total"], "tool_error_codes total")
+        total = _positive_int(mapping["total"], f"{name} total")
         current = (-total, code)
         if previous is not None and current < previous:
-            raise ValueError("tool_error_codes must be ordered by count")
+            raise ValueError(f"{name} must be ordered by count")
         previous = current
 
 

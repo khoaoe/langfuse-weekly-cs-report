@@ -89,6 +89,7 @@ def _dashboard(generated_at: datetime, eligible: int = 3) -> dict[str, object]:
         "coverage": {"issue_category": 0.0, "app": 0.0, "tpe": 0.0, "intent": 0.0, "skill": 0.0},
         "unmapped_tpe_codes": [],
         "tool_error_codes": [],
+        "sub_skills": [],
         "gate_status": {"allowed": True, "structural_invalid_rate": 0.0, "reasons": []},
         "data_quality": {"counts": {}, "weekend_start_count": 0, "left_censored_count": 0, "pre_window_start_count": 0, "invalid_keyed_session_count": 0, "unkeyed_trace_count": 0},
     }

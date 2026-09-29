@@ -26,6 +26,8 @@ export interface TicketFilters {
   /** Comma-separated `<tool>:<code>` pairs; a ticket matches if it carries
    * any of them, so filtering one pair still finds the multi-pair tickets. */
   readonly tool_error_codes: string;
+  /** Comma-separated sub-skills; a ticket matches if any turn loaded one. */
+  readonly sub_skill: string;
   readonly transfer_reason: string;
   readonly gt4_turn: string;
   readonly transferred: string;
@@ -51,6 +53,7 @@ export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   tpe_code: "",
   model_core: "",
   tool_error_codes: "",
+  sub_skill: "",
   transfer_reason: "",
   gt4_turn: "",
   transferred: "",
@@ -84,6 +87,7 @@ const FILTER_LABELS: Readonly<
   tpe_code: "Transstatus",
   model_core: "Model",
   tool_error_codes: "Lỗi gọi tool",
+  sub_skill: "Sub-skill",
   transfer_reason: "Lý do chuyển CS",
   gt4_turn: ">3 lượt xử lý",
   transferred: "Đã chuyển CS",
@@ -106,6 +110,7 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
   "tpe_code",
   "model_core",
   "tool_error_codes",
+  "sub_skill",
   "transfer_reason",
   "gt4_turn",
   "transferred",
@@ -216,6 +221,7 @@ const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
   "tpe_code",
   "model_core",
   "tool_error_codes",
+  "sub_skill",
   "transfer_reason",
 ]);
 
@@ -234,6 +240,7 @@ const HAS_VALUE_LABELS: Partial<Record<TicketFilterKey, string>> = {
   tpe_code: "Chỉ ticket có giá trị",
   model_core: "Chỉ ticket có giá trị",
   tool_error_codes: "Chỉ ticket có lỗi",
+  sub_skill: "Chỉ ticket có sub-skill",
   ai_review_rating: "Chỉ ticket đã hậu kiểm",
 };
 

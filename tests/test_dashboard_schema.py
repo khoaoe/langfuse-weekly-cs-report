@@ -153,7 +153,7 @@ def test_v15_has_exact_top_level_contract_and_25_ticket_allowlist():
     assert set(dashboard) == {
         "generated_at", "source", "enrichment_status", "data_range", "views",
         "coverage", "unmapped_tpe_codes", "gate_status", "data_quality",
-        "tool_error_codes",
+        "tool_error_codes", "sub_skills",
     }
     assert dashboard["source"]["observations_fetched"] == 0
     assert dashboard["enrichment_status"] == "partial"
@@ -3005,3 +3005,36 @@ def test_csat_and_ai_review_group_by_app_alongside_skill_and_category():
     assert sum(
         row["reviewed_ticket_count"] for row in review_week["by_dimension"]["app"]
     ) == review_week["reviewed_ticket_count"]
+
+
+def test_ticket_page_filters_a_sub_skill_loaded_in_any_turn():
+    monday = _meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))
+    weekend = _meta(trace("weekend", "145666", 3, "2026-07-24T18:00:00Z", "AI reply"))
+    transfer = _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML))
+    run = _run([monday, weekend, transfer])
+    by_session = {
+        "145666": "withdraw/sub-skill-C",
+        "145667": "withdraw/sub-skill-A (lượt 1); withdraw/sub-skill-C (lượt 2, 3)",
+    }
+    sessions = tuple(
+        replace(
+            session,
+            dimensions=replace(
+                session.dimensions, sub_skill=by_session.get(session.session_id)
+            ),
+        )
+        for session in run.result.sessions
+    )
+    snapshot = project_dashboard(replace(run, result=replace(run.result, sessions=sessions)))
+
+    assert snapshot.dashboard_dict()["sub_skills"] == [
+        {"code": "withdraw/sub-skill-C", "total": 2},
+        {"code": "withdraw/sub-skill-A", "total": 1},
+    ]
+    only_c = ticket_page(snapshot, sub_skill="withdraw/sub-skill-C")
+    assert {item["ticket_id"] for item in only_c["items"]} == {"145666", "145667"}
+    only_a = ticket_page(snapshot, sub_skill="withdraw/sub-skill-A")
+    assert {item["ticket_id"] for item in only_a["items"]} == {"145667"}
+    assert ticket_page(snapshot, sub_skill="__has_value__")["total"] == 2
+    with pytest.raises(ValueError, match="sub_skill is invalid"):
+        ticket_page(snapshot, sub_skill="telco/sub-skill-X")

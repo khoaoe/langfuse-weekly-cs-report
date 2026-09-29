@@ -163,6 +163,26 @@ export function TicketIdentifier({
   );
 }
 
+// Columns whose filter block shows exactly while the column does.
+const COLUMN_FILTER_KEYS = [
+  "outcome",
+  "csat_satisfaction",
+  "ai_review_rating",
+  "issue_category",
+  "app",
+  "product_code",
+  "skill",
+  "intent",
+  "tpe_code",
+  "model_core",
+  "tool_error_codes",
+  "sub_skill",
+  "gt4_turn",
+  "transferred",
+  "transfer_reason",
+  "is_weekend_start",
+] as const satisfies readonly (TicketColumnKey & keyof TicketFilters)[];
+
 function cellText(row: TicketRow, key: TicketColumnKey): string {
   const value = row[key];
   if (value === null) {
@@ -236,6 +256,16 @@ export function TicketExplorer({
   );
   const [exportNotice, setExportNotice] = useState("");
   const [sort, setSort] = useState<TicketSort>(DEFAULT_SORT);
+  // A drill-down can filter on a hidden column; show that column so its
+  // filter block is on screen instead of an invisible active filter.
+  useEffect(() => {
+    const hidden = COLUMN_FILTER_KEYS.filter(
+      (key) => filters[key] !== "" && !visible.includes(key),
+    );
+    if (hidden.length > 0) {
+      setVisible(writeVisibleTicketColumns([...visible, ...hidden]));
+    }
+  }, [filters, visible]);
   const view = selectView(snapshot, weekDefinition);
   const observedWeeks = useMemo(
     () =>
@@ -270,6 +300,7 @@ export function TicketExplorer({
       tpe_code: filters.tpe_code,
       model_core: filters.model_core,
       tool_error_codes: filters.tool_error_codes,
+      sub_skill: filters.sub_skill,
       transfer_reason: filters.transfer_reason,
       is_weekend_start: filters.is_weekend_start,
     }),
@@ -312,6 +343,10 @@ export function TicketExplorer({
       next.length === 0 ? DEFAULT_TICKET_COLUMNS : next,
     );
     setVisible(nextVisible);
+    const filterKey = COLUMN_FILTER_KEYS.find((item) => item === key);
+    if (removing && filterKey !== undefined && filters[filterKey] !== "") {
+      update({ [filterKey]: "" });
+    }
 
     if (removing && sort.key === key) {
       setPage(1);
@@ -321,7 +356,7 @@ export function TicketExplorer({
           : { key: "ticket_id", direction: "asc" },
       );
     }
-  }, [sort.key, visible]);
+  }, [filters, sort.key, update, visible]);
 
   const exportCsv = useCallback(async () => {
     const rows: TicketRow[] = [];
@@ -400,6 +435,7 @@ export function TicketExplorer({
     // so the dimension does not partition the population. The counts come
     // from the snapshot's top-level list instead, ordered most-frequent first.
     tool_error_codes: snapshot.tool_error_codes,
+    sub_skill: snapshot.sub_skills,
     transfer_reason: Array.from(
       new Set(view.transfer_reasons.triggers.map((item) => item.reason)),
     ).sort((left, right) =>
@@ -422,6 +458,10 @@ export function TicketExplorer({
     tpe_code: filterOptions.tpe_code.map((value) => ({ value, label: value })),
     model_core: filterOptions.model_core.map((value) => ({ value, label: value })),
     tool_error_codes: filterOptions.tool_error_codes.map((item) => ({
+      value: item.code,
+      label: `${item.code} (${formatCount(item.total)})`,
+    })),
+    sub_skill: filterOptions.sub_skill.map((item) => ({
       value: item.code,
       label: `${item.code} (${formatCount(item.total)})`,
     })),
@@ -554,7 +594,7 @@ export function TicketExplorer({
             onChange={(event) => update({ ticket_id: event.target.value })}
           />
         </label>
-        {visible.includes("outcome") || filters.outcome !== "" ? (
+        {visible.includes("outcome") ? (
           <MultiSelectField
             id="outcomeInput"
             label="Kết quả"
@@ -563,8 +603,7 @@ export function TicketExplorer({
             onChange={(value) => update({ outcome: value })}
           />
         ) : null}
-        {visible.includes("csat_satisfaction") ||
-        filters.csat_satisfaction !== "" ? (
+        {visible.includes("csat_satisfaction") ? (
           <MultiSelectField
             id="csatSatisfactionInput"
             label="Khách hàng đánh giá"
@@ -573,8 +612,7 @@ export function TicketExplorer({
             onChange={(value) => update({ csat_satisfaction: value })}
           />
         ) : null}
-        {visible.includes("ai_review_rating") ||
-        filters.ai_review_rating !== "" ? (
+        {visible.includes("ai_review_rating") ? (
           <MultiSelectField
             id="aiReviewRatingInput"
             label="CS hậu kiểm"
@@ -584,7 +622,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket đã hậu kiểm"
           />
         ) : null}
-        {visible.includes("issue_category") || filters.issue_category !== "" ? (
+        {visible.includes("issue_category") ? (
           <MultiSelectField
             id="issueCategoryInput"
             label="Category"
@@ -594,7 +632,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket đã phân loại"
           />
         ) : null}
-        {visible.includes("app") || filters.app !== "" ? (
+        {visible.includes("app") ? (
           <MultiSelectField
             id="appInput"
             label="App"
@@ -604,7 +642,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có giá trị"
           />
         ) : null}
-        {visible.includes("product_code") || filters.product_code !== "" ? (
+        {visible.includes("product_code") ? (
           <MultiSelectField
             id="productCodeInput"
             label="Product Code"
@@ -614,7 +652,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có giá trị"
           />
         ) : null}
-        {visible.includes("skill") || filters.skill !== "" ? (
+        {visible.includes("skill") ? (
           <MultiSelectField
             id="skillInput"
             label="Skill"
@@ -624,7 +662,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có skill"
           />
         ) : null}
-        {visible.includes("intent") || filters.intent !== "" ? (
+        {visible.includes("intent") ? (
           <label className={ticketStyles.field}>
             Intent
             <input
@@ -642,7 +680,7 @@ export function TicketExplorer({
             </datalist>
           </label>
         ) : null}
-        {visible.includes("tpe_code") || filters.tpe_code !== "" ? (
+        {visible.includes("tpe_code") ? (
           <MultiSelectField
             id="tpeCodeInput"
             label="Transstatus"
@@ -652,7 +690,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có giá trị"
           />
         ) : null}
-        {visible.includes("model_core") || filters.model_core !== "" ? (
+        {visible.includes("model_core") ? (
           <MultiSelectField
             id="modelCoreInput"
             label="Model"
@@ -662,8 +700,7 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có giá trị"
           />
         ) : null}
-        {visible.includes("tool_error_codes") ||
-        filters.tool_error_codes !== "" ? (
+        {visible.includes("tool_error_codes") ? (
           <MultiSelectField
             id="toolErrorCodesInput"
             label="Lỗi gọi tool"
@@ -673,7 +710,17 @@ export function TicketExplorer({
             hasValueLabel="Chỉ ticket có lỗi"
           />
         ) : null}
-        {visible.includes("gt4_turn") || filters.gt4_turn !== "" ? (
+        {visible.includes("sub_skill") ? (
+          <MultiSelectField
+            id="subSkillInput"
+            label="Sub-skill"
+            options={multiSelectOptions.sub_skill}
+            value={filters.sub_skill}
+            onChange={(value) => update({ sub_skill: value })}
+            hasValueLabel="Chỉ ticket có sub-skill"
+          />
+        ) : null}
+        {visible.includes("gt4_turn") ? (
           <label className={ticketStyles.field}>
             Hơn 3 lượt xử lý
             <select
@@ -687,7 +734,7 @@ export function TicketExplorer({
             </select>
           </label>
         ) : null}
-        {visible.includes("transferred") || filters.transferred !== "" ? (
+        {visible.includes("transferred") ? (
           <label className={ticketStyles.field}>
             Đã chuyển CS
             <select
@@ -701,8 +748,7 @@ export function TicketExplorer({
             </select>
           </label>
         ) : null}
-        {visible.includes("transfer_reason") ||
-        filters.transfer_reason !== "" ? (
+        {visible.includes("transfer_reason") ? (
           <MultiSelectField
             id="transferReasonInput"
             label="Lý do chuyển CS"
@@ -711,8 +757,7 @@ export function TicketExplorer({
             onChange={(value) => update({ transfer_reason: value })}
           />
         ) : null}
-        {visible.includes("is_weekend_start") ||
-        filters.is_weekend_start !== "" ? (
+        {visible.includes("is_weekend_start") ? (
           <label className={ticketStyles.field}>
             Bắt đầu cuối tuần
             <select
