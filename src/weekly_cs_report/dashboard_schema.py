@@ -306,6 +306,14 @@ def ticket_page(
     gt4_turn: bool | None = None,
     transferred: bool | None = None,
     is_weekend_start: bool | None = None,
+    cohort_status: str | None = None,
+    ai_first: bool | None = None,
+    reopen_within_7d: bool | None = None,
+    escalation_guard_blocked: bool | None = None,
+    data_quality: str | None = None,
+    reopen_lifetime: str | None = None,
+    ai_reply_count: str | None = None,
+    turn_count: str | None = None,
     week_definition: str | None = None,
     sort_by: str | None = None,
     sort_direction: str | None = None,
@@ -383,10 +391,27 @@ def ticket_page(
     selected_ai_review_ratings = _parse_multi_ticket_filter(
         ai_review_rating, _AI_REVIEW_RATING_TICKET_STATES, "ai_review_rating"
     )
+    selected_cohort_statuses = _parse_multi_ticket_filter(
+        cohort_status, frozenset({"complete", "wtd"}), "cohort_status"
+    )
+    selected_data_quality = _parse_multi_ticket_filter(
+        data_quality, _QUALITY_LABELS, "data_quality"
+    )
+    count_ranges = {
+        name: _parse_count_range(value, name)
+        for name, value in {
+            "reopen_lifetime": reopen_lifetime,
+            "ai_reply_count": ai_reply_count,
+            "turn_count": turn_count,
+        }.items()
+    }
     for name, value in {
         "gt4_turn": gt4_turn,
         "transferred": transferred,
         "is_weekend_start": is_weekend_start,
+        "ai_first": ai_first,
+        "reopen_within_7d": reopen_within_7d,
+        "escalation_guard_blocked": escalation_guard_blocked,
     }.items():
         if value is not None and not isinstance(value, bool):
             raise ValueError(f"{name} is invalid")
@@ -442,6 +467,24 @@ def ticket_page(
         and (gt4_turn is None or row.gt4_turn == gt4_turn)
         and (transferred is None or row.transferred == transferred)
         and (is_weekend_start is None or row.is_weekend_start == is_weekend_start)
+        and (
+            selected_cohort_statuses is None
+            or row.cohort_status in selected_cohort_statuses
+        )
+        and (ai_first is None or row.ai_first == ai_first)
+        and (
+            reopen_within_7d is None
+            or row.reopen_within_7d == (1 if reopen_within_7d else 0)
+        )
+        and (
+            escalation_guard_blocked is None
+            or row.escalation_guard_blocked == escalation_guard_blocked
+        )
+        and (selected_data_quality is None or row.data_quality in selected_data_quality)
+        and all(
+            bounds is None or _in_count_range(getattr(row, name), bounds)
+            for name, bounds in count_ranges.items()
+        )
         and (week_definition != "mon_fri" or not row.is_weekend_start)
     ]
     rows = _sort_ticket_rows(rows, sort_by, effective_sort_direction)
@@ -2360,6 +2403,31 @@ def _parse_multi_ticket_filter(
     return frozenset(pieces)
 
 
+
+
+_COUNT_RANGE = re.compile(r"([0-9]{1,5})?-([0-9]{1,5})?")
+
+
+def _parse_count_range(value: str | None, name: str) -> tuple[int | None, int | None] | None:
+    """`"2-5"`, `"3-"` or `"-5"`: inclusive bounds, at least one given."""
+    if value is None:
+        return None
+    match = _COUNT_RANGE.fullmatch(value) if isinstance(value, str) else None
+    if match is None or match.groups() == (None, None):
+        raise ValueError(f"{name} is invalid")
+    low, high = (None if part is None else int(part) for part in match.groups())
+    if low is not None and high is not None and low > high:
+        raise ValueError(f"{name} is invalid")
+    return low, high
+
+
+def _in_count_range(value: int | None, bounds: tuple[int | None, int | None]) -> bool:
+    low, high = bounds
+    return (
+        value is not None
+        and (low is None or value >= low)
+        and (high is None or value <= high)
+    )
 
 
 _TURN_SUFFIX = re.compile(r" \(lượt [0-9, ]+\)\Z")

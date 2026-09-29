@@ -2425,7 +2425,7 @@ describe("Ticket Explorer", () => {
       />,
     );
 
-    expect(await screen.findByText("Thiếu lượt trả lời đầu tiên")).toBeVisible();
+    expect(await within(await screen.findByRole("table")).findByText("Thiếu lượt trả lời đầu tiên")).toBeVisible();
     expect(screen.queryByText("missing_turn0")).toBeNull();
   });
 });

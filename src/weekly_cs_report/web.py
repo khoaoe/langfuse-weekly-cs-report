@@ -109,6 +109,14 @@ _QUERY_NAMES = (
     "gt4_turn",
     "transferred",
     "is_weekend_start",
+    "cohort_status",
+    "ai_first",
+    "reopen_within_7d",
+    "escalation_guard_blocked",
+    "data_quality",
+    "reopen_lifetime",
+    "ai_reply_count",
+    "turn_count",
     "week_definition",
     "sort_by",
     "sort_direction",
@@ -131,6 +139,8 @@ _MULTI_SELECT_QUERY_NAMES = frozenset(
         "transfer_reason",
         "csat_satisfaction",
         "ai_review_rating",
+        "cohort_status",
+        "data_quality",
     }
 )
 _ENTRY_QUERY_NAMES = (
@@ -1808,7 +1818,14 @@ def _parse_ticket_query(
             if not _INTEGER_QUERY.fullmatch(value):
                 return {}, name
             parsed[name] = int(value)
-        elif name in {"gt4_turn", "transferred", "is_weekend_start"}:
+        elif name in {
+            "gt4_turn",
+            "transferred",
+            "is_weekend_start",
+            "ai_first",
+            "reopen_within_7d",
+            "escalation_guard_blocked",
+        }:
             if value not in {"true", "false"}:
                 return {}, name
             parsed[name] = value == "true"

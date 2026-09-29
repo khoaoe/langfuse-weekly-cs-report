@@ -617,7 +617,7 @@ describe("Ticket Explorer behavioral branches", () => {
       screen.getByRole("button", { name: /Sắp xếp theo Đã chuyển CS/ }),
     );
     expect(rowIds().at(-1)).toBe("10");
-    expect(screen.getByText("Thiếu lượt trả lời đầu tiên")).toBeVisible();
+    expect(within(screen.getByRole("table")).getByText("Thiếu lượt trả lời đầu tiên")).toBeVisible();
 
     await user.click(screen.getByRole("button", { name: "Trang sau" }));
     expect(

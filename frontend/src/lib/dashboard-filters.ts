@@ -1,4 +1,9 @@
-import type { TransferTriggerReason, WeekDefinition } from "./dashboard-schema";
+import type {
+  QualityLabel,
+  TransferTriggerReason,
+  WeekDefinition,
+} from "./dashboard-schema";
+import { dataQualityLabel } from "./data-quality";
 import { aiReviewRatingLabel } from "./ai-review-labels";
 import { csatSatisfactionLabel } from "./csat-labels";
 import { formatDateRangeLabel, formatWeekRange } from "./format";
@@ -32,6 +37,15 @@ export interface TicketFilters {
   readonly gt4_turn: string;
   readonly transferred: string;
   readonly is_weekend_start: string;
+  readonly cohort_status: string;
+  readonly ai_first: string;
+  /** Inclusive count range: "2-5", "3-" or "-5". */
+  readonly reopen_lifetime: string;
+  readonly reopen_within_7d: string;
+  readonly ai_reply_count: string;
+  readonly turn_count: string;
+  readonly escalation_guard_blocked: string;
+  readonly data_quality: string;
 }
 
 export type TicketFilterKey = keyof TicketFilters;
@@ -58,6 +72,14 @@ export const EMPTY_TICKET_FILTERS: TicketFilters = Object.freeze({
   gt4_turn: "",
   transferred: "",
   is_weekend_start: "",
+  cohort_status: "",
+  ai_first: "",
+  reopen_lifetime: "",
+  reopen_within_7d: "",
+  ai_reply_count: "",
+  turn_count: "",
+  escalation_guard_blocked: "",
+  data_quality: "",
 });
 
 export const OUTCOME_FILTER_LABELS: Readonly<Record<string, string>> = {
@@ -92,6 +114,14 @@ const FILTER_LABELS: Readonly<
   gt4_turn: ">3 lượt xử lý",
   transferred: "Đã chuyển CS",
   is_weekend_start: "Bắt đầu cuối tuần",
+  cohort_status: "Trạng thái tuần",
+  ai_first: "AI First",
+  reopen_lifetime: "Số lần reopen",
+  reopen_within_7d: "Reopen trong 7 ngày",
+  ai_reply_count: "Phản hồi AI",
+  turn_count: "Tổng lượt xử lý",
+  escalation_guard_blocked: "Chặn chuyển CS trùng",
+  data_quality: "Chất lượng dữ liệu",
 };
 
 const CHIP_ORDER: readonly TicketFilterKey[] = [
@@ -115,6 +145,14 @@ const CHIP_ORDER: readonly TicketFilterKey[] = [
   "gt4_turn",
   "transferred",
   "is_weekend_start",
+  "cohort_status",
+  "ai_first",
+  "reopen_lifetime",
+  "reopen_within_7d",
+  "ai_reply_count",
+  "turn_count",
+  "escalation_guard_blocked",
+  "data_quality",
 ];
 
 export interface ActiveFilterChip {
@@ -223,6 +261,8 @@ const MULTI_SELECT_FILTER_KEYS: ReadonlySet<TicketFilterKey> = new Set([
   "tool_error_codes",
   "sub_skill",
   "transfer_reason",
+  "cohort_status",
+  "data_quality",
 ]);
 
 /** Reserved value meaning "any real value" for a dimension (C6) -- matches
@@ -261,6 +301,12 @@ function displayFilterValuePiece(key: TicketFilterKey, value: string): string {
   if (key === "transfer_reason") {
     return transferReasonLabel(value as TransferTriggerReason);
   }
+  if (key === "cohort_status") {
+    return value === "wtd" ? "Tuần chưa kết thúc" : "Tuần đầy đủ";
+  }
+  if (key === "data_quality") {
+    return dataQualityLabel(value as QualityLabel);
+  }
   return value;
 }
 
@@ -278,9 +324,22 @@ function displayFilterValue(
   if (
     key === "gt4_turn" ||
     key === "transferred" ||
-    key === "is_weekend_start"
+    key === "is_weekend_start" ||
+    key === "ai_first" ||
+    key === "reopen_within_7d" ||
+    key === "escalation_guard_blocked"
   ) {
     return value === "true" ? "Có" : "Không";
+  }
+  if (
+    key === "reopen_lifetime" ||
+    key === "ai_reply_count" ||
+    key === "turn_count"
+  ) {
+    const [low = "", high = ""] = value.split("-");
+    if (low === "") return `≤ ${high}`;
+    if (high === "") return `≥ ${low}`;
+    return low === high ? low : `${low}–${high}`;
   }
   if (MULTI_SELECT_FILTER_KEYS.has(key)) {
     if (value === HAS_VALUE) {

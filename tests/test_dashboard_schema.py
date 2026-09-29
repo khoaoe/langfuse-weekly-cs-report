@@ -3038,3 +3038,41 @@ def test_ticket_page_filters_a_sub_skill_loaded_in_any_turn():
     assert ticket_page(snapshot, sub_skill="__has_value__")["total"] == 2
     with pytest.raises(ValueError, match="sub_skill is invalid"):
         ticket_page(snapshot, sub_skill="telco/sub-skill-X")
+
+
+def test_ticket_page_filters_the_remaining_ticket_columns():
+    monday = _meta(trace("ai", "145665", 0, "2026-07-20T02:00:00Z", "AI reply"))
+    weekend = _meta(trace("weekend", "145666", 3, "2026-07-24T18:00:00Z", "AI reply"))
+    transfer = _meta(trace("transfer", "145667", 0, "2026-07-22T02:00:00Z", TRANSFER_HTML))
+    snapshot = project_dashboard(_run([monday, weekend, transfer]))
+    rows = ticket_page(snapshot, page_size=50)["items"]
+
+    def ids(**filters):
+        return {item["ticket_id"] for item in ticket_page(snapshot, **filters)["items"]}
+
+    everyone = {row["ticket_id"] for row in rows}
+    for name in ("turn_count", "ai_reply_count"):
+        values = {row["ticket_id"]: row[name] for row in rows}
+        top = max(values.values())
+        assert ids(**{name: f"{top}-"}) == {k for k, v in values.items() if v >= top}
+        assert ids(**{name: f"-{top}"}) == everyone
+        assert ids(**{name: f"0-{top - 1}"}) == {k for k, v in values.items() if v < top}
+    for name in ("ai_first", "escalation_guard_blocked"):
+        assert ids(**{name: True}) | ids(**{name: False}) == everyone
+        assert ids(**{name: True}) == {r["ticket_id"] for r in rows if r[name]}
+    assert ids(reopen_within_7d=False) == {
+        r["ticket_id"] for r in rows if r["reopen_within_7d"] == 0
+    }
+    statuses = ",".join(sorted({r["cohort_status"] for r in rows}))
+    assert ids(cohort_status=statuses) == everyone
+    qualities = ",".join(sorted({r["data_quality"] for r in rows}))
+    assert ids(data_quality=qualities) == everyone
+    for name, bad in (
+        ("turn_count", "-"),
+        ("turn_count", "5-2"),
+        ("ai_reply_count", "x"),
+        ("cohort_status", "later"),
+        ("data_quality", "made_up"),
+    ):
+        with pytest.raises(ValueError, match=f"{name} is invalid"):
+            ticket_page(snapshot, **{name: bad})

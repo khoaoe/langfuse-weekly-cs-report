@@ -37,6 +37,29 @@ describe("dashboard filter state", () => {
     expect(current.product_code).toBe("IBFT");
   });
 
+  it("chips the count-range, boolean and enum column filters readably", () => {
+    const current = {
+      ...EMPTY_TICKET_FILTERS,
+      cohort_status: "wtd",
+      ai_first: "true",
+      reopen_lifetime: "2-",
+      ai_reply_count: "-3",
+      turn_count: "2-5",
+      escalation_guard_blocked: "false",
+      data_quality: "missing_turn0",
+    } as const;
+
+    expect(activeTicketFilterChips(current, "mon_sun")).toEqual([
+      { key: "cohort_status", label: "Trạng thái tuần: Tuần chưa kết thúc" },
+      { key: "ai_first", label: "AI First: Có" },
+      { key: "reopen_lifetime", label: "Số lần reopen: ≥ 2" },
+      { key: "ai_reply_count", label: "Phản hồi AI: ≤ 3" },
+      { key: "turn_count", label: "Tổng lượt xử lý: 2–5" },
+      { key: "escalation_guard_blocked", label: "Chặn chuyển CS trùng: Không" },
+      { key: "data_quality", label: "Chất lượng dữ liệu: Thiếu lượt trả lời đầu tiên" },
+    ]);
+  });
+
   it("chips a tool-error pair filter under its own Vietnamese label", () => {
     const current = {
       ...EMPTY_TICKET_FILTERS,

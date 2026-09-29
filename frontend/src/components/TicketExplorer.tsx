@@ -9,7 +9,7 @@ import type {
   WeekDefinition,
 } from "../lib/dashboard-schema";
 import { parseTicketPage } from "../lib/dashboard-schema";
-import { dataQualityLabel } from "../lib/data-quality";
+import { DATA_QUALITY_LABELS, dataQualityLabel } from "../lib/data-quality";
 import {
   CSAT_SATISFACTION_OPTIONS,
   csatSatisfactionLabel,
@@ -163,6 +163,56 @@ export function TicketIdentifier({
   );
 }
 
+/** Two optional bounds kept as one "low-high" string ("3-", "-5", "2-5"). */
+function CountRangeField({
+  id,
+  label,
+  value,
+  onChange,
+}: {
+  readonly id: string;
+  readonly label: string;
+  readonly value: string;
+  readonly onChange: (value: string) => void;
+}) {
+  const [low = "", high = ""] = value.split("-");
+  const set = (nextLow: string, nextHigh: string) =>
+    onChange(nextLow === "" && nextHigh === "" ? "" : `${nextLow}-${nextHigh}`);
+  const digits = (text: string) => text.replace(/\D/g, "").slice(0, 5);
+  return (
+    <fieldset className={`${ticketStyles.field} ${ticketStyles.rangeField}`}>
+      <legend>{label}</legend>
+      <span className={ticketStyles.rangeInputs}>
+        <input
+          id={id}
+          type="number"
+          min={0}
+          inputMode="numeric"
+          aria-label={`${label} từ`}
+          placeholder="Từ"
+          value={low}
+          onChange={(event) => set(digits(event.target.value), high)}
+        />
+        <input
+          type="number"
+          min={0}
+          inputMode="numeric"
+          aria-label={`${label} đến`}
+          placeholder="Đến"
+          value={high}
+          onChange={(event) => set(low, digits(event.target.value))}
+        />
+      </span>
+    </fieldset>
+  );
+}
+
+// A half-typed "5-2" would only earn a 400; wait until the bounds make sense.
+function sendableRange(value: string): string {
+  const [low = "", high = ""] = value.split("-");
+  return low !== "" && high !== "" && Number(low) > Number(high) ? "" : value;
+}
+
 // Columns whose filter block shows exactly while the column does.
 const COLUMN_FILTER_KEYS = [
   "outcome",
@@ -181,6 +231,14 @@ const COLUMN_FILTER_KEYS = [
   "transferred",
   "transfer_reason",
   "is_weekend_start",
+  "cohort_status",
+  "ai_first",
+  "reopen_lifetime",
+  "reopen_within_7d",
+  "ai_reply_count",
+  "turn_count",
+  "escalation_guard_blocked",
+  "data_quality",
 ] as const satisfies readonly (TicketColumnKey & keyof TicketFilters)[];
 
 function cellText(row: TicketRow, key: TicketColumnKey): string {
@@ -303,6 +361,14 @@ export function TicketExplorer({
       sub_skill: filters.sub_skill,
       transfer_reason: filters.transfer_reason,
       is_weekend_start: filters.is_weekend_start,
+      cohort_status: filters.cohort_status,
+      ai_first: filters.ai_first,
+      reopen_lifetime: sendableRange(filters.reopen_lifetime),
+      reopen_within_7d: filters.reopen_within_7d,
+      ai_reply_count: sendableRange(filters.ai_reply_count),
+      turn_count: sendableRange(filters.turn_count),
+      escalation_guard_blocked: filters.escalation_guard_blocked,
+      data_quality: filters.data_quality,
     }),
     [weekDefinition, sort, page, filters],
   );
@@ -471,6 +537,14 @@ export function TicketExplorer({
     })),
     csat_satisfaction: CSAT_SATISFACTION_OPTIONS,
     ai_review_rating: AI_REVIEW_RATING_OPTIONS,
+    cohort_status: [
+      { value: "complete", label: "Tuần đầy đủ" },
+      { value: "wtd", label: "Tuần chưa kết thúc" },
+    ],
+    data_quality: Object.entries(DATA_QUALITY_LABELS).map(([value, label]) => ({
+      value,
+      label,
+    })),
   } as const;
 
   const explorerActiveFilters = activeTicketFilterChips(filters, weekDefinition);
@@ -772,6 +846,90 @@ export function TicketExplorer({
               <option value="false">Không</option>
             </select>
           </label>
+        ) : null}
+        {visible.includes("cohort_status") ? (
+          <MultiSelectField
+            id="cohortStatusInput"
+            label="Trạng thái tuần"
+            options={multiSelectOptions.cohort_status}
+            value={filters.cohort_status}
+            onChange={(value) => update({ cohort_status: value })}
+          />
+        ) : null}
+        {visible.includes("ai_first") ? (
+          <label className={ticketStyles.field}>
+            AI First
+            <select
+              id="aiFirstInput"
+              value={filters.ai_first}
+              onChange={(event) => update({ ai_first: event.target.value })}
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
+        {visible.includes("reopen_lifetime") ? (
+          <CountRangeField
+            id="reopenLifetimeInput"
+            label="Số lần reopen"
+            value={filters.reopen_lifetime}
+            onChange={(value) => update({ reopen_lifetime: value })}
+          />
+        ) : null}
+        {visible.includes("reopen_within_7d") ? (
+          <label className={ticketStyles.field}>
+            Reopen trong 7 ngày
+            <select
+              id="reopenWithin7DInput"
+              value={filters.reopen_within_7d}
+              onChange={(event) => update({ reopen_within_7d: event.target.value })}
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
+        {visible.includes("ai_reply_count") ? (
+          <CountRangeField
+            id="aiReplyCountInput"
+            label="Phản hồi AI"
+            value={filters.ai_reply_count}
+            onChange={(value) => update({ ai_reply_count: value })}
+          />
+        ) : null}
+        {visible.includes("turn_count") ? (
+          <CountRangeField
+            id="turnCountInput"
+            label="Tổng lượt xử lý"
+            value={filters.turn_count}
+            onChange={(value) => update({ turn_count: value })}
+          />
+        ) : null}
+        {visible.includes("escalation_guard_blocked") ? (
+          <label className={ticketStyles.field}>
+            Chặn chuyển CS trùng
+            <select
+              id="escalationGuardBlockedInput"
+              value={filters.escalation_guard_blocked}
+              onChange={(event) => update({ escalation_guard_blocked: event.target.value })}
+            >
+              <option value="">Tất cả</option>
+              <option value="true">Có</option>
+              <option value="false">Không</option>
+            </select>
+          </label>
+        ) : null}
+        {visible.includes("data_quality") ? (
+          <MultiSelectField
+            id="dataQualityInput"
+            label="Chất lượng dữ liệu"
+            options={multiSelectOptions.data_quality}
+            value={filters.data_quality}
+            onChange={(value) => update({ data_quality: value })}
+          />
         ) : null}
       </div>
 

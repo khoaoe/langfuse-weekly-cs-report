@@ -352,3 +352,21 @@
   border-radius: 3px;
   background: var(--rule-strong);
 }
+
+/* Count-range filter: a label-less fieldset laid out like the other fields. */
+.rangeField {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.rangeField legend {
+  padding: 0;
+  margin-bottom: var(--space-1);
+}
+
+.rangeInputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-1);
+}
