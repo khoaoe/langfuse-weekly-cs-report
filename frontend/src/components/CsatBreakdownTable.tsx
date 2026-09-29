@@ -26,7 +26,6 @@ export const OUTCOME_ORDER: readonly Outcome[] = [
   "direct_cs",
   "unclassified",
 ];
-const GROUP_LIMIT = 10;
 
 export interface BreakdownRow {
   readonly value: string;
@@ -269,14 +268,12 @@ export function CsatBreakdownTable({
   scopeKey,
   onValueSelect,
 }: CsatBreakdownTableProps) {
-  const [expanded, setExpanded] = useState(false);
   const [sort, setSort] = useState<TableSort<CsatSortKey>>(DEFAULT_CSAT_SORT);
   const rows = useMemo(() => rowsFor(data, grouping), [data, grouping]);
   const responseTotals = csatResponseTotals(data);
   const groupingLabel = csatGroupingLabel(grouping);
   const sortable = grouping !== "outcome";
   const columns = useMemo(() => csatSortColumns(groupingLabel), [groupingLabel]);
-  useEffect(() => setExpanded(false), [grouping, scopeKey]);
   useEffect(() => setSort(DEFAULT_CSAT_SORT), [grouping, scopeKey]);
   // `rows` already carries the default rank (see `sortBreakdownRows`); a
   // column click re-sorts it, `outcome` keeps its fixed pipeline-stage order.
@@ -287,9 +284,6 @@ export function CsatBreakdownTable({
     const column = columns.find((item) => item.key === sort.key) ?? columns[0];
     return stableSortRows(rows, (row) => column?.value(row), sort.direction);
   }, [columns, rows, sort, sortable]);
-  const showAll = expanded;
-  const visibleRows = !sortable || showAll ? sortedRows : sortedRows.slice(0, GROUP_LIMIT);
-  const canExpand = sortable && sortedRows.length > GROUP_LIMIT;
 
   return (
     <div className={csatStyles.breakdown}>
@@ -361,7 +355,7 @@ export function CsatBreakdownTable({
                 {rateCell(responseTotals.negative, responseTotals.ticket_count)}
               </td>
             </tr>
-            {visibleRows.map((row) => (
+            {sortedRows.map((row) => (
               <tr key={`${grouping}:${row.value}`}>
                 <th scope="row" className={styles.stickyColumn}>
                   <FilterValueButton
@@ -392,16 +386,6 @@ export function CsatBreakdownTable({
           </tbody>
         </table>
       </div>
-      {canExpand ? (
-        <button
-          type="button"
-          className={styles.action}
-          aria-controls="csat-breakdown-table"
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {showAll ? "Thu gọn" : `Xem tất cả ${formatCount(sortedRows.length)} nhóm`}
-        </button>
-      ) : null}
     </div>
   );
 }

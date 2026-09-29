@@ -309,7 +309,6 @@ const DEFAULT_SEGMENT_SORT: TableSort<SegmentSortKey> = {
 };
 
 /** SPEC-v2 §5.10: a ranked list shows its head, not its whole tail. */
-const SEGMENT_HEAD_ROWS = 12;
 
 function tooltipAnchor(clientX: number, bounds: DOMRect): number {
   if (bounds.width <= 0) {
@@ -700,10 +699,6 @@ function SegmentTable({
     useState<SegmentDimension>("issue_category");
   const [sort, setSort] =
     useState<TableSort<SegmentSortKey>>(DEFAULT_SEGMENT_SORT);
-  const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
-    setExpanded(false);
-  }, [dimension]);
   const buckets = segments[dimension];
   const total = useMemo(
     () => Object.values(buckets).reduce((sum, counts) => sum + counts.total, 0),
@@ -727,21 +722,6 @@ function SegmentTable({
       sort.direction,
     );
   }, [buckets, sort]);
-  const hiddenRows = expanded ? [] : rows.slice(SEGMENT_HEAD_ROWS);
-  const visibleRows = expanded ? rows : rows.slice(0, SEGMENT_HEAD_ROWS);
-  // The tail is summed rather than dropped: every ticket stays in the table,
-  // so the column totals a reader adds up still reconcile with the ledger.
-  const restCounts = hiddenRows.reduce(
-    (sum, row) => ({
-      total: sum.total + row.counts.total,
-      ai_first: sum.ai_first + row.counts.ai_first,
-      transferred: sum.transferred + row.counts.transferred,
-      reopen: sum.reopen + row.counts.reopen,
-      ai_end_to_end: sum.ai_end_to_end + row.counts.ai_end_to_end,
-      direct_cs: sum.direct_cs + row.counts.direct_cs,
-    }),
-    { total: 0, ai_first: 0, transferred: 0, reopen: 0, ai_end_to_end: 0, direct_cs: 0 },
-  );
   const activeTabId = `segment-tab-${dimension}`;
 
   return (
@@ -853,7 +833,7 @@ function SegmentTable({
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map(({ label, counts }) => (
+            {rows.map(({ label, counts }) => (
               <tr key={label}>
                 <th scope="row" className={styles.stickyColumn}>
                   <FilterValueButton
@@ -885,51 +865,6 @@ function SegmentTable({
                 </td>
               </tr>
             ))}
-            {hiddenRows.length === 0 ? null : (
-              <tr>
-                <th scope="row" className={styles.stickyColumn}>
-                  <button
-                    type="button"
-                    className={belowFoldStyles.inlineAction}
-                    onClick={() => setExpanded(true)}
-                  >
-                    {`${hiddenRows.length} nhóm còn lại — xem hết`}
-                  </button>
-                </th>
-                <td className={styles.numeric}>
-                  {formatMetric(restCounts.total, total)}
-                </td>
-                <td className={styles.numeric}>
-                  {formatMetric(restCounts.ai_first, restCounts.total)}
-                </td>
-                <td className={styles.numeric}>
-                  {formatMetric(restCounts.transferred, restCounts.total)}
-                </td>
-                <td className={styles.numeric}>
-                  {formatMetric(restCounts.ai_end_to_end, restCounts.total)}
-                </td>
-                <td className={styles.numeric}>
-                  {formatMetric(restCounts.direct_cs, restCounts.total)}
-                </td>
-                <td className={styles.numeric}>
-                  {formatCount(restCounts.reopen)}
-                </td>
-              </tr>
-            )}
-            {expanded && rows.length > SEGMENT_HEAD_ROWS ? (
-              <tr>
-                <th scope="row" className={styles.stickyColumn}>
-                  <button
-                    type="button"
-                    className={belowFoldStyles.inlineAction}
-                    onClick={() => setExpanded(false)}
-                  >
-                    {`Thu gọn về ${SEGMENT_HEAD_ROWS} nhóm đầu`}
-                  </button>
-                </th>
-                <td className={styles.numeric} colSpan={6} />
-              </tr>
-            ) : null}
           </tbody>
           </table>
         )}

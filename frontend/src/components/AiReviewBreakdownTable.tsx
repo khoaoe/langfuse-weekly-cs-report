@@ -20,7 +20,6 @@ import csatStyles from "./csat-section.module.css";
 import styles from "./dashboard.module.css";
 import satisfactionStyles from "./satisfaction-badge.module.css";
 
-const GROUP_LIMIT = 10;
 const SMALL_SAMPLE_TITLE = `Mẫu dưới ${PERCENTAGE_SAMPLE_MINIMUM} ticket được hậu kiểm — chỉ hiện số đếm, không suy ra tỉ lệ.`;
 
 export interface AiReviewBreakdownRow {
@@ -212,12 +211,10 @@ export function AiReviewBreakdownTable({
   onValueSelect,
   groupingLabel,
 }: AiReviewBreakdownTableProps) {
-  const [expanded, setExpanded] = useState(false);
   const [sort, setSort] = useState<TableSort<AiReviewSortKey>>(DEFAULT_AI_REVIEW_SORT);
   const rows = useMemo(() => aiReviewRowsFor(data, grouping), [data, grouping]);
   const sortable = grouping !== "outcome";
   const columns = useMemo(() => aiReviewSortColumns(groupingLabel), [groupingLabel]);
-  useEffect(() => setExpanded(false), [grouping, scopeKey]);
   useEffect(() => setSort(DEFAULT_AI_REVIEW_SORT), [grouping, scopeKey]);
   // `rows` already carries the default rank (see `aiReviewRowsFor`); a column
   // click re-sorts it, `outcome` keeps its fixed pipeline-stage order.
@@ -228,9 +225,6 @@ export function AiReviewBreakdownTable({
     const column = columns.find((item) => item.key === sort.key) ?? columns[0];
     return stableSortRows(rows, (row) => column?.value(row), sort.direction);
   }, [columns, rows, sort, sortable]);
-  const showAll = expanded;
-  const visibleRows = !sortable || showAll ? sortedRows : sortedRows.slice(0, GROUP_LIMIT);
-  const canExpand = sortable && sortedRows.length > GROUP_LIMIT;
 
   return (
     <div className={csatStyles.breakdown}>
@@ -312,7 +306,7 @@ export function AiReviewBreakdownTable({
                 {rateCell(data.needs_edit_count, data.rated_ticket_count)}
               </td>
             </tr>
-            {visibleRows.map((row) => (
+            {sortedRows.map((row) => (
               <tr key={`${grouping}:${row.value}`}>
                 <th scope="row" className={styles.stickyColumn}>
                   <FilterValueButton
@@ -350,16 +344,6 @@ export function AiReviewBreakdownTable({
           </tbody>
         </table>
       </div>
-      {canExpand ? (
-        <button
-          type="button"
-          className={styles.action}
-          aria-controls="ai-review-breakdown-table"
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {showAll ? "Thu gọn" : `Xem tất cả ${formatCount(rows.length)} nhóm`}
-        </button>
-      ) : null}
     </div>
   );
 }

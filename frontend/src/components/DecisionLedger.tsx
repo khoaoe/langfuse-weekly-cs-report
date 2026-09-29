@@ -82,10 +82,13 @@ export function DecisionLedger({
               cell.delta.tone === "warning" ? styles.ledgerDeltaWarning : ""
             }`}
           >
-            {cell.delta.text}
-            <span className={styles.ledgerDeltaBaseline}>
-              {cell.delta.baseline}
+            {/* The baseline lives in the hover title: spelled out under every
+                cell it doubled the text of the brief. Screen readers still
+                get it inline. */}
+            <span title={cell.delta.baseline} className={styles.ledgerDeltaHint}>
+              {cell.delta.text}
             </span>
+            <span className="visually-hidden">{` ${cell.delta.baseline}`}</span>
           </span>
         )}
       </>
