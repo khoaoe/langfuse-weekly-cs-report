@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import stat
 from pathlib import Path
@@ -63,7 +64,7 @@ def test_csat_cache_is_private_strict_and_keeps_two_responses_per_ticket(tmp_pat
     assert {item.ticket_id for item in loaded.responses} == {"123"}
     assert stat.S_IMODE(destination.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(destination.stat().st_mode) == 0o600
-    serialized = destination.read_text(encoding="utf-8")
+    serialized = gzip.decompress(destination.read_bytes()).decode("utf-8")
     payload = json.loads(serialized)
     assert payload["schema_version"] == 2
     assert payload["responses"][0]["comment_redacted"] == "[đã ẩn]"

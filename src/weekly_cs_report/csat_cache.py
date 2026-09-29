@@ -5,13 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-import json
-import os
 from pathlib import Path
 import re
-import stat
-import tempfile
 from types import MappingProxyType
+
+from .cache_store import atomic_private_json, read_private_json
 
 
 _CACHE_SCHEMA_VERSION = 2
@@ -131,29 +129,17 @@ class CSATCache:
 
 
 def load_csat_cache(path: Path) -> CSATCache | None:
-    source = Path(path)
-    try:
-        source_status = source.lstat()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        raise CSATCacheError("Freshdesk CSAT cache is invalid") from None
-    if (
-        not stat.S_ISREG(source_status.st_mode)
-        or source_status.st_uid != os.geteuid()
-        or stat.S_IMODE(source_status.st_mode) != 0o600
-    ):
-        raise CSATCacheError("Freshdesk CSAT cache is invalid")
-    try:
-        value = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        raise CSATCacheError("Freshdesk CSAT cache is invalid") from None
-    return _cache_from_value(value)
+    value = read_private_json(
+        Path(path), CSATCacheError, "Freshdesk CSAT cache is invalid"
+    )
+    return None if value is None else _cache_from_value(value)
 
 
 def write_csat_cache(path: Path, cache: CSATCache) -> None:
     payload = _cache_to_value(cache)
-    _atomic_private_json(Path(path), payload)
+    atomic_private_json(
+        Path(path), payload, CSATCacheError, "Freshdesk CSAT cache could not be written"
+    )
 
 
 def _cache_from_value(value: object) -> CSATCache:
@@ -236,40 +222,3 @@ def _parse_utc(value: object) -> datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise CSATCacheError("Freshdesk CSAT timestamp is invalid")
     return parsed.astimezone(timezone.utc)
-
-
-def _atomic_private_json(path: Path, payload: object) -> None:
-    directory = path.parent
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(directory, 0o700)
-    descriptor: int | None = None
-    temporary_path: Path | None = None
-    try:
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=directory
-        )
-        temporary_path = Path(temporary_name)
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            descriptor = None
-            json.dump(
-                payload,
-                stream,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-    except OSError:
-        raise CSATCacheError("Freshdesk CSAT cache could not be written") from None
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        if temporary_path is not None:
-            try:
-                temporary_path.unlink()
-            except OSError:
-                pass

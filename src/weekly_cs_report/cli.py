@@ -1269,9 +1269,17 @@ def _run_fetch_freshdesk_ai_review_command(
         load_ai_review_cache,
         write_ai_review_cache,
     )
+    from .ai_tag_cache import (
+        AiTagCache,
+        AiTagCacheError,
+        AiTagRecord,
+        load_ai_tag_cache,
+        write_ai_tag_cache,
+    )
     from .freshdesk_csat import (
         FreshdeskCookieExpired,
         FreshdeskFetchDeadline,
+        FreshdeskPageLimitReached,
         FreshdeskRateLimitExhausted,
         _week_needs_fetch,
         mark_cookie_expired,
@@ -1296,10 +1304,17 @@ def _run_fetch_freshdesk_ai_review_command(
     try:
         labels = load_ai_review_label_config(AI_REVIEW_LABEL_CONFIG_PATH)
         published = load_ai_review_cache(runtime_directory / "ai_review_cache.json")
-    except AIReviewCacheError as error:
+        published_tags = load_ai_tag_cache(runtime_directory / "ai_tag_cache.json")
+    except (AIReviewCacheError, AiTagCacheError) as error:
         raise AIReviewError("Freshdesk AI review private state is invalid") from error
 
     as_of = datetime.now(timezone.utc)
+    tag_weeks = dict(published_tags.fetched_weeks) if published_tags is not None else {}
+    tag_records: dict[str, AiTagRecord] = {
+        item.ticket_id: item
+        for item in (published_tags.records if published_tags is not None else ())
+    }
+    tag_selected = frozenset(_ai_tag_target_weeks(as_of, args.weeks))
     base_weeks = dict(published.fetched_weeks) if published is not None else {}
     # Keep crawl-era residue out of the merge. Before 2026-09-05 this job
     # searched Freshdesk per week -- 190,723 tickets fetched to serve 18,134
@@ -1336,28 +1351,62 @@ def _run_fetch_freshdesk_ai_review_command(
     answered = False
     try:
         with _freshdesk_client(args.auth, runtime_directory) as client:
+            # The cookie listing carries every ticket's AI post-review custom
+            # fields and tags, so one crawl of a week's days serves this cache
+            # and `ai_tag_cache` both; `fetch-freshdesk-ai-tags` then finds the
+            # week fresh and skips it. Measured 2026-09-28, the two separate
+            # passes cost ~22 min of listing plus ~30 min of ~6.8k by-ID GETs
+            # per due cycle. REST has no such listing: `--auth rest` stays by ID.
+            list_created = getattr(client, "list_tickets_created", None)
             for week in target_weeks:
                 ticket_ids = population[week]
                 fetched: list[object] = []
-                interrupted = False
-                for ticket_id in ticket_ids:
-                    if should_stop():
-                        interrupted = True
-                        break
-                    try:
-                        metadata = client.get_ticket_metadata(ticket_id)
-                    except (FreshdeskFetchDeadline, FreshdeskRateLimitExhausted):
-                        interrupted = True
-                        break
-                    answered = True
-                    if metadata is None:
-                        # Deleted or merged since the snapshot was built; the
-                        # week is still complete without it.
-                        continue
-                    fetched.append(build_ai_review_record(metadata, labels))
-                if interrupted:
+                tagged: list[AiTagRecord] | None = None
+                try:
+                    listed: dict[str, object] = {}
+                    if callable(list_created):
+                        tagged = []
+                        for day_start, day_end in _vietnam_day_windows(week, as_of):
+                            if should_stop():
+                                raise FreshdeskFetchDeadline("deadline")
+                            for row in list_created(
+                                created_from=day_start,
+                                created_to=day_end,
+                                should_stop=should_stop,
+                            ):
+                                listed[row.ticket_id] = row
+                                if "#AI" in row.tags:
+                                    tagged.append(
+                                        AiTagRecord(
+                                            ticket_id=row.ticket_id,
+                                            opened_at=row.created_at,
+                                            cohort_week=week,
+                                        )
+                                    )
+                            answered = True
+                    for ticket_id in ticket_ids:
+                        metadata = listed.get(ticket_id)
+                        if metadata is None:
+                            # Not created on this week's days in Freshdesk (a
+                            # cohort-boundary ticket), or not listable at all.
+                            if should_stop():
+                                raise FreshdeskFetchDeadline("deadline")
+                            metadata = client.get_ticket_metadata(
+                                ticket_id, should_stop=should_stop
+                            )
+                            answered = True
+                        if metadata is None:
+                            # Deleted or merged since the snapshot was built;
+                            # the week is still complete without it.
+                            continue
+                        fetched.append(build_ai_review_record(metadata, labels))
+                except (
+                    FreshdeskFetchDeadline,
+                    FreshdeskRateLimitExhausted,
+                    FreshdeskPageLimitReached,
+                ):
                     # A half-fetched week must not be recorded as fetched; the
-                    # next run restarts this week from its first ticket.
+                    # next run restarts this week from its first day.
                     status = "duration_limit_reached"
                     break
 
@@ -1382,6 +1431,27 @@ def _run_fetch_freshdesk_ai_review_command(
                 except AIReviewCacheError as error:
                     raise AIReviewError(
                         "Freshdesk AI review cache could not be published"
+                    ) from error
+                if tagged is None or week not in tag_selected:
+                    continue
+                tag_records = {
+                    ticket_id: record
+                    for ticket_id, record in tag_records.items()
+                    if record.cohort_week != week
+                }
+                tag_records.update((record.ticket_id, record) for record in tagged)
+                tag_weeks[week] = _utc_iso(as_of)
+                try:
+                    write_ai_tag_cache(
+                        runtime_directory / "ai_tag_cache.json",
+                        AiTagCache(
+                            fetched_weeks=tag_weeks,
+                            records=tuple(tag_records.values()),
+                        ),
+                    )
+                except AiTagCacheError as error:
+                    raise AIReviewError(
+                        "Freshdesk AI tag cache could not be published"
                     ) from error
     except FreshdeskCookieExpired:
         if args.auth == "cookie":
@@ -1437,6 +1507,30 @@ def _ai_tag_target_weeks(as_of: datetime, weeks: int) -> tuple[str, ...]:
     )
 
 
+def _vietnam_day_windows(
+    week: str, as_of: datetime
+) -> list[tuple[datetime, datetime]]:
+    """UTC `[start, end)` of each Vietnam day of `week` that has begun by `as_of`.
+
+    One day stays under the listing's 15k-ticket cap per call (~2.8k/day).
+    """
+
+    from .cohort import VIETNAM_TIMEZONE
+
+    week_start = datetime.combine(
+        date.fromisoformat(week), time.min, tzinfo=VIETNAM_TIMEZONE
+    )
+    windows = []
+    for offset in range(7):
+        day_start = (week_start + timedelta(days=offset)).astimezone(timezone.utc)
+        if day_start >= as_of:
+            # The rest of a week-to-date week hasn't happened yet.
+            break
+        day_end = (week_start + timedelta(days=offset + 1)).astimezone(timezone.utc)
+        windows.append((day_start, min(day_end, as_of)))
+    return windows
+
+
 def _run_fetch_freshdesk_ai_tags_command(args: argparse.Namespace) -> dict[str, object]:
     from .ai_tag_cache import (
         AiTagCache,
@@ -1445,7 +1539,6 @@ def _run_fetch_freshdesk_ai_tags_command(args: argparse.Namespace) -> dict[str, 
         load_ai_tag_cache,
         write_ai_tag_cache,
     )
-    from .cohort import VIETNAM_TIMEZONE
     from .freshdesk_csat import (
         FreshdeskCookieExpired,
         FreshdeskFetchDeadline,
@@ -1487,21 +1580,9 @@ def _run_fetch_freshdesk_ai_tags_command(args: argparse.Namespace) -> dict[str, 
     try:
         with _freshdesk_client(args.auth, runtime_directory) as client:
             for week in target_weeks:
-                week_start_local = datetime.combine(
-                    date.fromisoformat(week), time.min, tzinfo=VIETNAM_TIMEZONE
-                )
                 fetched: list[AiTagRecord] = []
                 interrupted = False
-                for offset in range(7):
-                    day_start_local = week_start_local + timedelta(days=offset)
-                    day_start_utc = day_start_local.astimezone(timezone.utc)
-                    if day_start_utc >= as_of:
-                        # The rest of a week-to-date week hasn't happened yet.
-                        break
-                    day_end_utc = min(
-                        (day_start_local + timedelta(days=1)).astimezone(timezone.utc),
-                        as_of,
-                    )
+                for day_start_utc, day_end_utc in _vietnam_day_windows(week, as_of):
                     if should_stop():
                         interrupted = True
                         break
@@ -1654,7 +1735,9 @@ def _run_fetch_freshdesk_entry_coverage_command(
                         break
                     langfuse_ticket = langfuse_tickets[ticket_id]
                     try:
-                        metadata = client.get_ticket_metadata(ticket_id)
+                        metadata = client.get_ticket_metadata(
+                            ticket_id, should_stop=should_stop
+                        )
                         conversations = ()
                         if not langfuse_ticket.ai_first and not langfuse_ticket.transferred:
                             conversations = client.get_conversation_metadata(

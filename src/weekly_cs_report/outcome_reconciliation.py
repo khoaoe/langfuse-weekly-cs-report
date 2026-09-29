@@ -474,11 +474,21 @@ def fetch_reconciliation_population(
                 complete=False,
                 skipped_tickets=skipped_tickets,
             )
+        # A human reply after the bot is final: conversations only grow, so
+        # re-reading the ticket can never turn `True` back. Carry it forward
+        # and spend the requests on tickets whose answer can still change.
+        settled = {
+            ticket_id
+            for ticket_id in normalized[week]
+            if (record := records_by_ticket.get(ticket_id)) is not None
+            and record.cohort_week == week
+            and record.human_replied_after_ai is True
+        }
         try:
             records, skipped = _fetch_reconciliation_week(
                 client,
                 week,
-                normalized[week],
+                tuple(item for item in normalized[week] if item not in settled),
                 config,
                 max_workers=max_workers,
                 should_stop=lambda: (
@@ -493,7 +503,7 @@ def fetch_reconciliation_population(
                 complete=False,
                 skipped_tickets=skipped_tickets,
             )
-        kept = {ticket_id for ticket_id, _ in skipped}
+        kept = settled | {ticket_id for ticket_id, _ in skipped}
         records_by_ticket = {
             ticket_id: record
             for ticket_id, record in records_by_ticket.items()

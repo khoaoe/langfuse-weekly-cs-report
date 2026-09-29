@@ -5,7 +5,7 @@ import os
 import csv
 import json
 import stat
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -406,7 +406,7 @@ def test_entry_coverage_command_fetches_the_population_by_ticket_id(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             asked.append(ticket_id)
             return FreshdeskTicketMetadata(ticket_id, "2026-07-06T01:00:00Z")
 
@@ -473,7 +473,7 @@ def test_entry_coverage_command_restarts_a_half_fetched_week_on_resume(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             if ticket_id == "102" and not type(self).failed:
                 type(self).failed = True
                 raise FreshdeskFetchDeadline("resume")
@@ -544,7 +544,7 @@ def test_ai_review_command_fetches_the_population_by_ticket_id_and_writes_cache(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             asked.append(ticket_id)
             return tickets[ticket_id]
 
@@ -587,7 +587,7 @@ def test_ai_review_command_skips_a_ticket_freshdesk_no_longer_has(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             if ticket_id == "999":
                 return None
             return FreshdeskTicketMetadata("101", "2026-06-30T01:00:00Z")
@@ -634,7 +634,7 @@ def test_ai_review_command_does_not_vouch_for_a_cookie_it_never_used(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             raise AssertionError("the deadline had already passed")
 
     monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())
@@ -668,7 +668,7 @@ def test_ai_review_command_skips_a_just_fetched_week_on_the_next_run(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             nonlocal call_count
             call_count += 1
             return FreshdeskTicketMetadata("101", "2026-06-30T01:00:00Z")
@@ -689,11 +689,12 @@ def test_ai_review_command_skips_a_just_fetched_week_on_the_next_run(
 def test_ai_review_command_never_reaches_a_freshdesk_search(
     monkeypatch, tmp_path: Path
 ):
-    """The 300-page cap lives on the search endpoint the job must not use.
+    """The 300-page cap lives on the open-ended search the job must not use.
 
     Bounding a search window only moves the cap further away; not searching
-    at all is what removes it. A client whose listing raises proves the job
-    reaches Freshdesk exclusively by ticket ID.
+    at all is what removes it. The day listing (`list_tickets_created`) stays
+    under the cap by construction; without it -- as here, and on REST -- the
+    job reaches Freshdesk exclusively by ticket ID.
     """
 
     from weekly_cs_report import cli as cli_module
@@ -716,7 +717,7 @@ def test_ai_review_command_never_reaches_a_freshdesk_search(
         def list_ticket_metadata(self, **_kwargs):
             raise AssertionError("AI review must not search Freshdesk")
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             return FreshdeskTicketMetadata("101", "2026-06-30T01:00:00Z")
 
     monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: NoSearchClient())
@@ -726,6 +727,99 @@ def test_ai_review_command_never_reaches_a_freshdesk_search(
     )
 
     assert result["status"] == "complete"
+
+
+def test_ai_review_command_reads_the_day_listing_and_publishes_ai_tags_too(
+    monkeypatch, tmp_path: Path
+):
+    """One crawl of the week's days serves both caches.
+
+    A population ticket the listing carried costs no request of its own; only
+    one Freshdesk created outside the week's days is asked for by ID. The
+    `#AI` rows land in `ai_tag_cache` under the same stamp, so the separate
+    tag job finds the week fresh and lists nothing.
+    """
+
+    from weekly_cs_report import cli as cli_module
+    from weekly_cs_report.ai_review_cache import load_ai_review_cache
+    from weekly_cs_report.ai_tag_cache import load_ai_tag_cache
+    from weekly_cs_report.cohort import cohort_week_for
+    from weekly_cs_report.freshdesk_entry_coverage import FreshdeskTicketMetadata
+
+    runtime = tmp_path / "runtime"
+    week = (
+        cohort_week_for(datetime.now(timezone.utc)) - timedelta(weeks=1)
+    ).isoformat()
+    monkeypatch.setattr(
+        cli_module,
+        "_ai_review_population",
+        lambda *_args: {week: ("101", "102", "103")},
+    )
+    listing = {
+        0: (
+            FreshdeskTicketMetadata(
+                "101", f"{week}T01:00:00Z", ai_review_rating_raw="Hài Lòng", tags=("#AI",)
+            ),
+            FreshdeskTicketMetadata("900", f"{week}T02:00:00Z", tags=("#AI",)),
+        ),
+        3: (FreshdeskTicketMetadata("102", f"{week}T03:00:00Z"),),
+    }
+    windows: list[datetime] = []
+    asked: list[str] = []
+
+    class ListingClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def list_tickets_created(self, *, created_from, created_to, should_stop=None):
+            windows.append(created_from)
+            return listing.get(len(windows) - 1, ())
+
+        def list_ai_tagged_tickets(self, *, created_from, **_kwargs):
+            # Only the current week, which the review crawl did not cover.
+            assert created_from >= windows[-1] + timedelta(days=1)
+            return ()
+
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
+            asked.append(ticket_id)
+            return FreshdeskTicketMetadata(ticket_id, f"{week}T00:30:00Z")
+
+    monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: ListingClient())
+
+    result = cli_module._run_fetch_freshdesk_ai_review_command(
+        _ai_review_args(runtime)
+    )
+
+    assert result["status"] == "complete"
+    assert len(windows) == 7
+    assert asked == ["103"]
+    reviews = load_ai_review_cache(runtime / "ai_review_cache.json")
+    assert reviews is not None
+    assert {record.ticket_id for record in reviews.records} == {"101", "102", "103"}
+    assert {
+        record.ticket_id: record.rating for record in reviews.records
+    }["101"] == "satisfied"
+    tags = load_ai_tag_cache(runtime / "ai_tag_cache.json")
+    assert tags is not None
+    assert {record.ticket_id for record in tags.records} == {"101", "900"}
+    assert tags.fetched_weeks[week] == reviews.fetched_weeks[week]
+
+    tag_result = cli_module._run_fetch_freshdesk_ai_tags_command(
+        build_parser().parse_args(
+            [
+                "fetch-freshdesk-ai-tags",
+                "--runtime-dir",
+                str(runtime),
+                "--weeks",
+                "2",
+            ]
+        )
+    )
+    assert tag_result["status"] == "complete"
+    assert tag_result["ai_tagged_count"] == 2
 
 
 def test_fetch_csat_command_checkpoints_completed_weeks_without_publishing_partial(
@@ -1207,7 +1301,7 @@ def test_ai_review_merge_drops_tickets_langfuse_does_not_know(
         def __exit__(self, *_args):
             return None
 
-        def get_ticket_metadata(self, ticket_id):
+        def get_ticket_metadata(self, ticket_id, *, should_stop=None):
             return FreshdeskTicketMetadata(ticket_id, "2026-06-30T01:00:00Z")
 
     monkeypatch.setattr(cli_module, "_freshdesk_client", lambda *_args: FakeClient())

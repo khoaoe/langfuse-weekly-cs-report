@@ -399,7 +399,12 @@ class FreshdeskClient:
             )
         return tuple(value)
 
-    def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
+    def get_ticket_metadata(
+        self,
+        ticket_id: str,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> FreshdeskTicketMetadata | None:
         """One ticket by ID; see the cookie client's method for why.
 
         REST returns the ticket unwrapped, where the UI API nests it under
@@ -413,6 +418,7 @@ class FreshdeskClient:
         value = self._get_json(
             f"/api/v2/tickets/{ticket_id}",
             not_found=_TICKET_NOT_FOUND,
+            should_stop=should_stop,
         )
         if value is _TICKET_NOT_FOUND:
             return None
@@ -723,7 +729,12 @@ class FreshdeskUIClient:
             )
         return tuple(value)
 
-    def get_ticket_metadata(self, ticket_id: str) -> FreshdeskTicketMetadata | None:
+    def get_ticket_metadata(
+        self,
+        ticket_id: str,
+        *,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> FreshdeskTicketMetadata | None:
         """One ticket by ID, for a job scoped to a known population.
 
         The AI post-review job used to reach these same custom fields by
@@ -745,6 +756,7 @@ class FreshdeskUIClient:
         value = self._get_json(
             f"/api/_/tickets/{ticket_id}",
             not_found=_TICKET_NOT_FOUND,
+            should_stop=should_stop,
         )
         if value is _TICKET_NOT_FOUND:
             return None
@@ -1004,11 +1016,34 @@ class FreshdeskUIClient:
 
         The UI API's query_hash rejects a `tags`/`tag_id` condition (probed
         2026-09-10: both return 400 `invalid_value`) -- there is no
-        server-side tag filter. This crawls the same `created_at` window as
-        `list_ticket_metadata` and filters `#AI` client-side. Callers must
-        keep each window small enough to stay under `max_pages * 50`
+        server-side tag filter, so this filters `list_tickets_created`.
+        """
+        return tuple(
+            row
+            for row in self.list_tickets_created(
+                created_from=created_from,
+                created_to=created_to,
+                max_pages=max_pages,
+                should_stop=should_stop,
+            )
+            if "#AI" in row.tags
+        )
+
+    def list_tickets_created(
+        self,
+        *,
+        created_from: datetime,
+        created_to: datetime,
+        max_pages: int = 300,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> tuple[FreshdeskTicketMetadata, ...]:
+        """Every ticket created in `[created_from, created_to)`, tags included.
+
+        Each item carries the same `custom_fields` as the by-ID endpoint, so
+        one crawl serves both the `#AI` tag filter and AI post-review. Callers
+        must keep each window small enough to stay under `max_pages * 50`
         results (measured 2026-09-10: a 7-day window alone returns ~19.4k
-        tickets, over the 15k/call cap) -- the CLI job chunks per day.
+        tickets, over the 15k/call cap) -- the CLI jobs chunk per day.
         """
         if (
             created_from.tzinfo is None
@@ -1067,8 +1102,7 @@ class FreshdeskUIClient:
                         "Freshdesk ticket response contains duplicate tickets"
                     )
                 seen_ids.add(row.ticket_id)
-                if "#AI" in row.tags:
-                    projected.append(row)
+                projected.append(row)
             is_complete = len(tickets) < 50
             _check_fetch_deadline(should_stop)
             if is_complete:

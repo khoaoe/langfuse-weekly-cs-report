@@ -365,12 +365,13 @@ def test_incremental_reconciliation_refetches_recent_week_and_freezes_old_week()
         records=(
             ReconciliationRecord("101", "2026-07-13", False),
             ReconciliationRecord("201", "2026-07-20", True),
+            ReconciliationRecord("203", "2026-07-20", None),
         ),
     )
 
     result = fetch_reconciliation_population(
         Client(),
-        {"2026-07-13": ("101",), "2026-07-20": ("201", "202")},
+        {"2026-07-13": ("101",), "2026-07-20": ("201", "202", "203")},
         config,
         existing=existing,
         as_of=datetime(2026, 8, 3, 12, tzinfo=timezone.utc),
@@ -380,12 +381,16 @@ def test_incremental_reconciliation_refetches_recent_week_and_freezes_old_week()
 
     assert result.complete is True
     assert result.completed_weeks == ("2026-07-20",)
-    assert calls == ["201", "202"]
+    # 201 already has a human reply after the bot, which conversations can
+    # only keep; it is carried forward instead of re-read. 203 was unresolved
+    # and is re-read like any ticket whose answer can still change.
+    assert calls == ["202", "203"]
     assert checkpoints == [result.cache]
     assert result.cache.records == (
         ReconciliationRecord("101", "2026-07-13", False),
-        ReconciliationRecord("201", "2026-07-20", False),
+        ReconciliationRecord("201", "2026-07-20", True),
         ReconciliationRecord("202", "2026-07-20", True),
+        ReconciliationRecord("203", "2026-07-20", False),
     )
     serialized = json.dumps(
         [asdict(record) for record in result.cache.records],
