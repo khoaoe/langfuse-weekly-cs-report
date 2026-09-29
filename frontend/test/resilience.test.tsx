@@ -344,6 +344,7 @@ describe("bulk export", () => {
         model_core: null,
         tool_error_codes: [],
         ai_review_rating: null,
+        sub_skill: null,
       }));
 
     const seen: string[] = [];

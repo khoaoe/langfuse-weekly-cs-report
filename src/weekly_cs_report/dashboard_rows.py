@@ -200,6 +200,8 @@ class TicketRow:
     # `csat_satisfaction`'s cache-lookup pattern. Public: a closed-enum slug,
     # not PII.
     ai_review_rating: str | None = None
+    # `<skill>/<file stem>` of the last loaded sub-skill file. Public.
+    sub_skill: str | None = None
 
     def __post_init__(self) -> None:
         _validate_ticket_values(self)
@@ -271,6 +273,7 @@ def _validate_ticket_values(ticket: TicketRow) -> None:
         (ticket.skill, "skill"),
         (ticket.guardrail_rule, "guardrail_rule"),
         (ticket.model_core, "model_core"),
+        (ticket.sub_skill, "sub_skill"),
     ):
         if value is not None:
             _safe_string(value, name)
@@ -574,6 +577,7 @@ _TICKET_KEYS = frozenset(
         "product_code", "skill", "intent", "tpe_code", "tpe_status",
         "guardrail_rule", "transfer_reason", "escalation_guard_blocked", "csat_satisfaction",
         "data_quality", "model_core", "tool_error_codes", "ai_review_rating",
+        "sub_skill",
         # Day-grain diagnostic fields (§4.1) -- server-only, never part of the
         # Ticket Explorer's public projection (`_TICKET_EXPLORER_PUBLIC_KEYS`).
         "transfer_rule", "transfer_source", "transfer_stage", "transfer_skill",

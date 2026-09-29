@@ -31,8 +31,10 @@ from .tpe_status import resolve_tpe_status
 #     0 observations.
 #   - `load_skill_reference__*` (3,394 calls), `list_skill_references__*`
 #     (382), `calculate_time_difference__*` (30): 0 errors in 3,806 calls.
-#     These load skill files from disk rather than calling a backend. The
-#     audit script lists them as knowingly skipped, not as a gap.
+#     These load skill files from disk rather than calling a backend, so
+#     they carry no error lane. `load_skill_reference__*` is still fetched,
+#     for the Sub-skill column, via lanes discovered per refresh (see
+#     `SUB_SKILL_LANE_PREFIX`).
 TOOL_ENRICHMENT_NAMES = (
     "tool:cal_official_working_date",
     "tool:calculate_user_age",
@@ -64,6 +66,13 @@ ENRICHMENT_NAMES = TOOL_ENRICHMENT_NAMES + (
     "output_guardrail",
     "escalation_history_guard",
 )
+# `load_skill_reference` runs as one observation name per skill
+# (`tool:load_skill_reference__withdraw`, ...), and the observations API only
+# filters by exact name. The lanes are therefore discovered per refresh from
+# the metrics API (`report._sub_skill_lane_names`), so a new skill is picked
+# up without a code change.
+SUB_SKILL_LANE_PREFIX = "tool:load_skill_reference__"
+_SUB_SKILL_FILE = re.compile(r"([A-Za-z0-9_-]{1,64})\.md\Z")
 _TOOL_NAMES = frozenset(
     name.removeprefix("tool:") for name in TOOL_ENRICHMENT_NAMES
 )
@@ -120,6 +129,9 @@ class TraceEnrichment:
     escalation_guard_blocked: bool = False
     tpe_signals: tuple[tuple[str, str | None], ...] = ()
     tool_error_codes: tuple[str, ...] = ()
+    # (startTime, "<skill>/<file stem>") of the trace's last successful
+    # sub-skill load; the session keeps the latest across its traces.
+    last_sub_skill: tuple[str, str] | None = None
 
 
 _SLIM_SCALAR_MAX_CHARS = 128
@@ -183,6 +195,7 @@ def build_trace_enrichment(
     blocked: set[str] = set()
     tpe_signals: dict[str, set[tuple[str, str | None]]] = defaultdict(set)
     tool_errors: dict[str, set[str]] = defaultdict(set)
+    sub_skills: dict[str, tuple[str, str]] = {}
 
     for observation in _ordered(observations_by_name.get("route", ())):
         trace_id = _trace_id(observation)
@@ -248,6 +261,30 @@ def build_trace_enrichment(
             if trace_id is not None and token is not None:
                 tool_errors[trace_id].add(token)
 
+    for name, rows in observations_by_name.items():
+        if not name.startswith(SUB_SKILL_LANE_PREFIX):
+            continue
+        skill = name.removeprefix(SUB_SKILL_LANE_PREFIX)
+        if not _safe_skill(skill):
+            continue
+        # Ordered, so the last write per trace is its last load.
+        for observation in _ordered(rows):
+            trace_id = _trace_id(observation)
+            output = observation.get("output")
+            result = output.get("result") if isinstance(output, Mapping) else None
+            filename = result.get("filename") if isinstance(result, Mapping) else None
+            match = (
+                _SUB_SKILL_FILE.fullmatch(filename)
+                if isinstance(filename, str)
+                else None
+            )
+            if trace_id is None or match is None:
+                continue
+            stamp = _observation_key(observation)[0]
+            current = sub_skills.get(trace_id)
+            if current is None or stamp >= current[0]:
+                sub_skills[trace_id] = (stamp, f"{skill}/{match.group(1)}")
+
     trace_ids = (
         set(intents)
         | set(skills)
@@ -256,6 +293,7 @@ def build_trace_enrichment(
         | blocked
         | set(tpe_signals)
         | set(tool_errors)
+        | set(sub_skills)
     )
     result: dict[str, TraceEnrichment] = {}
     for trace_id in trace_ids:
@@ -274,6 +312,7 @@ def build_trace_enrichment(
                 )
             ),
             tool_error_codes=tuple(sorted(tool_errors.get(trace_id, ()))),
+            last_sub_skill=sub_skills.get(trace_id),
         )
         if item != TraceEnrichment():
             result[trace_id] = item
@@ -292,6 +331,7 @@ def apply_trace_enrichment(
     tpe_signals: set[tuple[str, str | None]] = set()
     tool_error_codes: set[str] = set()
     blocked = False
+    last_sub_skill: tuple[str, str] | None = None
     for trace in traces:
         enrichment = enrichment_by_trace_id.get(trace.id)
         if enrichment is None:
@@ -302,6 +342,10 @@ def apply_trace_enrichment(
         tpe_signals.update(enrichment.tpe_signals)
         tool_error_codes.update(enrichment.tool_error_codes)
         blocked = blocked or enrichment.escalation_guard_blocked
+        if enrichment.last_sub_skill is not None and (
+            last_sub_skill is None or enrichment.last_sub_skill[0] >= last_sub_skill[0]
+        ):
+            last_sub_skill = enrichment.last_sub_skill
     sorted_skills = tuple(sorted(skills))
     return (
         replace(
@@ -314,6 +358,7 @@ def apply_trace_enrichment(
             skill_count=len(sorted_skills),
             skill_set=sorted_skills,
             tool_error_codes=tuple(sorted(tool_error_codes)),
+            sub_skill=last_sub_skill[1] if last_sub_skill is not None else None,
         ),
         tuple(sorted(guardrail_rules)),
     )

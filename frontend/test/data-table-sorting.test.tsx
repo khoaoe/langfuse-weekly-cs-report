@@ -218,6 +218,7 @@ describe("sorting bảng dữ liệu", () => {
               model_core: null,
               tool_error_codes: [],
               ai_review_rating: null,
+              sub_skill: null,
             },
           ],
           page: 1,

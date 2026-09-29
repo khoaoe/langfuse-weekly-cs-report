@@ -535,6 +535,39 @@ def test_every_tool_lane_is_fetched_and_no_dead_lane_is_declared():
     }
 
 
+def test_sub_skill_is_the_last_successful_load_across_traces():
+    def load(obs_id, trace_id, at, filename):
+        output = {"result": {"filename": filename, "content": "x" * 500}}
+        return slim_observation(
+            {"id": obs_id, "traceId": trace_id, "startTime": at, "output": output}
+        )
+
+    by_trace = build_trace_enrichment(
+        {
+            "tool:load_skill_reference__withdraw": [
+                load("b", "t1", "2026-07-01T00:00:02Z", "sub-skill-C.md"),
+                load("a", "t1", "2026-07-01T00:00:01Z", "sub-skill-A.md"),
+                load("c", "t1", "2026-07-01T00:00:03Z", "../etc/passwd"),
+            ],
+            "tool:load_skill_reference__telco": [
+                load("d", "t2", "2026-07-01T00:05:00Z", "sub-skill-BC.md"),
+            ],
+        },
+        load_taxonomy(TAXONOMY_V2_PATH),
+    )
+    assert by_trace["t1"].last_sub_skill == (
+        "2026-07-01T00:00:02Z", "withdraw/sub-skill-C"
+    )
+
+    traces = (
+        TraceRecord("t2", "ticket-1", datetime(2026, 7, 1, tzinfo=timezone.utc), 1, {}, {}, "default"),
+        TraceRecord("t1", "ticket-1", datetime(2026, 7, 1, tzinfo=timezone.utc), 0, {}, {}, "default"),
+    )
+    enriched, _rules = apply_trace_enrichment(_empty_dimensions(), traces, by_trace)
+    assert enriched.sub_skill == "telco/sub-skill-BC"
+    assert apply_trace_enrichment(_empty_dimensions(), (), {})[0].sub_skill is None
+
+
 def _empty_dimensions() -> TicketDimensions:
     return TicketDimensions(
         issue_category="Không xác định", app="Không xác định", app_code=None,

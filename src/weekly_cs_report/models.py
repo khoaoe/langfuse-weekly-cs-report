@@ -154,6 +154,8 @@ class TicketDimensions:
     # The A/B arm this ticket ran on (`input.model_info.model_core`). Older
     # tickets predate the field and are null, not a data-quality problem.
     model_core: str | None = None
+    # `<skill>/<file stem>` of the last sub-skill file the agent loaded.
+    sub_skill: str | None = None
 
 
 @dataclass(frozen=True)

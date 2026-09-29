@@ -43,7 +43,7 @@ from weekly_cs_report.enrichment import TOOL_ENRICHMENT_NAMES  # noqa: E402
 # here is reported as "skipped", not as a gap -- but it still has to be listed
 # explicitly, so dropping a lane is always a visible decision.
 KNOWINGLY_SKIPPED = {
-    "load_skill_reference": "reads skill files from disk; 0 errors in 3,394 calls",
+    "load_skill_reference": "no error lane; Sub-skill lanes are discovered per refresh",
     "list_skill_references": "reads skill files from disk; 0 errors in 382 calls",
     "calculate_time_difference": "pure arithmetic; 0 errors in 30 calls",
 }

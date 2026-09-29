@@ -40,6 +40,7 @@ export const TICKET_COLUMNS = [
   { key: "app", label: "App", core: false },
   { key: "product_code", label: "Product Code", core: false },
   { key: "skill", label: "Skill", core: false },
+  { key: "sub_skill", label: "Sub-skill", core: false },
   { key: "intent", label: "Intent", core: false },
   { key: "tpe_code", label: "Transstatus", core: false },
   { key: "model_core", label: "Model", core: false },

@@ -14,6 +14,7 @@ from .cohort import build_cohort_window
 from .dimension_verifier import is_ticket_trace
 from .enrichment import (
     ENRICHMENT_NAMES,
+    SUB_SKILL_LANE_PREFIX,
     TraceEnrichment,
     build_trace_enrichment,
     slim_observation,
@@ -662,7 +663,11 @@ def _fetch_carried_observations(
         return [
             (name, slim_observation(observation))
             for observation in client.list_observations(trace_id)
-            if (name := observation.get("name")) in _ENRICHMENT_NAME_SET
+            if isinstance(name := observation.get("name"), str)
+            and (
+                name in _ENRICHMENT_NAME_SET
+                or name.startswith(SUB_SKILL_LANE_PREFIX)
+            )
         ]
 
     try:
@@ -724,7 +729,12 @@ def _start_enrichment(
     lane_cancel_event = _CombinedCancellationEvent(
         *(event for event in (cancel_event,) if event is not None)
     )
-    states = [_LaneState(name, []) for name in ENRICHMENT_NAMES]
+    sub_skill_lanes = _sub_skill_lane_names(
+        client, from_start_time, to_start_time, deadline, lane_cancel_event
+    )
+    states = [
+        _LaneState(name, []) for name in ENRICHMENT_NAMES + sub_skill_lanes
+    ]
     futures = {
         executor.submit(
             _fetch_enrichment_lane,
@@ -744,6 +754,44 @@ def _start_enrichment(
         deadline,
         monotonic,
     )
+
+
+def _sub_skill_lane_names(
+    client: LangfuseClient,
+    from_start_time: datetime,
+    to_start_time: datetime,
+    deadline: float,
+    cancel_event: threading.Event,
+) -> tuple[str, ...]:
+    """Every `load_skill_reference__<skill>` name that ran in the window.
+
+    One metrics request grouped by name, so a new skill gets its lane without
+    a code change. A failure only leaves the Sub-skill column empty: it is a
+    display field, not a metric, so it must not fail the whole enrichment.
+    """
+    def utc(value: datetime) -> str:
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    try:
+        rows = client.fetch_metrics(
+            {
+                "view": "observations",
+                "metrics": [{"measure": "count", "aggregation": "count"}],
+                "dimensions": [{"field": "name"}],
+                "fromTimestamp": utc(from_start_time),
+                "toTimestamp": utc(to_start_time),
+            },
+            deadline=deadline,
+            cancel_event=cancel_event,
+        )
+    except Exception:
+        return ()
+    return tuple(sorted({
+        name
+        for row in rows
+        if isinstance(name := row.get("name"), str)
+        and name.startswith(SUB_SKILL_LANE_PREFIX)
+    }))
 
 
 def _finish_enrichment(
@@ -809,6 +857,9 @@ def _finish_enrichment(
         state.name: _with_carried(state.rows, (carried or {}).get(state.name, ()))
         for state in states
     }
+    # A carried trace's sub-skill may run under a name no lane saw this window.
+    for name, rows in (carried or {}).items():
+        observations.setdefault(name, list(rows))
     observations_fetched = sum(len(rows) for rows in observations.values())
     failed_lanes.update(state.name for state in states if state.error is not None)
     if failed or any(state.error is not None for state in states):
