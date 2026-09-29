@@ -908,6 +908,7 @@ describe("dashboard API envelope", () => {
       tool_error_codes: [],
       ai_review_rating: null,
       sub_skill: null,
+      skill_turns: null,
     };
 
     expect(TicketRowSchema.safeParse(row).success).toBe(false);

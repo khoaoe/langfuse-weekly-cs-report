@@ -174,6 +174,7 @@ def _dimensions_dict(value: TicketDimensions) -> dict[str, object]:
         "tool_error_codes": list(value.tool_error_codes),
         "model_core": value.model_core,
         "sub_skill": value.sub_skill,
+        "skill_turns": value.skill_turns,
     }
 
 
@@ -224,6 +225,7 @@ def _dimensions_from(value: object) -> TicketDimensions:
             # Absent in entries written before the field; the daily full
             # rebuild fills it.
             sub_skill=_optional(item.get("sub_skill"), "sub_skill", str),
+            skill_turns=_optional(item.get("skill_turns"), "skill_turns", str),
         )
     except KeyError:
         raise SessionCacheError("dimensions is invalid") from None

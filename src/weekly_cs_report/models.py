@@ -156,6 +156,8 @@ class TicketDimensions:
     model_core: str | None = None
     # `<skill>/<file stem>` of the last sub-skill file the agent loaded.
     sub_skill: str | None = None
+    # Multi-skill tickets only: "oao (lượt 1, 2); fixed-deposit (lượt 3)".
+    skill_turns: str | None = None
 
 
 @dataclass(frozen=True)

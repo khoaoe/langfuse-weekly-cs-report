@@ -1992,6 +1992,7 @@ describe("Ticket Explorer", () => {
       tool_error_codes: [],
       ai_review_rating: null,
       sub_skill: null,
+      skill_turns: null,
     };
     const tickets = states.map((state, index) => ({
       ...baseTicket,
@@ -2137,6 +2138,7 @@ describe("Ticket Explorer", () => {
               tool_error_codes: [],
               ai_review_rating: null,
               sub_skill: null,
+              skill_turns: null,
             },
           ],
           page: 1,
@@ -2403,6 +2405,7 @@ describe("Ticket Explorer", () => {
               tool_error_codes: [],
               ai_review_rating: null,
               sub_skill: null,
+              skill_turns: null,
             },
           ],
           page: 1,

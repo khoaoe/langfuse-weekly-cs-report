@@ -99,7 +99,7 @@ if TYPE_CHECKING:
     from .ai_review_cache import AIReviewCache
 
 
-_STORAGE_VERSION = 33
+_STORAGE_VERSION = 34
 # `<tool>:<CODE>` as produced by `enrichment.tool_error_token`. The code half
 # is either an allowlisted upper-case enum or the `khac` bucket that absorbs
 # anything off the allowlist -- neither can carry free text or PII.
@@ -2128,6 +2128,7 @@ def _ticket_row(
         tool_error_codes=tuple(dims.tool_error_codes),
         ai_review_rating=ai_review_rating_by_ticket.get(session.session_id),
         sub_skill=_safe_optional(dims.sub_skill),
+        skill_turns=_safe_optional(dims.skill_turns),
     )
 
 

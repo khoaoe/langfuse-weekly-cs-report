@@ -192,6 +192,9 @@ function cellText(row: TicketRow, key: TicketColumnKey): string {
   if (key === "data_quality") {
     return dataQualityLabel(row.data_quality);
   }
+  if (key === "skill" && row.skill_turns !== null) {
+    return row.skill_turns;
+  }
   if (key === "tool_error_codes") {
     // Same string in the cell and the CSV, so a filter chip, a cell and an
     // exported row all name the failing pair identically.

@@ -1430,6 +1430,8 @@ export const TicketRowSchema = z
       .nullable(),
     /** `<skill>/<file stem>` of the last sub-skill file the agent loaded. */
     sub_skill: nullableSafeLabel,
+    /** Multi-skill tickets only: which skill ran in which turn. */
+    skill_turns: nullableSafeLabel,
   })
   .strict()
   .superRefine((row, context) => {

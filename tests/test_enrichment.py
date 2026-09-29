@@ -568,6 +568,28 @@ def test_sub_skill_is_the_last_successful_load_across_traces():
     assert apply_trace_enrichment(_empty_dimensions(), (), {})[0].sub_skill is None
 
 
+def test_multi_skill_ticket_lists_each_skill_with_its_turns():
+    at = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    traces = tuple(
+        TraceRecord(f"t{turn}", "ticket-1", at, turn, {}, {}, "default")
+        for turn in (2, 0, 1)
+    )
+    enriched, _rules = apply_trace_enrichment(
+        _empty_dimensions(),
+        traces,
+        {
+            "t0": TraceEnrichment(skills=("oao",)),
+            "t1": TraceEnrichment(skills=("oao",)),
+            "t2": TraceEnrichment(skills=("fixed-deposit",)),
+        },
+    )
+    assert enriched.skill_turns == "oao (lượt 1, 2); fixed-deposit (lượt 3)"
+    single, _rules = apply_trace_enrichment(
+        _empty_dimensions(), traces[:1], {"t2": TraceEnrichment(skills=("oao",))}
+    )
+    assert single.skill_turns is None
+
+
 def _empty_dimensions() -> TicketDimensions:
     return TicketDimensions(
         issue_category="Không xác định", app="Không xác định", app_code=None,

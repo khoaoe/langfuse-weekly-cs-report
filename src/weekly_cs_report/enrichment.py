@@ -347,6 +347,24 @@ def apply_trace_enrichment(
         ):
             last_sub_skill = enrichment.last_sub_skill
     sorted_skills = tuple(sorted(skills))
+    # Turn numbers are positions in turn order, so they line up with
+    # `turn_count`; skills are listed by the turn they first ran in.
+    turns_by_skill: dict[str, list[int]] = {}
+    ordered = sorted(traces, key=lambda item: (item.turn, item.timestamp, item.id))
+    for position, trace in enumerate(ordered, 1):
+        enrichment = enrichment_by_trace_id.get(trace.id)
+        for skill in enrichment.skills if enrichment is not None else ():
+            turns_by_skill.setdefault(skill, []).append(position)
+    skill_turns = (
+        "; ".join(
+            f"{skill} (lượt {', '.join(map(str, turns))})"
+            for skill, turns in sorted(
+                turns_by_skill.items(), key=lambda item: (item[1][0], item[0])
+            )
+        )
+        if len(turns_by_skill) >= 2
+        else None
+    )
     return (
         replace(
             dimensions,
@@ -359,6 +377,7 @@ def apply_trace_enrichment(
             skill_set=sorted_skills,
             tool_error_codes=tuple(sorted(tool_error_codes)),
             sub_skill=last_sub_skill[1] if last_sub_skill is not None else None,
+            skill_turns=skill_turns,
         ),
         tuple(sorted(guardrail_rules)),
     )
