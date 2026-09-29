@@ -130,7 +130,7 @@ class TraceEnrichment:
     tpe_signals: tuple[tuple[str, str | None], ...] = ()
     tool_error_codes: tuple[str, ...] = ()
     # (startTime, "<skill>/<file stem>") of the trace's last successful
-    # sub-skill load; the session keeps the latest across its traces.
+    # sub-skill load, i.e. the sub-skill that turn ended on.
     last_sub_skill: tuple[str, str] | None = None
 
 
@@ -331,7 +331,6 @@ def apply_trace_enrichment(
     tpe_signals: set[tuple[str, str | None]] = set()
     tool_error_codes: set[str] = set()
     blocked = False
-    last_sub_skill: tuple[str, str] | None = None
     for trace in traces:
         enrichment = enrichment_by_trace_id.get(trace.id)
         if enrichment is None:
@@ -342,29 +341,22 @@ def apply_trace_enrichment(
         tpe_signals.update(enrichment.tpe_signals)
         tool_error_codes.update(enrichment.tool_error_codes)
         blocked = blocked or enrichment.escalation_guard_blocked
-        if enrichment.last_sub_skill is not None and (
-            last_sub_skill is None or enrichment.last_sub_skill[0] >= last_sub_skill[0]
-        ):
-            last_sub_skill = enrichment.last_sub_skill
     sorted_skills = tuple(sorted(skills))
     # Turn numbers are positions in turn order, so they line up with
-    # `turn_count`; skills are listed by the turn they first ran in.
+    # `turn_count`. A turn's sub-skill is the last file it loaded.
     turns_by_skill: dict[str, list[int]] = {}
+    turns_by_sub_skill: dict[str, list[int]] = {}
     ordered = sorted(traces, key=lambda item: (item.turn, item.timestamp, item.id))
     for position, trace in enumerate(ordered, 1):
         enrichment = enrichment_by_trace_id.get(trace.id)
-        for skill in enrichment.skills if enrichment is not None else ():
+        if enrichment is None:
+            continue
+        for skill in enrichment.skills:
             turns_by_skill.setdefault(skill, []).append(position)
-    skill_turns = (
-        "; ".join(
-            f"{skill} (lượt {', '.join(map(str, turns))})"
-            for skill, turns in sorted(
-                turns_by_skill.items(), key=lambda item: (item[1][0], item[0])
+        if enrichment.last_sub_skill is not None:
+            turns_by_sub_skill.setdefault(enrichment.last_sub_skill[1], []).append(
+                position
             )
-        )
-        if len(turns_by_skill) >= 2
-        else None
-    )
     return (
         replace(
             dimensions,
@@ -376,10 +368,24 @@ def apply_trace_enrichment(
             skill_count=len(sorted_skills),
             skill_set=sorted_skills,
             tool_error_codes=tuple(sorted(tool_error_codes)),
-            sub_skill=last_sub_skill[1] if last_sub_skill is not None else None,
-            skill_turns=skill_turns,
+            sub_skill=_turn_summary(turns_by_sub_skill),
+            skill_turns=(
+                _turn_summary(turns_by_skill) if len(turns_by_skill) >= 2 else None
+            ),
         ),
         tuple(sorted(guardrail_rules)),
+    )
+
+
+def _turn_summary(turns_by_value: Mapping[str, Sequence[int]]) -> str | None:
+    """One value as is; several as "a (lượt 1, 2); b (lượt 3)", by first turn."""
+    if len(turns_by_value) <= 1:
+        return next(iter(turns_by_value), None)
+    return "; ".join(
+        f"{value} (lượt {', '.join(map(str, turns))})"
+        for value, turns in sorted(
+            turns_by_value.items(), key=lambda item: (item[1][0], item[0])
+        )
     )
 
 

@@ -1428,7 +1428,7 @@ export const TicketRowSchema = z
     ai_review_rating: z
       .enum(["satisfied", "satisfied_with_edit", "needs_edit"])
       .nullable(),
-    /** `<skill>/<file stem>` of the last sub-skill file the agent loaded. */
+    /** Last sub-skill loaded per turn; several read "a (lượt 1); b (lượt 3)". */
     sub_skill: nullableSafeLabel,
     /** Multi-skill tickets only: which skill ran in which turn. */
     skill_turns: nullableSafeLabel,

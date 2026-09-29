@@ -564,7 +564,11 @@ def test_sub_skill_is_the_last_successful_load_across_traces():
         TraceRecord("t1", "ticket-1", datetime(2026, 7, 1, tzinfo=timezone.utc), 0, {}, {}, "default"),
     )
     enriched, _rules = apply_trace_enrichment(_empty_dimensions(), traces, by_trace)
-    assert enriched.sub_skill == "telco/sub-skill-BC"
+    assert enriched.sub_skill == (
+        "withdraw/sub-skill-C (lượt 1); telco/sub-skill-BC (lượt 2)"
+    )
+    one_turn, _rules = apply_trace_enrichment(_empty_dimensions(), traces[1:], by_trace)
+    assert one_turn.sub_skill == "withdraw/sub-skill-C"
     assert apply_trace_enrichment(_empty_dimensions(), (), {})[0].sub_skill is None
 
 

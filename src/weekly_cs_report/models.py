@@ -154,7 +154,8 @@ class TicketDimensions:
     # The A/B arm this ticket ran on (`input.model_info.model_core`). Older
     # tickets predate the field and are null, not a data-quality problem.
     model_core: str | None = None
-    # `<skill>/<file stem>` of the last sub-skill file the agent loaded.
+    # Last sub-skill loaded per turn, `<skill>/<file stem>`; with several,
+    # "withdraw/sub-skill-C (lượt 1); telco/sub-skill-BC (lượt 3)".
     sub_skill: str | None = None
     # Multi-skill tickets only: "oao (lượt 1, 2); fixed-deposit (lượt 3)".
     skill_turns: str | None = None
