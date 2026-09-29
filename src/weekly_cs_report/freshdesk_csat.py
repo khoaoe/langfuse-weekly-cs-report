@@ -22,6 +22,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from .cache_store import week_needs_fetch as _week_needs_fetch
 from .csat_cache import (
     CSATCache,
     CSATCacheStats,
@@ -56,7 +57,6 @@ _TRANSPORT_RETRY_SECONDS = 2.0
 _MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 _MAX_CONVERSATION_PAGES = 100
 _CONVERSATION_PAGE_SIZE = 100
-_RECENT_WEEK_REFETCH_INTERVAL = timedelta(hours=6)
 _APPROVED_FRESHDESK_HOST = "vngzalopay.freshdesk.com"
 _REDACTED = "[đã ẩn]"
 _EMAIL_PATTERN = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+", re.IGNORECASE)
@@ -1590,25 +1590,6 @@ def _normalize_population(
         seen.update(ticket_ids)
         normalized[raw_week] = ticket_ids
     return dict(sorted(normalized.items()))
-
-
-def _week_needs_fetch(
-    week: str,
-    fetched_weeks: Mapping[str, str],
-    as_of: datetime,
-) -> bool:
-    fetched_at = fetched_weeks.get(week)
-    if fetched_at is None:
-        return True
-    week_end = date.fromisoformat(week) + timedelta(days=6)
-    if as_of.date() > week_end + timedelta(days=14):
-        return False
-    normalized = fetched_at[:-1] + "+00:00" if fetched_at.endswith("Z") else fetched_at
-    cached_at = datetime.fromisoformat(normalized)
-    return (
-        as_of.astimezone(timezone.utc) - cached_at.astimezone(timezone.utc)
-        >= _RECENT_WEEK_REFETCH_INTERVAL
-    )
 
 
 def _add_stats(left: CSATFetchStats, right: CSATFetchStats) -> CSATFetchStats:

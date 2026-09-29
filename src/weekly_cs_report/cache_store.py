@@ -15,8 +15,8 @@ cache's own sanitized message (`AIReviewCacheError`, `CSATCacheError`, ...)
 rather than a shared one that would leak which cache failed.
 """
 
-from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from collections.abc import Callable, Mapping
+from datetime import date, datetime, timedelta, timezone
 import gzip
 import io
 import json
@@ -26,9 +26,25 @@ import re
 import stat
 import tempfile
 import zlib
+from zoneinfo import ZoneInfo
 
 
 _ISO_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\Z")
+_VIETNAM = ZoneInfo("Asia/Ho_Chi_Minh")
+
+# How long a cached cohort week stays fresh, by days since its Sunday ended
+# (Vietnam date). Measured on production 2026-09-29: of CSAT responses, 91%
+# land inside the week, 9% within the next 7 days and ~0.3% in the 7 after;
+# AI post-reviews come in batches, 10-32% of a week's reviews in its third
+# week. The live week is what the dashboard shows as "now", so it follows the
+# hourly cron; the tail keeps being read, just less often. Each interval sits
+# a little under the cron cadence it rides on so start-time jitter cannot
+# push a refresh to the next slot. Past the last tier a week is frozen.
+_REFRESH_TIERS = (
+    (0, timedelta(minutes=45)),
+    (7, timedelta(hours=5, minutes=30)),
+    (14, timedelta(hours=23, minutes=30)),
+)
 
 
 class DuplicateJSONKey(ValueError):
@@ -242,3 +258,29 @@ def read_private_json(
     finally:
         if descriptor is not None:
             os.close(descriptor)
+
+
+def week_needs_fetch(
+    week: str,
+    fetched_weeks: Mapping[str, str],
+    as_of: datetime,
+) -> bool:
+    """Whether a Monday-start cohort `week` is due for another Freshdesk read."""
+
+    fetched_at = fetched_weeks.get(week)
+    if fetched_at is None:
+        return True
+    week_end = date.fromisoformat(week) + timedelta(days=6)
+    days_after_end = (as_of.astimezone(_VIETNAM).date() - week_end).days
+    for last_day, interval in _REFRESH_TIERS:
+        if days_after_end <= last_day:
+            normalized = (
+                fetched_at[:-1] + "+00:00" if fetched_at.endswith("Z") else fetched_at
+            )
+            cached_at = datetime.fromisoformat(normalized)
+            return (
+                as_of.astimezone(timezone.utc) - cached_at.astimezone(timezone.utc)
+                >= interval
+            )
+    return False
+

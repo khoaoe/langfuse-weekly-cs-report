@@ -21,6 +21,7 @@ import tempfile
 import time
 from unicodedata import combining, normalize
 
+from .cache_store import week_needs_fetch
 from .reconciliation_cache import (
     ReconciliationCache,
     ReconciliationRecord,
@@ -458,7 +459,7 @@ def fetch_reconciliation_population(
     target_weeks = tuple(
         week
         for week in sorted(normalized)
-        if _week_needs_fetch(week, base.fetched_weeks, as_of.date())
+        if week_needs_fetch(week, base.fetched_weeks, as_of)
     )
     started_at = monotonic()
     fetched_weeks = dict(base.fetched_weeks)
@@ -622,17 +623,6 @@ def _normalize_population(
         seen.update(ticket_ids)
         normalized[week.isoformat()] = ticket_ids
     return dict(sorted(normalized.items()))
-
-
-def _week_needs_fetch(
-    week: str,
-    fetched_weeks: Mapping[str, str],
-    current_date: date,
-) -> bool:
-    if week not in fetched_weeks:
-        return True
-    week_end = date.fromisoformat(week) + timedelta(days=6)
-    return current_date <= week_end + timedelta(days=14)
 
 
 def _format_utc(value: datetime) -> str:

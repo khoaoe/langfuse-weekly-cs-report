@@ -747,3 +747,27 @@ def test_malformed_ticket_is_skipped_and_keeps_its_cached_responses():
     assert result.skipped_tickets == (("201", "rating_invalid"),)
     assert kept in result.cache.responses
     assert {item.ticket_id for item in result.cache.responses} == {"201", "202"}
+
+
+def test_a_week_is_refreshed_less_often_the_further_it_has_ended():
+    from weekly_cs_report.cache_store import week_needs_fetch
+
+    week = "2026-09-14"  # Sunday 2026-09-20 closes it
+    fetched = {week: "2026-09-18T00:00:00Z"}
+
+    def due(as_of_utc: str, stamp: str) -> bool:
+        as_of = datetime.fromisoformat(as_of_utc.replace("Z", "+00:00"))
+        return week_needs_fetch(week, {week: stamp}, as_of)
+
+    # Live week: hourly.
+    assert due("2026-09-18T01:00:00Z", fetched[week]) is True
+    assert due("2026-09-18T00:30:00Z", fetched[week]) is False
+    # Days 1-7 after it ended: every 6 hours.
+    assert due("2026-09-24T01:00:00Z", "2026-09-23T20:00:00Z") is False
+    assert due("2026-09-24T02:00:00Z", "2026-09-23T20:00:00Z") is True
+    # Days 8-14: daily.
+    assert due("2026-09-29T12:00:00Z", "2026-09-29T00:00:00Z") is False
+    assert due("2026-09-30T00:00:00Z", "2026-09-29T00:00:00Z") is True
+    # After day 14 (Vietnam date) the week is frozen; unseen weeks always run.
+    assert due("2026-10-04T18:00:00Z", "2026-09-01T00:00:00Z") is False
+    assert week_needs_fetch(week, {}, datetime(2026, 12, 1, tzinfo=timezone.utc)) is True
