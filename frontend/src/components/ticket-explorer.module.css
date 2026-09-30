@@ -370,3 +370,12 @@
   grid-template-columns: 1fr 1fr;
   gap: var(--space-1);
 }
+
+.field .multiSelectSearch {
+  min-height: 32px;
+}
+
+.multiSelectEmpty {
+  font-size: var(--text-caption);
+  color: var(--muted);
+}

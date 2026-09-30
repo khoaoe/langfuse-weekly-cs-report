@@ -207,6 +207,8 @@ function CountRangeField({
   );
 }
 
+const MULTI_SUB_SKILL = "Nhiều sub-skill";
+
 // A half-typed "5-2" would only earn a 400; wait until the bounds make sense.
 function sendableRange(value: string): string {
   const [low = "", high = ""] = value.split("-");
@@ -527,10 +529,15 @@ export function TicketExplorer({
       value: item.code,
       label: `${item.code} (${formatCount(item.total)})`,
     })),
-    sub_skill: filterOptions.sub_skill.map((item) => ({
-      value: item.code,
-      label: `${item.code} (${formatCount(item.total)})`,
-    })),
+    sub_skill: [
+      // Same idea as the Skill filter's "Nhiều skill": turns that ended on
+      // two or more different sub-skills. Matched server-side.
+      { value: MULTI_SUB_SKILL, label: MULTI_SUB_SKILL },
+      ...filterOptions.sub_skill.map((item) => ({
+        value: item.code,
+        label: `${item.code} (${formatCount(item.total)})`,
+      })),
+    ],
     transfer_reason: filterOptions.transfer_reason.map((value) => ({
       value,
       label: transferReasonLabel(value),

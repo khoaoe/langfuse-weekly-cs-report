@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 import styles from "./ticket-explorer.module.css";
 
@@ -28,6 +28,19 @@ export interface MultiSelectFieldProps {
   readonly hasValueLabel?: string;
 }
 
+/** From this many options the list outgrows its 260px panel (~9 rows) and
+ * has to scroll, so a search box starts paying for itself. */
+export const SEARCH_THRESHOLD = 10;
+
+/** Case- and accent-insensitive, so "chuyen" finds "Chuyển CS". */
+function fold(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .replace(/đ/gi, "d")
+    .toLowerCase();
+}
+
 function splitSelected(value: string): readonly string[] {
   return value === "" || value === HAS_VALUE ? [] : value.split(",");
 }
@@ -48,6 +61,17 @@ export function MultiSelectField({
   hasValueLabel,
 }: MultiSelectFieldProps) {
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const [query, setQuery] = useState("");
+  const searchable = options.length >= SEARCH_THRESHOLD;
+  const needle = fold(query.trim());
+  const shown =
+    needle === ""
+      ? options
+      : options.filter(
+          (option) =>
+            fold(option.label).includes(needle) ||
+            fold(option.value).includes(needle),
+        );
   const hasValueMode = value === HAS_VALUE;
   const selected = splitSelected(value);
 
@@ -77,6 +101,9 @@ export function MultiSelectField({
       <details
         ref={detailsRef}
         className={styles.dateRangeDetails}
+        onToggle={(event) => {
+          if (!event.currentTarget.open) setQuery("");
+        }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             close();
@@ -139,8 +166,21 @@ export function MultiSelectField({
               Xoá lựa chọn
             </button>
           )}
+          {searchable ? (
+            <input
+              type="search"
+              className={styles.multiSelectSearch}
+              aria-label={`Tìm trong ${label}`}
+              placeholder="Gõ để tìm…"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          ) : null}
           <div className={styles.multiSelectOptions}>
-            {options.map((option) => (
+            {shown.length === 0 ? (
+              <span className={styles.multiSelectEmpty}>Không có lựa chọn khớp</span>
+            ) : null}
+            {shown.map((option) => (
               <label key={option.value} className={styles.multiSelectOption}>
                 <input
                   type="checkbox"

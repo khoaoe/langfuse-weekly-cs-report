@@ -92,3 +92,44 @@ describe("MultiSelectField has-value radio (C6)", () => {
     ).toBeVisible();
   });
 });
+
+describe("MultiSelectField search", () => {
+  const many = [
+    "Chuyển CS",
+    "Đổi mật khẩu",
+    ...Array.from({ length: 8 }, (_, index) => `Nhóm ${index}`),
+  ].map((label) => ({ value: label, label }));
+
+  it("appears only once the list outgrows the panel", async () => {
+    const user = userEvent.setup();
+    render(
+      <MultiSelectField id="few" label="Ít" options={OPTIONS} value="" onChange={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^Ít:/ }));
+    expect(screen.queryByRole("searchbox")).toBeNull();
+  });
+
+  it("filters options ignoring case and Vietnamese accents", async () => {
+    const user = userEvent.setup();
+    render(
+      <MultiSelectField id="many" label="Nhiều" options={many} value="" onChange={() => {}} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^Nhiều:/ }));
+    const panel = document.getElementById("many") as HTMLElement;
+
+    await user.type(screen.getByRole("searchbox", { name: "Tìm trong Nhiều" }), "chuyen");
+    expect(
+      within(panel)
+        .getAllByRole("checkbox")
+        .map((box) => box.closest("label")?.textContent),
+    ).toEqual(["Chuyển CS"]);
+
+    await user.clear(screen.getByRole("searchbox"));
+    await user.type(screen.getByRole("searchbox"), "doi");
+    expect(within(panel).getByRole("checkbox", { name: "Đổi mật khẩu" })).toBeVisible();
+
+    await user.type(screen.getByRole("searchbox"), "zzz");
+    expect(within(panel).queryAllByRole("checkbox")).toHaveLength(0);
+    expect(within(panel).getByText("Không có lựa chọn khớp")).toBeVisible();
+  });
+});

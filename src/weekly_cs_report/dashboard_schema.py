@@ -128,6 +128,8 @@ _AI_REVIEW_RATING_TICKET_STATES = frozenset({*_AI_REVIEW_RATING_SLUGS, _MISSING}
 # and a ticket with zero `execute` observations both collapsed to the same
 # label. These name the two real cases instead.
 _MULTI_SKILL = "Nhiều skill"
+# Sub-skill filter option for tickets whose turns ended on 2+ distinct sub-skills.
+_MULTI_SUB_SKILL = "Nhiều sub-skill"
 # The public shape `ticket_page()` (non-aggregate) returns to the browser.
 # Deliberately excludes the day-grain diagnostic fields above: they only
 # exist to let day aggregates reconstruct the weekly transfer/TPE grain and
@@ -379,7 +381,8 @@ def ticket_page(
             value
             for ticket in snapshot.tickets
             for value in sub_skill_values(ticket.sub_skill)
-        ),
+        )
+        | {_MULTI_SUB_SKILL},
         "sub_skill",
     )
     selected_transfer_reasons = _parse_multi_ticket_filter(
@@ -455,7 +458,7 @@ def ticket_page(
             or (
                 row.sub_skill is not None
                 if selected_sub_skills == frozenset({_HAS_VALUE})
-                else not selected_sub_skills.isdisjoint(sub_skill_values(row.sub_skill))
+                else _matches_sub_skill(sub_skill_values(row.sub_skill), selected_sub_skills)
             )
         )
         and (selected_transfer_reasons is None or row.transfer_reason in selected_transfer_reasons)
@@ -2438,6 +2441,12 @@ def sub_skill_values(text: str | None) -> frozenset[str]:
     if text is None:
         return frozenset()
     return frozenset(_TURN_SUFFIX.sub("", part) for part in text.split("; "))
+
+
+def _matches_sub_skill(values: frozenset[str], selected: frozenset[str]) -> bool:
+    return not selected.isdisjoint(values) or (
+        _MULTI_SUB_SKILL in selected and len(values) >= 2
+    )
 
 
 def _sub_skill_counts(

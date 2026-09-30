@@ -3036,6 +3036,10 @@ def test_ticket_page_filters_a_sub_skill_loaded_in_any_turn():
     only_a = ticket_page(snapshot, sub_skill="withdraw/sub-skill-A")
     assert {item["ticket_id"] for item in only_a["items"]} == {"145667"}
     assert ticket_page(snapshot, sub_skill="__has_value__")["total"] == 2
+    multiple = ticket_page(snapshot, sub_skill="Nhiều sub-skill")
+    assert {item["ticket_id"] for item in multiple["items"]} == {"145667"}
+    either = ticket_page(snapshot, sub_skill="Nhiều sub-skill,withdraw/sub-skill-C")
+    assert {item["ticket_id"] for item in either["items"]} == {"145666", "145667"}
     with pytest.raises(ValueError, match="sub_skill is invalid"):
         ticket_page(snapshot, sub_skill="telco/sub-skill-X")
 
